@@ -9,6 +9,8 @@
 //! cubic (larch's default, scipy `UnivariateSpline(s=0)`) to ~5e-14.
 
 pub mod constants;
+pub mod gamma;
+pub mod gnxas;
 pub mod interp;
 pub mod mass;
 pub mod parser;
@@ -16,6 +18,8 @@ pub mod path;
 pub mod sigma2;
 
 pub use constants::{etok, ktoe, ETOK, KTOE, SMALL_ENERGY};
+pub use gamma::gamma;
+pub use gnxas::gnxas;
 pub use interp::{interp_linear, CubicSpline, Interp};
 pub use mass::atomic_mass;
 pub use parser::{FeffDatFile, GeomAtom, Potential};

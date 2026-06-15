@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use feffdat::{sigma2_debye, sigma2_eins, FeffDatFile, PathParams};
+use feffdat::{gnxas, sigma2_debye, sigma2_eins, FeffDatFile, PathParams};
 use lm::{lmdif, LmConfig};
 use params::{parse, Expr, ExprError, FuncCtx, ParamError, Parameters};
 
@@ -289,10 +289,20 @@ impl FuncCtx for PathFuncCtx<'_> {
                 Err(ExprError::Arity(name.to_string()))
             }
         };
+        let arity3 = |f: &dyn Fn(f64, f64, f64) -> f64| {
+            if args.len() == 3 {
+                Ok(f(args[0], args[1], args[2]))
+            } else {
+                Err(ExprError::Arity(name.to_string()))
+            }
+        };
         match name {
             "sigma2_eins" => Some(arity2(&|t, th| sigma2_eins(t, th, &self.fdat.geom))),
             "sigma2_debye" => Some(arity2(&|t, th| {
                 sigma2_debye(t, th, self.fdat.rnorman, &self.fdat.geom)
+            })),
+            "gnxas" => Some(arity3(&|r0, sigma, beta| {
+                gnxas(r0, sigma, beta, self.fdat.reff)
             })),
             _ => None,
         }
@@ -547,4 +557,45 @@ pub fn feffit(
         aic,
         bic,
     })
+}
+
+#[cfg(test)]
+mod gnxas_wiring_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn test_fdat() -> FeffDatFile {
+        FeffDatFile::from_path(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/feff0001.dat"),
+        )
+        .unwrap()
+    }
+
+    /// The `gnxas` path helper is routed through `PathFuncCtx` with the path's
+    /// own `reff` bound as the fourth argument (the three expression arguments
+    /// are `r0`, `sigma`, `beta`).
+    #[test]
+    fn gnxas_routed_with_path_reff() {
+        let fdat = test_fdat();
+        let ctx = PathFuncCtx { fdat: &fdat };
+        let got = ctx.call("gnxas", &[2.5, 0.05, 0.30]).unwrap().unwrap();
+        let want = gnxas(2.5, 0.05, 0.30, fdat.reff);
+        assert_eq!(got, want);
+    }
+
+    /// `gnxas` takes exactly three expression arguments; any other count is an
+    /// arity error, not a silently wrong result.
+    #[test]
+    fn gnxas_wrong_arity_is_error() {
+        let fdat = test_fdat();
+        let ctx = PathFuncCtx { fdat: &fdat };
+        assert!(matches!(
+            ctx.call("gnxas", &[2.5, 0.05]),
+            Some(Err(ExprError::Arity(_)))
+        ));
+        assert!(matches!(
+            ctx.call("gnxas", &[2.5, 0.05, 0.30, 2.55]),
+            Some(Err(ExprError::Arity(_)))
+        ));
+    }
 }
