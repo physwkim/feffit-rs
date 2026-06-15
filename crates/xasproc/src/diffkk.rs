@@ -18,7 +18,7 @@
 use std::f64::consts::PI;
 
 use crate::mathutils::remove_dups;
-use crate::mback::{mback, MbackParams};
+use crate::mback::{MbackParams, mback};
 
 /// smallest tolerated energy step, in eV (`larch` `TINY_ENERGY`).
 const TINY_ENERGY: f64 = 0.00050;
@@ -68,7 +68,7 @@ fn kkmclr_sca(e: &[f64], finp: &[f64]) -> Vec<f64> {
     let npts = e.len();
     assert!(npts >= 2, "array too short in kkmclr");
     assert!(
-        npts % 2 == 0,
+        npts.is_multiple_of(2),
         "array has an odd number of elements in kkmclr"
     );
 

@@ -1,11 +1,11 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["crates/feffdat", "crates/xafsft", "crates/feffit", "crates/params", "crates/lm", "crates/feffrun", "crates/xasproc"]
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 license = "MIT"
-rust-version = "1.74"
+rust-version = "1.89"
 repository = "https://github.com/pls-controls/feffit-rs"
 
 [workspace.dependencies]

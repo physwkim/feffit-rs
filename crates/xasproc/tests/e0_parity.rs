@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use xasproc::mathutils::{polyfit, smooth, SmoothForm};
+use xasproc::mathutils::{SmoothForm, polyfit, smooth};
 use xasproc::{find_e0, find_energy_step};
 
 fn data(name: &str) -> PathBuf {

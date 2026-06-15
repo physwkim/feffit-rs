@@ -15,10 +15,10 @@ pub mod mback;
 pub mod preedge;
 pub mod rebin;
 
-pub use autobk::{autobk, Autobk, AutobkParams};
-pub use deconvolve::{xas_convolve, xas_deconvolve, ConvParams, DeconvForm, DeconvParams};
-pub use diffkk::{diffkk, DiffKK};
+pub use autobk::{Autobk, AutobkParams, autobk};
+pub use deconvolve::{ConvParams, DeconvForm, DeconvParams, xas_convolve, xas_deconvolve};
+pub use diffkk::{DiffKK, diffkk};
 pub use e0::{find_e0, find_energy_step};
-pub use mback::{mback, mback_norm, Edge, Mback, MbackNorm, MbackNormParams, MbackParams};
-pub use preedge::{pre_edge, PreEdge, PreEdgeParams};
-pub use rebin::{rebin_xafs, sort_xafs, RebinMethod, RebinParams, Rebinned};
+pub use mback::{Edge, Mback, MbackNorm, MbackNormParams, MbackParams, mback, mback_norm};
+pub use preedge::{PreEdge, PreEdgeParams, pre_edge};
+pub use rebin::{RebinMethod, RebinParams, Rebinned, rebin_xafs, sort_xafs};

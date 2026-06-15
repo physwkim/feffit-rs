@@ -155,11 +155,7 @@ pub fn ftwindow(
             let wid = (x4 - x1) / 2.0;
             let arg = |xi: f64| {
                 let a = 1.0 - (xi - cen).powi(2) / (wid * wid);
-                if a < 0.0 {
-                    0.0
-                } else {
-                    a
-                }
+                if a < 0.0 { 0.0 } else { a }
             };
             if window == Window::Bes {
                 let denom = i0(dx);

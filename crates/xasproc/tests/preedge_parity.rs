@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use xasproc::{pre_edge, PreEdgeParams};
+use xasproc::{PreEdgeParams, pre_edge};
 
 fn data(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

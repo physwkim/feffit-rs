@@ -6,7 +6,7 @@
 //! bit-identical, not merely close. The transcendental `expdecay` case shares
 //! `exp`, which is correctly rounded on both platforms here.
 
-use lm::{lmdif, LmConfig};
+use lm::{LmConfig, lmdif};
 
 // ---- residual functions (mirror scripts/ref_lmdif.py exactly) --------------
 

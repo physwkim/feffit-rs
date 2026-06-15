@@ -14,10 +14,10 @@ const CU_FEFF_INP: &str = include_str!("data/feff.inp");
 /// A runner if the executables are reachable, else `None` (with the reason).
 fn runner() -> Option<feffrun::Feff8l> {
     // Explicit FEFF8L_DIR wins.
-    if let Some(dir) = std::env::var_os(feffrun::BIN_DIR_ENV) {
-        if PathBuf::from(&dir).join("feff8l_pot").is_file() {
-            return Some(feffrun::Feff8l::with_bin_dir(dir));
-        }
+    if let Some(dir) = std::env::var_os(feffrun::BIN_DIR_ENV)
+        && PathBuf::from(&dir).join("feff8l_pot").is_file()
+    {
+        return Some(feffrun::Feff8l::with_bin_dir(dir));
     }
     // Otherwise look for it on PATH.
     if let Some(paths) = std::env::var_os("PATH") {

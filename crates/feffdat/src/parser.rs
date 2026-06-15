@@ -105,11 +105,7 @@ impl FeffDatFile {
     /// larch's `FeffDatFile.rmass`: `1 / Σ 1/max(1, amass)` over path atoms.
     pub fn rmass(&self) -> f64 {
         let s: f64 = self.geom.iter().map(|a| 1.0 / a.mass.max(1.0)).sum();
-        if s > 0.0 {
-            1.0 / s
-        } else {
-            0.0
-        }
+        if s > 0.0 { 1.0 / s } else { 0.0 }
     }
 
     /// Parse the textual contents of a `feffNNNN.dat` file.
@@ -207,10 +203,8 @@ fn parse_header_line(f: &mut FeffDatFile, line: &str) {
         let iz = words.get(1).and_then(|w| w.parse().ok()).unwrap_or(0);
         let rmt = words.get(3).and_then(|w| w.parse().ok()).unwrap_or(0.0);
         let rnm = words.get(5).and_then(|w| w.parse().ok()).unwrap_or(0.0);
-        if is_abs {
-            if let Some(s) = words.get(6) {
-                f.shell = (*s).to_string();
-            }
+        if is_abs && let Some(s) = words.get(6) {
+            f.shell = (*s).to_string();
         }
         f.potentials.push(Potential { ipot, iz, rmt, rnm });
     } else if starts_word(line, "Gam_ch") && line.contains('=') {
@@ -332,9 +326,5 @@ fn parse_array_row(line: &str) -> Option<[f64; 7]> {
         }
         count += 1;
     }
-    if count == 7 {
-        Some(row)
-    } else {
-        None
-    }
+    if count == 7 { Some(row) } else { None }
 }

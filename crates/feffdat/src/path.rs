@@ -7,7 +7,7 @@ use std::path::Path;
 use num_complex::Complex64;
 
 use crate::constants::{ETOK, SMALL_ENERGY};
-use crate::interp::{interp_linear, CubicSpline, Interp};
+use crate::interp::{CubicSpline, Interp, interp_linear};
 use crate::parser::FeffDatFile;
 
 /// The seven adjustable path parameters (`degen` plus the six refined ones).

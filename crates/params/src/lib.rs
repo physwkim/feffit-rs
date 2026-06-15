@@ -14,5 +14,5 @@
 pub mod expr;
 pub mod parameters;
 
-pub use expr::{parse, BinOp, Expr, ExprError, FuncCtx, NoCtx};
+pub use expr::{BinOp, Expr, ExprError, FuncCtx, NoCtx, parse};
 pub use parameters::{Param, ParamError, Parameters};

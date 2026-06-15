@@ -17,11 +17,11 @@ pub mod parser;
 pub mod path;
 pub mod sigma2;
 
-pub use constants::{etok, ktoe, ETOK, KTOE, SMALL_ENERGY};
+pub use constants::{ETOK, KTOE, SMALL_ENERGY, etok, ktoe};
 pub use gamma::gamma;
 pub use gnxas::gnxas;
-pub use interp::{interp_linear, CubicSpline, Interp};
+pub use interp::{CubicSpline, Interp, interp_linear};
 pub use mass::atomic_mass;
 pub use parser::{FeffDatFile, GeomAtom, Potential};
-pub use path::{ff2chi, path2chi, FeffPath, KGrid, PathParams};
-pub use sigma2::{sigma2_debye, sigma2_eins, EINS_FACTOR};
+pub use path::{FeffPath, KGrid, PathParams, ff2chi, path2chi};
+pub use sigma2::{EINS_FACTOR, sigma2_debye, sigma2_eins};

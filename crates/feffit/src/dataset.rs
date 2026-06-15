@@ -9,10 +9,10 @@
 
 use std::f64::consts::PI;
 
-use feffdat::{ff2chi, interp_linear, FeffPath, Interp, KGrid};
+use feffdat::{FeffPath, Interp, KGrid, ff2chi, interp_linear};
 
 use crate::bkg::{self, splev};
-use crate::outputs::{xafsft, DataSetOutput};
+use crate::outputs::{DataSetOutput, xafsft};
 use crate::transform::{FitSpace, Transform};
 
 /// Truncate toward zero into a `usize` (Python `int()` semantics for x >= 0).

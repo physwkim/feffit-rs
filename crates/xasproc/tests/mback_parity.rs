@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use xasproc::{mback, mback_norm, MbackNormParams, MbackParams};
+use xasproc::{MbackNormParams, MbackParams, mback, mback_norm};
 
 fn data(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

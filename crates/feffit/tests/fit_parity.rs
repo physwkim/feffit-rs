@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use feffdat::FeffPath;
 use feffit::{
-    feffit, DataSet, FeffitResult, FitDataSet, FitSpace, PathSpec, Spec, Transform, XafsOutput,
+    DataSet, FeffitResult, FitDataSet, FitSpace, PathSpec, Spec, Transform, XafsOutput, feffit,
 };
 use params::Parameters;
 use xafsft::Window;
@@ -123,10 +123,10 @@ impl Ref {
             } else if let Some(rest) = line.strip_prefix('#') {
                 // remaining "#key val" scalar statistics
                 let mut it = rest.split_whitespace();
-                if let (Some(k), Some(v)) = (it.next(), it.next()) {
-                    if let Ok(f) = v.parse::<f64>() {
-                        stats.insert(k.to_string(), f);
-                    }
+                if let (Some(k), Some(v)) = (it.next(), it.next())
+                    && let Ok(f) = v.parse::<f64>()
+                {
+                    stats.insert(k.to_string(), f);
                 }
             }
         }
@@ -299,7 +299,12 @@ fn assert_two_path_parity(r: &Ref, res: &FeffitResult) {
         assert_eq!(&got.name, name, "var order");
         println!(
             "{name:8} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
-            got.value, val, rel(got.value, *val), got.stderr, std, rel(got.stderr, *std)
+            got.value,
+            val,
+            rel(got.value, *val),
+            got.stderr,
+            std,
+            rel(got.stderr, *std)
         );
         assert!(rel(got.value, *val) < 1e-6, "{name} value");
         assert!(rel(got.stderr, *std) < 1e-4, "{name} stderr");
@@ -311,7 +316,12 @@ fn assert_two_path_parity(r: &Ref, res: &FeffitResult) {
         assert_eq!(&got.name, name, "derived order");
         println!(
             "derived {name:8} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
-            got.value, val, rel(got.value, *val), got.stderr, std, rel(got.stderr, *std)
+            got.value,
+            val,
+            rel(got.value, *val),
+            got.stderr,
+            std,
+            rel(got.stderr, *std)
         );
         assert!(rel(got.value, *val) < 1e-6, "derived {name} value");
         assert!(rel(got.stderr, *std) < 1e-4, "derived {name} stderr");
@@ -335,7 +345,11 @@ fn assert_two_path_parity(r: &Ref, res: &FeffitResult) {
         let (gv, gs) = got_map[&(*di, *pi, name.clone())];
         println!(
             "path {di}/{pi} {name:7} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e}",
-            gv, val, rel(gv, *val), gs, std
+            gv,
+            val,
+            rel(gv, *val),
+            gs,
+            std
         );
         assert!(rel(gv, *val) < 1e-6, "path {di}/{pi} {name} value");
         if std.is_finite() {
@@ -547,7 +561,12 @@ fn feffit_refine_bkg_matches_larch() {
         let got = res.best.iter().find(|b| &b.name == name).unwrap();
         println!(
             "{name:8} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
-            got.value, val, rel(got.value, *val), got.stderr, std, rel(got.stderr, *std)
+            got.value,
+            val,
+            rel(got.value, *val),
+            got.stderr,
+            std,
+            rel(got.stderr, *std)
         );
         assert!(rel(got.value, *val) < 1e-6, "{name} value");
         assert!(rel(got.stderr, *std) < 1e-4, "{name} stderr");
@@ -725,7 +744,12 @@ fn feffit_sigma2_eins_matches_larch() {
         assert_eq!(&got.name, name, "var order");
         println!(
             "{name:8} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
-            got.value, val, rel(got.value, *val), got.stderr, std, rel(got.stderr, *std)
+            got.value,
+            val,
+            rel(got.value, *val),
+            got.stderr,
+            std,
+            rel(got.stderr, *std)
         );
         assert!(rel(got.value, *val) < 1e-6, "{name} value");
         assert!(rel(got.stderr, *std) < 1e-4, "{name} stderr");
@@ -740,7 +764,12 @@ fn feffit_sigma2_eins_matches_larch() {
         .unwrap();
     println!(
         "sigma2  value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
-        got.value, sv, rel(got.value, sv), got.stderr, ss, rel(got.stderr, ss)
+        got.value,
+        sv,
+        rel(got.value, sv),
+        got.stderr,
+        ss,
+        rel(got.stderr, ss)
     );
     assert!(rel(got.value, sv) < 1e-6, "sigma2 value");
     assert!(rel(got.stderr, ss) < 1e-4, "sigma2 stderr");

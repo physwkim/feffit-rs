@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use xasproc::{rebin_xafs, sort_xafs, RebinMethod, RebinParams};
+use xasproc::{RebinMethod, RebinParams, rebin_xafs, sort_xafs};
 
 fn data(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

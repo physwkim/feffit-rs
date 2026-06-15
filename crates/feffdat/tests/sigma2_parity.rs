@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use feffdat::{sigma2_debye, sigma2_eins, FeffDatFile};
+use feffdat::{FeffDatFile, sigma2_debye, sigma2_eins};
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data")

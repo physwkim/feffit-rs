@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use xasproc::{
-    pre_edge, xas_convolve, xas_deconvolve, ConvParams, DeconvForm, DeconvParams, PreEdgeParams,
+    ConvParams, DeconvForm, DeconvParams, PreEdgeParams, pre_edge, xas_convolve, xas_deconvolve,
 };
 
 fn data(name: &str) -> PathBuf {

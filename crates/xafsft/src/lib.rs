@@ -12,6 +12,6 @@ pub mod window;
 
 pub use bessel::i0;
 pub use transform::{
-    fft_padded, ifft_padded, xftf, xftf_fast, xftf_prep, xftr, xftr_fast, XftfOut, XftrOut,
+    XftfOut, XftrOut, fft_padded, ifft_padded, xftf, xftf_fast, xftf_prep, xftr, xftr_fast,
 };
-pub use window::{ftwindow, Window};
+pub use window::{Window, ftwindow};

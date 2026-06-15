@@ -41,7 +41,7 @@ pub mod transform;
 
 pub use dataset::DataSet;
 pub use fit::{
-    feffit, Best, FeffitResult, FitDataSet, FitError, PathParam, PathSpec, Spec, PATH_PNAMES,
+    Best, FeffitResult, FitDataSet, FitError, PATH_PNAMES, PathParam, PathSpec, Spec, feffit,
 };
-pub use outputs::{xafsft, DataSetOutput, XafsOutput};
+pub use outputs::{DataSetOutput, XafsOutput, xafsft};
 pub use transform::{FitSpace, Transform};

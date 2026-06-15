@@ -19,4 +19,4 @@
 
 mod lmdif;
 
-pub use lmdif::{enorm, lmdif, LmConfig, LmResult};
+pub use lmdif::{LmConfig, LmResult, enorm, lmdif};

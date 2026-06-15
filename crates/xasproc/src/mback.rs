@@ -22,11 +22,11 @@
 //! and none bounded, which reduces exactly to `scipy.optimize.leastsq` — the
 //! `lm` crate reproduces that bit-for-bit.
 
-use lm::{lmdif, LmConfig};
+use lm::{LmConfig, lmdif};
 
 use crate::e0::find_e0;
 use crate::mathutils::{index_nearest, index_of, remove_dups};
-use crate::preedge::{pre_edge, preedge_core, PreEdgeParams};
+use crate::preedge::{PreEdgeParams, pre_edge, preedge_core};
 
 /// smallest tolerated energy step, in eV (`larch` `TINY_ENERGY`).
 const TINY_ENERGY: f64 = 0.00050;

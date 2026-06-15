@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use num_complex::Complex64;
-use xafsft::{xftf, xftr, Window};
+use xafsft::{Window, xftf, xftr};
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data")

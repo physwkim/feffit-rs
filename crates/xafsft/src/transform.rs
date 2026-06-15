@@ -11,7 +11,7 @@ use std::f64::consts::PI;
 use num_complex::Complex64;
 use rustfft::FftPlanner;
 
-use crate::window::{ftwindow, Window};
+use crate::window::{Window, ftwindow};
 
 /// Forward FT of an already-prepared (windowed, k-weighted) array.
 /// Returns `(kstep/sqrt(pi)) * fft(zero_pad(chi))[..nfft/2]`.

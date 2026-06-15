@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use feffdat::{ff2chi, FeffDatFile, FeffPath, Interp, KGrid, PathParams};
+use feffdat::{FeffDatFile, FeffPath, Interp, KGrid, PathParams, ff2chi};
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data")

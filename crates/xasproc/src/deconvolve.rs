@@ -289,7 +289,7 @@ pub fn xas_deconvolve(energy: &[f64], norm: &[f64], p: &DeconvParams) -> Vec<f64
         if sgwindow < p.sgorder + 1 {
             sgwindow = p.sgorder + 2;
         }
-        if sgwindow % 2 == 0 {
+        if sgwindow.is_multiple_of(2) {
             sgwindow += 1;
         }
         ret = savitzky_golay(&ret, sgwindow, p.sgorder);

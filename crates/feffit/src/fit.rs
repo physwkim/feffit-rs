@@ -12,9 +12,9 @@
 
 use std::collections::HashMap;
 
-use feffdat::{gnxas, sigma2_debye, sigma2_eins, FeffDatFile, PathParams};
-use lm::{lmdif, LmConfig};
-use params::{parse, Expr, ExprError, FuncCtx, ParamError, Parameters};
+use feffdat::{FeffDatFile, PathParams, gnxas, sigma2_debye, sigma2_eins};
+use lm::{LmConfig, lmdif};
+use params::{Expr, ExprError, FuncCtx, ParamError, Parameters, parse};
 
 use crate::dataset::DataSet;
 

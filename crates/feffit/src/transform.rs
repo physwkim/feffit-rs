@@ -9,7 +9,7 @@
 use std::f64::consts::PI;
 
 use num_complex::Complex64;
-use xafsft::{fft_padded, ftwindow, ifft_padded, xftf_fast, xftr_fast, Window};
+use xafsft::{Window, fft_padded, ftwindow, ifft_padded, xftf_fast, xftr_fast};
 
 /// Which space the fit residual is evaluated in (larch `fitspace`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

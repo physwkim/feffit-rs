@@ -4,7 +4,7 @@
 //! refinement over a window around the coarse estimate.
 
 use crate::mathutils::{
-    dmude, find_energy_step as fes, remove_dups, remove_nans2, smooth, SmoothForm,
+    SmoothForm, dmude, find_energy_step as fes, remove_dups, remove_nans2, smooth,
 };
 
 /// Smallest tolerated energy step, in eV (`larch.xafs.xafsutils.TINY_ENERGY`).

@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use crate::expr::{parse, Expr, ExprError};
+use crate::expr::{Expr, ExprError, parse};
 
 /// A single parameter.
 #[derive(Debug, Clone)]
@@ -54,11 +54,7 @@ impl Param {
         } else {
             (2.0 * (v - min) / (max - min) - 1.0).asin()
         };
-        if internal.abs() < TINY {
-            0.0
-        } else {
-            internal
-        }
+        if internal.abs() < TINY { 0.0 } else { internal }
     }
 
     /// Internal coordinate → external (bounded) value (lmfit

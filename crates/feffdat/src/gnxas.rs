@@ -34,11 +34,7 @@ pub fn gnxas(r0: f64, sigma: f64, beta: f64, reff: f64) -> f64 {
     // power) maps to 0.0 the same way.
     let amp = {
         let a = (-alpha).exp() * alpha.powf(q - 1.0);
-        if a.is_finite() {
-            a
-        } else {
-            0.0
-        }
+        if a.is_finite() { a } else { 0.0 }
     };
     let out = 2.0 * amp / (sigma * beta.abs() * gamma(q));
     out.max(0.0)

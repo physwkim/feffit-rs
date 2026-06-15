@@ -242,7 +242,7 @@ pub fn polyfit(x: &[f64], y: &[f64], deg: usize) -> Vec<f64> {
         }
     }
     let cu = solve_linear(vtv, vty); // coefficients in u, low->high
-                                     // convert poly in u = a*x + b back to poly in x:  sum_j cu[j] (a x + b)^j
+    // convert poly in u = a*x + b back to poly in x:  sum_j cu[j] (a x + b)^j
     let mut cx = vec![0.0; nc];
     for (j, &cj) in cu.iter().enumerate() {
         // expand (a x + b)^j via binomial: sum_{m=0..j} C(j,m) a^m b^(j-m) x^m
