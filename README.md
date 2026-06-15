@@ -3,7 +3,7 @@
 A Rust port of [xraylarch](https://github.com/xraypy/xraylarch)'s EXAFS path-fitting
 core (`feffit` / `feffdat`).
 
-## Scope and the FFI boundary
+## Scope and the FEFF boundary
 
 xraylarch is **not** pure Python: the EXAFS fitting layer (`feffdat.py`,
 `feffit.py`) is Python on top of numpy/scipy/lmfit, but the FEFF path
@@ -12,13 +12,22 @@ shared libraries (`libfeff6`, `libfeff8lpath`, `libpotph`, …) and standalone
 executables, loaded via `ctypes` / subprocess.
 
 This port keeps that boundary: the EXAFS math (parse `feffNNNN.dat` → χ(k) →
-Fourier transform → fit) is ported to Rust, and FEFF path generation will be
-reached over **FFI** to the existing Fortran libraries rather than reimplemented.
+Fourier transform → fit) is ported to Rust, and FEFF path generation stays the
+original Fortran (FEFF8L), driven by the `feffrun` crate as a **subprocess**
+pipeline of the `feff8l_*` executables rather than reimplemented. Subprocess
+keeps the boundary at the `feffNNNN.dat` file interface `feffdat` already parses
+bit-for-bit, and decouples the FEFF executable's architecture from this crate's
+(an arm64 build drives arm64 `feff8l_*`). The `libfeff8lpath`/`libpotph` shared
+libraries are an alternative per-path FFI route not currently used.
 
 ```
-structure → feff.inp ──▶ [FEFF6/8l Fortran]  ── FFI ──▶ feffNNNN.dat   (path generation; not ported)
-feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feffit       (ported to Rust)
+structure → feff.inp ──▶ [FEFF8L Fortran]  ── subprocess ──▶ feffNNNN.dat   (feffrun; FEFF not ported)
+feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feffit             (ported to Rust)
 ```
+
+The FEFF8L Fortran is built from the [`feff85exafs`](https://github.com/xraypy/feff85exafs)
+project (native per-host architecture); `feffrun` finds the `feff8l_*`
+executables via the `FEFF8L_DIR` environment variable or `PATH`.
 
 ## Status
 
@@ -40,7 +49,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 | Multi-dataset simultaneous fit (`feffit(&mut [FitDataSet])`: residual concatenated, `n_idp` summed, shared globals couple datasets) | done | vs **larch** `feffit(params, [ds0, ds1])` on a two-dataset Cu fit (one path each, shared `amp`/`del_e0`/`alpha`, per-dataset σ²): `ndata` = 208 = 2×104, `n_idp` ≈ 2×13.223, `nfev` exact (31); best-fit values/uncertainties match to lmdif ULP drift |
 | Fit output arrays (`DataSet::save_outputs`/`_xafsft`: data/model/per-path χ(R) + χ(q), `chir_re`/`im`/`mag`/`pha` + `chiq_*`) | done | vs **larch** `feffit(..., path_outputs=True)` on the two-path Cu fit: data χ(R)/χ(q) (fixed FFT of the data) to round-off (≈ 1e-15 rel), model + per-path arrays to ≈ 1e-12 |
 | Background refinement (`refine_bkg`: cubic B-spline background as extra `bkg*` fit variables) + FITPACK `splev`/knot vector | done | `splev` vs **scipy** `interpolate.splev` (≈ 1e-16, incl. extrapolation); end-to-end vs **larch** `feffit(refine_bkg=True)` on the two-path Cu fit (`nspline`=12): `nfev` exact (91), `nvarys`=17, `ndata`=192, knots bit-exact, the 12 `bkg*` coefficients + all values/uncertainties match to lmdif ULP drift |
-| `feff-sys` (FFI to FEFF) | not started | — |
+| FEFF path generation (`feffrun`: subprocess driver for the FEFF8L `feff8l_*` pipeline) | done | full pipeline (`rdinp→pot→xsph→pathfinder→genfmt→ff2x`) on a Cu `feff.inp` → 14 `feffNNNN.dat`, parsed by `feffdat` (first shell `reff` = 2.5527 Å, `nleg` = 2, `degen` = 12); FEFF8L built native arm64 from `feff85exafs` |
 
 ## Layout
 
@@ -70,6 +79,9 @@ crates/params/         # lmfit-style parameters with constraint expressions
   src/parameters.rs    # Parameters: vary/fixed/expr, dependency-ordered resolve
 crates/lm/             # Levenberg-Marquardt least squares (MINPACK lmdif port)
   src/lmdif.rs         # enorm/fdjac2/qrfac/qrsolv/lmpar/lmdif + covariance
+crates/feffrun/        # drive FEFF8L (feff8l_* subprocess) feff.inp -> feffNNNN.dat
+  src/lib.rs           # Feff8l runner: pipeline, exe discovery (FEFF8L_DIR/PATH)
+  tests/data/feff.inp  # real Cu feff.inp fixture (from feff85exafs)
 scripts/ref_chi.py     # numpy-only reference generator (also emits cubic when scipy present)
 scripts/ref_xftf.py    # scipy.fftpack/scipy.special reference for xafsft
 scripts/ref_feffit.py  # larch.xafs.feffit residual reference (needs xraylarch)

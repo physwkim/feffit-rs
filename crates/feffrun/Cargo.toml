@@ -1,0 +1,13 @@
+[package]
+name = "feffrun"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Drive the FEFF8L path generator (subprocess) to turn a feff.inp into feffNNNN.dat files"
+
+[dependencies]
+
+[dev-dependencies]
+feffdat = { path = "../feffdat" }

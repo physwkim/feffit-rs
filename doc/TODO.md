@@ -6,11 +6,11 @@ without re-deriving scope).
 
 ## Repo / push state
 
-- Branch `main` (**17 commits**) is **pushed and tracking
-  `origin/main`** — remote `origin` is
-  `https://github.com/physwkim/feffit-rs.git` (added by the user on
-  2026-06-15). `git status` shows `main...origin/main` fully synced. Future
-  pushes still require explicit user confirmation per the global rules.
+- Branch `main` tracks `origin/main` (remote `origin` =
+  `https://github.com/physwkim/feffit-rs.git`, added 2026-06-15). The first 17
+  commits are pushed; later commits (push-state doc, `feffrun`) are **ahead of
+  origin and unpushed** — pushing requires explicit user confirmation per the
+  global rules (`git push` only when asked).
 
 ## Done + larch-verified (see README status table)
 
@@ -28,18 +28,27 @@ without re-deriving scope).
 | **Multi-dataset simultaneous fit** (`feffit(&mut [FitDataSet])`) | vs larch `feffit(params, [ds0, ds1])`: 2 datasets, 1 path each, shared globals; `ndata`=208, `n_idp`≈2×13.223, `nfev` exact |
 | **Fit output arrays** (`save_outputs`/`_xafsft`: data/model/path χ(R)+χ(q)) | vs larch `feffit(..., path_outputs=True)`: data χ(R)/χ(q) to round-off (≈1e-15), model+path ≈1e-12 |
 | **Background refinement** (`refine_bkg`: cubic B-spline bkg as extra `bkg*` vars) + FITPACK `splev`/knots | `splev` vs scipy (≈1e-16); end-to-end vs larch `feffit(refine_bkg=True)` (nspline=12): `nfev` exact (91), knots bit-exact, 12 bkg coefs match |
+| **FEFF path generation** (`feffrun`: subprocess driver for the FEFF8L `feff8l_*` pipeline) | full pipeline on a Cu `feff.inp` → 14 `feffNNNN.dat` parsed by `feffdat` (1st shell reff=2.5527, nleg=2, degen=12); FEFF8L built native arm64 from `feff85exafs` |
 
 ## Candidate next milestones (not yet ported)
 
-### 1. GNXAS g(r) model  — *niche*
+### 1. GNXAS `gnxas` path-expression helper  — *niche, broken upstream*
 
-A separate modeling paradigm: χ from an asymmetric radial distribution `g(r)`
-parametrised by `(N, R, σ, β)` rather than a FEFF path sum.
+`gnxas(r0, sigma, beta)` is a path-expression amplitude helper (registered in
+asteval like `sigma2_eins`), not a separate solver. For a path of radius `reff`:
+`q = 4/β²`; `alpha = q + 2·(reff−r0)/(β·σ)`; `out = max(0, 2·e^(−alpha)·alpha^(q−1)/(σ·|β|·Γ(q)))`.
+Needs the gamma function `Γ(q)` (Cephes port for bit-exactness, or Lanczos).
 
-- **Blocker:** needs the gamma function `Γ(x)` (e.g. a Lanczos port) and a
-  different path-sum than `ff2chi`.
-- **Effort:** medium; mostly self-contained but a different code path, and used
-  by fewer people than FEFF-path fitting.
+- **Upstream is broken** in this larch: the asteval-injected `gnxas`
+  (`sigma2_models.py` `_sigma2_funcs` string, ~line 379) has a debug
+  `print('> ', reff, …)` referencing an undefined `reff` → `NameError`, so a
+  feffit path expression using `gnxas(...)` evaluates to `None`. Confirmed:
+  removing that one debug line makes it run and its value is **bit-identical**
+  to the working module-level `gnxas(r0,sigma,beta,path)` (line 19). So there is
+  **no stock-larch end-to-end feffit reference**; parity must be against the
+  module-level `gnxas` (the documented-correct formula), with the upstream
+  defect noted.
+- **Effort:** small (one path helper + a gamma function), but niche.
 
 *(Multi-dataset simultaneous fitting, fit output arrays (`save_outputs`), and
 background refinement (`refine_bkg`) are now done + larch-verified — see the
@@ -47,15 +56,21 @@ table above. The `refine_bkg` port reproduces the FITPACK knot vector in closed
 form (only the knots are needed; larch's coefficients are the fit variables) and
 ports `splev`, so no full `splrep`/FITPACK port was required.)*
 
-## Blocked
+## Resolved blockers
 
-- **`feff-sys` (FFI to FEFF path generation).** larch's production FEFF6/8l path
-  generator ships as **x86_64-only** prebuilt shared libs (`libfeff6.dylib`,
-  …) which **will not load on this arm64 Mac**
-  (`OSError: incompatible architecture`). The same blocker already forced the
-  `sigma2_debye` parity to be checked against larch's pure-Python `sigms.f` port
-  instead of the C lib. Unblocking requires rebuilding FEFF for arm64 (separate
-  effort).
+- **FEFF path generation on arm64 — RESOLVED.** larch's *prebuilt* FEFF6/8l
+  libs/executables are all **x86_64-only** (won't load/run native on this arm64
+  Mac). Resolution: rebuilt FEFF8L native arm64 from the `feff85exafs` Fortran
+  source (`~/codes/feff85exafs`) with Homebrew gfortran 15. Only fix needed was
+  `src/GENFMT/Makefile`'s Darwin branch (drop hardcoded `-arch x86_64`; point
+  `CLINKARGS` at `/opt/homebrew/lib/gcc/current` instead of the absent
+  `/usr/local/gfortran/lib`); gfortran 15 compiled all 411 `.f` files with no
+  legacy-flag changes. Products (`feff8l_*`, `feff6l`, `libfeff8lpath.dylib`,
+  `libpotph.dylib`) are native arm64. The `feffrun` crate drives the
+  `feff8l_*` pipeline as a subprocess (no Rosetta, no FFI). Run the integration
+  test with `FEFF8L_DIR=~/codes/feff85exafs/local_install/bin`.
+- Note: the `sigma2_debye` parity was earlier checked against larch's
+  pure-Python `sigms.f` port (not the x86_64 C lib); that remains as-is.
 
 ## Conventions for the next session
 
