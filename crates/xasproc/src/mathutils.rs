@@ -170,8 +170,9 @@ pub fn find_energy_step(energy: &[f64], frac_ignore: f64, nave: usize) -> f64 {
 }
 
 /// Solve a small dense linear system `A x = b` in place by Gaussian elimination
-/// with partial pivoting (`A` is `n x n` row-major). Used by [`polyfit`].
-fn solve_linear(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+/// with partial pivoting (`A` is `n x n` row-major). Used by [`polyfit`] and the
+/// Savitzky–Golay normal equations.
+pub(crate) fn solve_linear(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
     let n = b.len();
     for col in 0..n {
         // partial pivot
@@ -288,7 +289,7 @@ pub fn interp_linear(xnew: &[f64], x: &[f64], y: &[f64]) -> Vec<f64> {
 
 /// Full discrete convolution `a * v` (numpy `np.convolve(a, v)`), length
 /// `a.len() + v.len() - 1`.
-fn convolve_full(a: &[f64], v: &[f64]) -> Vec<f64> {
+pub fn convolve_full(a: &[f64], v: &[f64]) -> Vec<f64> {
     let n = a.len() + v.len() - 1;
     let mut out = vec![0.0; n];
     for (i, &ai) in a.iter().enumerate() {
@@ -301,7 +302,7 @@ fn convolve_full(a: &[f64], v: &[f64]) -> Vec<f64> {
 
 /// `np.convolve(a, v, mode='valid')`: the central part where the windows fully
 /// overlap, length `max(M,N) - min(M,N) + 1`.
-fn convolve_valid(a: &[f64], v: &[f64]) -> Vec<f64> {
+pub fn convolve_valid(a: &[f64], v: &[f64]) -> Vec<f64> {
     let full = convolve_full(a, v);
     let (m, n) = (a.len(), v.len());
     let minlen = m.min(n);
