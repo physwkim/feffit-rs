@@ -23,15 +23,21 @@
 //! available in path expressions, bound to each path's geometry through a
 //! [`params::FuncCtx`].
 //!
+//! After a fit, [`DataSet::save_outputs`] forward/back-transforms the data and
+//! model (and optionally each path) χ(k) into χ(R)/χ(q) output arrays (larch
+//! `save_outputs`/`_xafsft`).
+//!
 //! Not yet ported: background refinement (`refine_bkg`) and the GNXAS g(r)
 //! model.
 
 pub mod dataset;
 pub mod fit;
+pub mod outputs;
 pub mod transform;
 
 pub use dataset::DataSet;
 pub use fit::{
     feffit, Best, FeffitResult, FitDataSet, FitError, PathParam, PathSpec, Spec, PATH_PNAMES,
 };
+pub use outputs::{xafsft, DataSetOutput, XafsOutput};
 pub use transform::{FitSpace, Transform};

@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use feffdat::FeffPath;
-use feffit::{feffit, DataSet, FeffitResult, FitDataSet, FitSpace, PathSpec, Spec, Transform};
+use feffit::{
+    feffit, DataSet, FeffitResult, FitDataSet, FitSpace, PathSpec, Spec, Transform, XafsOutput,
+};
 use params::Parameters;
 use xafsft::Window;
 
@@ -459,6 +461,96 @@ fn feffit_multidataset_matches_larch() {
         "second dataset's path parameters present"
     );
     assert_two_path_parity(&r, &res);
+}
+
+/// Compare one output array against its reference block by peak-relative max
+/// deviation (`max|Δ| / max|want|`), the same metric used for the wavelet
+/// residual: it stays meaningful where the array crosses zero.
+fn cmp_array(name: &str, got: &[f64], want: &[f64], tol: f64) {
+    assert_eq!(got.len(), want.len(), "{name} length");
+    let peak = want.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-300);
+    let maxd = got
+        .iter()
+        .zip(want)
+        .fold(0.0f64, |m, (g, w)| m.max((g - w).abs()));
+    println!(
+        "{name:18} len={} peak={:.4e} maxd={:.3e} rel={:.3e}",
+        got.len(),
+        peak,
+        maxd,
+        maxd / peak
+    );
+    assert!(
+        maxd / peak < tol,
+        "{name}: maxd/peak {:.3e} >= {tol:.0e}",
+        maxd / peak
+    );
+}
+
+/// Compare all eight χ(R)/χ(q) arrays of an [`XafsOutput`] against the
+/// `{prefix}_chir_*`/`{prefix}_chiq_*` reference blocks.
+fn cmp_xafs(out: &XafsOutput, r: &Ref, prefix: &str, tol: f64) {
+    let pairs: [(&str, &Vec<f64>); 8] = [
+        ("chir_re", &out.chir_re),
+        ("chir_im", &out.chir_im),
+        ("chir_mag", &out.chir_mag),
+        ("chir_pha", &out.chir_pha),
+        ("chiq_re", &out.chiq_re),
+        ("chiq_im", &out.chiq_im),
+        ("chiq_mag", &out.chiq_mag),
+        ("chiq_pha", &out.chiq_pha),
+    ];
+    for (suffix, got) in pairs {
+        let name = format!("{prefix}_{suffix}");
+        cmp_array(&name, got, &r.blocks[&name], tol);
+    }
+}
+
+/// `save_outputs`/`_xafsft` parity: after the two-path Cu fit, forward/back-FT
+/// the data, model, and each path χ(k) into χ(R)/χ(q) arrays and compare to
+/// larch's `feffit(..., path_outputs=True)` outputs. The data χ(R) is a fixed
+/// FFT of the synthesized data (independent of the fit), so it matches to FFT
+/// round-off; the model and path arrays carry the best-fit lmdif ULP drift.
+#[test]
+fn feffit_save_outputs_matches_larch() {
+    let r = Ref::load_named("ref_feffit_outputs.txt");
+
+    let (p1, s1) = wired_path("feff0001.dat", "sig2_1");
+    let (p2, s2) = wired_path("feff0002.dat", "sig2_2");
+    let dataset = DataSet::new(
+        r.blocks["data_k"].clone(),
+        r.blocks["data_chi"].clone(),
+        vec![p1, p2],
+        r.transform(),
+    );
+    let mut fds = vec![FitDataSet {
+        dataset,
+        specs: vec![s1, s2],
+        epsilon_k: Some(r.epsilon_k),
+    }];
+
+    let mut params = Parameters::new();
+    for (name, init) in &r.vars {
+        params.add_var(name, *init);
+    }
+    params.add_expr("alpha_x10", "alpha*10");
+
+    feffit(&mut params, &mut fds).expect("feffit");
+    let out = fds[0].dataset.save_outputs(10.0, true);
+
+    // shared output grids (rstep·arange out to rmax_out; q = linspace(0,kmax+2))
+    cmp_array("out_r", &out.data.r, &r.blocks["out_r"], 1e-12);
+    cmp_array("out_q", &out.data.q, &r.blocks["out_q"], 1e-12);
+    cmp_array("out_r(model)", &out.model.r, &r.blocks["out_r"], 1e-12);
+    cmp_array("out_q(model)", &out.model.q, &r.blocks["out_q"], 1e-12);
+
+    // data: fixed FFT of the synthesized χ(k), independent of the fit
+    cmp_xafs(&out.data, &r, "data", 1e-9);
+    // model + per-path: carry the best-fit ULP drift (values ≈ 1e-7 rel)
+    cmp_xafs(&out.model, &r, "model", 1e-5);
+    assert_eq!(out.paths.len(), 2, "two path outputs");
+    cmp_xafs(&out.paths[0], &r, "path0", 1e-5);
+    cmp_xafs(&out.paths[1], &r, "path1", 1e-5);
 }
 
 /// End-to-end fit whose σ² is `sigma2_eins(temp, theta)` — verifies the

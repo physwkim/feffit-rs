@@ -11,6 +11,7 @@ use std::f64::consts::PI;
 
 use feffdat::{ff2chi, interp_linear, FeffPath, Interp, KGrid};
 
+use crate::outputs::{xafsft, DataSetOutput};
 use crate::transform::{FitSpace, Transform};
 
 /// Truncate toward zero into a `usize` (Python `int()` semantics for x >= 0).
@@ -194,6 +195,30 @@ impl DataSet {
         }
         self.epsilon_k = ek;
         self.epsilon_r = er;
+    }
+
+    /// Forward/back-FT the data and model (and optionally each path) χ(k) into
+    /// output arrays (port of `save_outputs`). The data transform uses the
+    /// original `data_chi`; the model transform uses the path sum at the current
+    /// parameters (`model_chi_sum`), which also populates each path's χ(k) so the
+    /// per-path outputs come from the same evaluation. Call after a fit (or it
+    /// lazily prepares with estimated noise, like `residual`).
+    pub fn save_outputs(&mut self, rmax_out: f64, path_outputs: bool) -> DataSetOutput {
+        if !self.prepared {
+            self.prepare_fit(None);
+        }
+        let data = xafsft(&self.transform, &self.data_chi, rmax_out);
+        let model_chi = self.model_chi_sum();
+        let model = xafsft(&self.transform, &model_chi, rmax_out);
+        let paths = if path_outputs {
+            self.paths
+                .iter()
+                .map(|p| xafsft(&self.transform, &p.chi, rmax_out))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        DataSetOutput { data, model, paths }
     }
 
     /// Sum the path chi(k) on the model k-grid (`ff2chi` over the paths),
