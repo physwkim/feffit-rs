@@ -135,6 +135,15 @@ impl Parameters {
             .collect()
     }
 
+    /// Names of the constraint (expression) parameters, in insertion order.
+    pub fn expr_names(&self) -> Vec<String> {
+        self.order
+            .iter()
+            .filter(|n| self.map[*n].expr.is_some())
+            .cloned()
+            .collect()
+    }
+
     /// Current value of a parameter.
     pub fn value(&self, name: &str) -> Option<f64> {
         self.map.get(name).map(|p| p.value)
@@ -208,6 +217,65 @@ impl Parameters {
             self.map.get_mut(n).unwrap().value = val;
         }
         Ok(())
+    }
+
+    /// For each parameter, its current value and gradient with respect to the
+    /// free-variable basis ([`Parameters::var_names`], in that order). Free
+    /// variables map to unit basis vectors; fixed parameters and injected
+    /// constants to zero; expression parameters are differentiated through
+    /// their constraint expressions by forward-mode AD in dependency order.
+    ///
+    /// Combined with the fit covariance `C`, this yields the first-order
+    /// uncertainty `stderr(f) = sqrt(gᵀ C g)` larch propagates with the
+    /// `uncertainties` package (`larch.fitting.eval_stderr`). Call after
+    /// [`Parameters::update_constraints`] so expression values are current.
+    pub fn value_grads(&self) -> Result<HashMap<String, (f64, Vec<f64>)>, ParamError> {
+        let var_names = self.var_names();
+        let nvar = var_names.len();
+        let index: HashMap<&str, usize> = var_names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.as_str(), i))
+            .collect();
+
+        let sym = self.symbols();
+
+        // seed gradients: each free variable is a unit basis vector; every
+        // other non-expression parameter is constant (zero gradient). Injected
+        // constants are absent from the map (eval_dual treats absent as zero).
+        let mut grads: HashMap<String, Vec<f64>> = HashMap::new();
+        for n in &self.order {
+            let p = &self.map[n];
+            if p.expr.is_none() {
+                let mut g = vec![0.0; nvar];
+                if let Some(&i) = index.get(n.as_str()) {
+                    g[i] = 1.0;
+                }
+                grads.insert(n.clone(), g);
+            }
+        }
+
+        // differentiate expression parameters in dependency order
+        let mut asts: HashMap<String, Expr> = HashMap::new();
+        for n in &self.order {
+            if let Some(src) = self.map[n].expr.clone() {
+                let ast = parse(&src).map_err(|e| ParamError::Expr(n.clone(), e))?;
+                asts.insert(n.clone(), ast);
+            }
+        }
+        for n in &self.topo_order(&asts)? {
+            let (_v, g) = asts[n]
+                .eval_dual(&sym, &grads, nvar)
+                .map_err(|e| ParamError::Expr(n.clone(), e))?;
+            grads.insert(n.clone(), g);
+        }
+
+        let mut out = HashMap::with_capacity(self.order.len());
+        for n in &self.order {
+            let g = grads.remove(n).unwrap_or_else(|| vec![0.0; nvar]);
+            out.insert(n.clone(), (self.map[n].value, g));
+        }
+        Ok(out)
     }
 
     /// Topologically order the expression parameters so each is evaluated after

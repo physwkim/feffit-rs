@@ -72,12 +72,37 @@ pub struct Best {
     pub stderr: f64,
 }
 
+/// The eight path parameters, in larch's canonical order (`PATH_PARS`).
+pub const PATH_PNAMES: [&str; 8] = [
+    "degen", "s02", "e0", "ei", "deltar", "sigma2", "third", "fourth",
+];
+
+/// One path parameter's best-fit value and propagated 1-sigma uncertainty.
+#[derive(Debug, Clone)]
+pub struct PathParam {
+    /// Index of the dataset this path belongs to.
+    pub dataset: usize,
+    /// Index of the path within its dataset.
+    pub path: usize,
+    /// Parameter name (one of [`PATH_PNAMES`]).
+    pub name: String,
+    pub value: f64,
+    /// Propagated uncertainty (`0` for a constant spec).
+    pub stderr: f64,
+}
+
 /// Result of [`feffit`]: best-fit variables, rescaled covariance, and the fit
 /// statistics (all rescaled to `n_idp`, matching larch).
 #[derive(Debug, Clone)]
 pub struct FeffitResult {
     /// Best-fit value + stderr for each free variable, in `var_names` order.
     pub best: Vec<Best>,
+    /// Best-fit value + propagated stderr for each global constraint
+    /// (expression) parameter, in declaration order.
+    pub derived: Vec<Best>,
+    /// Best-fit value + propagated stderr for every path parameter, in
+    /// dataset → path → [`PATH_PNAMES`] order.
+    pub path_params: Vec<PathParam>,
     /// Covariance among the free variables, rescaled to `n_idp` (`None` if
     /// the Jacobian was singular). `covar[i][j]` matches `best[i]`/`best[j]`.
     pub covar: Option<Vec<Vec<f64>>>,
@@ -204,6 +229,47 @@ impl CompiledPathSpec {
             fourth: ev(&self.fourth)?,
         })
     }
+
+    /// Value and gradient (w.r.t. the `nvar`-variable basis) of each of the
+    /// eight specs, in [`PATH_PNAMES`] order, for uncertainty propagation.
+    /// `base`/`grads` are the global parameter values/gradients; path-local
+    /// symbols are injected as constants (zero gradient), matching larch
+    /// treating `reff` and the other `FEFFDAT_VALUES` as fixed.
+    fn eval_dual(
+        &self,
+        base: &HashMap<String, f64>,
+        grads: &HashMap<String, Vec<f64>>,
+        nvar: usize,
+        fdat: &FeffDatFile,
+    ) -> Result<[(f64, Vec<f64>); 8], ExprError> {
+        let mut sym = base.clone();
+        sym.insert("reff".to_string(), fdat.reff);
+        sym.insert("degen".to_string(), fdat.degen);
+        sym.insert("nleg".to_string(), fdat.nleg as f64);
+        sym.insert("rnorman".to_string(), fdat.rnorman);
+        sym.insert("gam_ch".to_string(), fdat.gam_ch);
+        sym.insert("rs_int".to_string(), fdat.rs_int);
+        sym.insert("vint".to_string(), fdat.vint);
+        sym.insert("vmu".to_string(), fdat.vmu);
+        sym.insert("vfermi".to_string(), fdat.vfermi);
+
+        let ev = |c: &CompiledSpec| -> Result<(f64, Vec<f64>), ExprError> {
+            match c {
+                CompiledSpec::Const(v) => Ok((*v, vec![0.0; nvar])),
+                CompiledSpec::Expr(e) => e.eval_dual(&sym, grads, nvar),
+            }
+        };
+        Ok([
+            ev(&self.degen)?,
+            ev(&self.s02)?,
+            ev(&self.e0)?,
+            ev(&self.ei)?,
+            ev(&self.deltar)?,
+            ev(&self.sigma2)?,
+            ev(&self.third)?,
+            ev(&self.fourth)?,
+        ])
+    }
 }
 
 /// Push a trial variable vector through the global constraints and per-path
@@ -319,7 +385,7 @@ pub fn feffit(
     // larch runs lmfit with scale_covar=False then rescales to n_idp.
     let err_scale = chisqr / (n_idp - nvarys as f64);
     let cov_unscaled = result.covar();
-    let covar = cov_unscaled.as_ref().map(|c| {
+    let covar: Option<Vec<Vec<f64>>> = cov_unscaled.as_ref().map(|c| {
         c.iter()
             .map(|row| row.iter().map(|v| v * err_scale).collect())
             .collect()
@@ -340,8 +406,64 @@ pub fn feffit(
         })
         .collect();
 
+    // ---- propagate uncertainties onto constraint + path parameters ----
+    // First-order propagation `stderr(f) = sqrt(gᵀ C g)` against the rescaled
+    // covariance, exactly larch's `correlated_values` + `eval_stderr`.
+    let propagate = |g: &[f64]| -> f64 {
+        match &covar {
+            Some(c) => {
+                let mut s = 0.0;
+                for i in 0..nvarys {
+                    for j in 0..nvarys {
+                        s += g[i] * c[i][j] * g[j];
+                    }
+                }
+                s.max(0.0).sqrt()
+            }
+            None => f64::NAN,
+        }
+    };
+
+    let value_grads = params.value_grads()?;
+    let grads: HashMap<String, Vec<f64>> = value_grads
+        .iter()
+        .map(|(k, (_, g))| (k.clone(), g.clone()))
+        .collect();
+
+    let derived: Vec<Best> = params
+        .expr_names()
+        .into_iter()
+        .map(|name| {
+            let (value, g) = &value_grads[&name];
+            Best {
+                name,
+                value: *value,
+                stderr: propagate(g),
+            }
+        })
+        .collect();
+
+    let base = params.symbols();
+    let mut path_params = Vec::new();
+    for (di, (fds, cds)) in datasets.iter().zip(&compiled).enumerate() {
+        for (pi, (path, cspec)) in fds.dataset.paths.iter().zip(cds).enumerate() {
+            let vgs = cspec.eval_dual(&base, &grads, nvarys, &path.feffdat)?;
+            for (k, (value, g)) in vgs.iter().enumerate() {
+                path_params.push(PathParam {
+                    dataset: di,
+                    path: pi,
+                    name: PATH_PNAMES[k].to_string(),
+                    value: *value,
+                    stderr: propagate(g),
+                });
+            }
+        }
+    }
+
     Ok(FeffitResult {
         best,
+        derived,
+        path_params,
         covar,
         nvarys,
         nfree,

@@ -112,6 +112,65 @@ fn constraints_match_lmfit() {
 }
 
 #[test]
+fn gradients_match_finite_difference() {
+    // `value_grads()` (forward-mode AD via `eval_dual`/`call_func_dual`) against
+    // central finite differences — an independent oracle. Exercises nonlinear,
+    // multi-variable, chained constraints (`w` depends on `u` and `v`), covering
+    // the AD paths the linear feffit fit never touches (sin/exp/pow/atan2/sqrt/
+    // log + the chain rule). The end-to-end feffit parity test only has linear,
+    // single-variable path expressions, so this is where the AD math is checked.
+    let build = || {
+        let mut p = Parameters::new();
+        p.add_var("x", 0.7);
+        p.add_var("y", 1.3);
+        p.add_var("z", 0.4);
+        p.add_expr("u", "sin(x) * exp(y)");
+        p.add_expr("v", "x**y + atan2(z, x)");
+        p.add_expr("w", "u * v + log(x + 2.0)"); // chained: depends on u and v
+        p.add_expr("pp", "sqrt(x*x + y*y)");
+        p
+    };
+
+    let targets = ["u", "v", "w", "pp"];
+    let var_names = ["x", "y", "z"];
+    let x0 = [0.7_f64, 1.3, 0.4];
+    let h = 1e-6;
+
+    let mut p = build();
+    p.update_constraints().unwrap();
+    let vg = p.value_grads().unwrap();
+
+    // AD value must agree with the resolved constraint value
+    for t in &targets {
+        let (val, _) = &vg[*t];
+        let want = p.value(t).unwrap();
+        assert!((val - want).abs() < 1e-12, "{t}: AD value {val} vs {want}");
+    }
+
+    let fd_value = |xs: &[f64], t: &str| -> f64 {
+        let mut q = build();
+        q.set_var_values(xs);
+        q.update_constraints().unwrap();
+        q.value(t).unwrap()
+    };
+
+    for t in &targets {
+        let (_, g) = &vg[*t];
+        for (i, vn) in var_names.iter().enumerate() {
+            let mut xp = x0;
+            xp[i] += h;
+            let mut xm = x0;
+            xm[i] -= h;
+            let fd = (fd_value(&xp, t) - fd_value(&xm, t)) / (2.0 * h);
+            let d = (g[i] - fd).abs();
+            let rel = d / fd.abs().max(1e-12);
+            println!("d{t}/d{vn} ad={:.10e} fd={:.10e} rel={rel:.2e}", g[i], fd);
+            assert!(rel < 1e-6 || d < 1e-8, "d{t}/d{vn}: ad {} vs fd {fd}", g[i]);
+        }
+    }
+}
+
+#[test]
 fn cycle_is_detected() {
     let mut p = Parameters::new();
     p.add_expr("a", "b + 1");

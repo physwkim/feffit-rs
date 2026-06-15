@@ -26,7 +26,10 @@ struct Ref {
     transform: HashMap<String, String>,
     vars: Vec<(String, f64)>, // (name, init) in declaration order
     stats: HashMap<String, f64>,
-    best: Vec<(String, f64, f64)>, // (name, value, stderr)
+    best: Vec<(String, f64, f64)>,    // (name, value, stderr)
+    derived: Vec<(String, f64, f64)>, // (name, value, stderr)
+    // (dataset, path, name, value, stderr); stderr is NaN for constant specs
+    path_params: Vec<(usize, usize, String, f64, f64)>,
     fitspace: String,
     epsilon_k: f64,
     blocks: HashMap<String, Vec<f64>>,
@@ -39,6 +42,8 @@ impl Ref {
         let mut vars = Vec::new();
         let mut stats = HashMap::new();
         let mut best = Vec::new();
+        let mut derived = Vec::new();
+        let mut path_params = Vec::new();
         let mut blocks: HashMap<String, Vec<f64>> = HashMap::new();
         let mut fitspace = String::new();
         let mut epsilon_k = 0.0;
@@ -64,6 +69,20 @@ impl Ref {
                 let v: f64 = it.next().unwrap().parse().unwrap();
                 let s: f64 = it.next().unwrap().parse().unwrap();
                 best.push((name, v, s));
+            } else if let Some(rest) = line.strip_prefix("#derived ") {
+                let mut it = rest.split_whitespace();
+                let name = it.next().unwrap().to_string();
+                let v: f64 = it.next().unwrap().parse().unwrap();
+                let s: f64 = it.next().unwrap().parse().unwrap();
+                derived.push((name, v, s));
+            } else if let Some(rest) = line.strip_prefix("#pathparam ") {
+                let mut it = rest.split_whitespace();
+                let di: usize = it.next().unwrap().parse().unwrap();
+                let pi: usize = it.next().unwrap().parse().unwrap();
+                let name = it.next().unwrap().to_string();
+                let v: f64 = it.next().unwrap().parse().unwrap();
+                let s: f64 = it.next().unwrap().parse().unwrap();
+                path_params.push((di, pi, name, v, s));
             } else if let Some(name) = line.strip_prefix("#begin ") {
                 cur = Some(name.to_string());
                 blocks.insert(name.to_string(), Vec::new());
@@ -86,6 +105,8 @@ impl Ref {
             vars,
             stats,
             best,
+            derived,
+            path_params,
             fitspace,
             epsilon_k,
             blocks,
@@ -168,6 +189,9 @@ fn feffit_matches_larch() {
     for (name, init) in &r.vars {
         params.add_var(name, *init);
     }
+    // global constraint parameter, mirroring `DERIVED` in ref_feffit_fit.py —
+    // unused by any path, present to exercise derived-parameter uncertainty.
+    params.add_expr("alpha_x10", "alpha*10");
 
     let res = feffit(&mut params, &mut fds).expect("feffit");
 
@@ -222,5 +246,45 @@ fn feffit_matches_larch() {
         );
         assert!(rel(got.value, *val) < 1e-6, "{name} value");
         assert!(rel(got.stderr, *std) < 1e-4, "{name} stderr");
+    }
+
+    // ---- derived (global constraint) parameters: value + propagated stderr ----
+    assert_eq!(res.derived.len(), r.derived.len(), "derived count");
+    for (got, (name, val, std)) in res.derived.iter().zip(&r.derived) {
+        assert_eq!(&got.name, name, "derived order");
+        println!(
+            "derived {name:8} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
+            got.value, val, rel(got.value, *val), got.stderr, std, rel(got.stderr, *std)
+        );
+        assert!(rel(got.value, *val) < 1e-6, "derived {name} value");
+        assert!(rel(got.stderr, *std) < 1e-4, "derived {name} stderr");
+    }
+
+    // ---- path parameters: value (all) + propagated stderr (when larch
+    // reports one; a constant spec has no expr → larch None, Rust 0) ----
+    assert_eq!(
+        res.path_params.len(),
+        r.path_params.len(),
+        "path-param count"
+    );
+    let mut got_map: HashMap<(usize, usize, String), (f64, f64)> = HashMap::new();
+    for pp in &res.path_params {
+        got_map.insert(
+            (pp.dataset, pp.path, pp.name.clone()),
+            (pp.value, pp.stderr),
+        );
+    }
+    for (di, pi, name, val, std) in &r.path_params {
+        let (gv, gs) = got_map[&(*di, *pi, name.clone())];
+        println!(
+            "path {di}/{pi} {name:7} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e}",
+            gv, val, rel(gv, *val), gs, std
+        );
+        assert!(rel(gv, *val) < 1e-6, "path {di}/{pi} {name} value");
+        if std.is_finite() {
+            assert!(rel(gs, *std) < 1e-4, "path {di}/{pi} {name} stderr");
+        } else {
+            assert_eq!(gs, 0.0, "path {di}/{pi} {name} constant stderr");
+        }
     }
 }

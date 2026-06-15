@@ -37,6 +37,10 @@ NPTS = 401
 # starting values for the five global fit variables (all unbounded)
 VAR_INIT = dict(amp=0.80, del_e0=0.0, alpha=0.0, sig2_1=0.003, sig2_2=0.003)
 
+# global constraint (expression) parameters — not used by any path, present only
+# to exercise uncertainty propagation onto derived parameters
+DERIVED = dict(alpha_x10="alpha*10")
+
 # how each path's parameters map to the global variables / expressions
 PATH_WIRING = [
     dict(s02="amp", e0="del_e0", deltar="alpha*reff", sigma2="sig2_1"),
@@ -66,6 +70,8 @@ def run_fit(k, chi):
     params = Parameters()
     for name, val in VAR_INIT.items():
         params.add(name, value=val, vary=True)
+    for name, expr in DERIVED.items():
+        params.add(name, expr=expr)
 
     result = feffit(params, ds)
     return result
@@ -101,6 +107,24 @@ def write_ref(k, chi, result):
         par = result.params[name]
         std = par.stderr if par.stderr is not None else float("nan")
         lines.append(f"#best {name} {fmt(par.value)} {fmt(std)}")
+    # derived (global constraint) parameters: value + propagated stderr
+    for name in DERIVED:
+        par = result.params[name]
+        std = par.stderr if par.stderr is not None else float("nan")
+        lines.append(f"#derived {name} {fmt(par.value)} {fmt(std)}")
+    # path parameters: value + propagated stderr, per dataset/path. store_feffdat()
+    # restores each path's own `reff` before reading `.value` (larch leaves the
+    # shared symbol's `reff` at the last path's value otherwise).
+    for di, dsi in enumerate(result.datasets):
+        for pi, (label, path) in enumerate(dsi.paths.items()):
+            path.store_feffdat()
+            for pname in ("degen", "s02", "e0", "ei",
+                          "deltar", "sigma2", "third", "fourth"):
+                obj = path.params[path.pathpar_name(pname)]
+                std = obj.stderr if obj.stderr is not None else float("nan")
+                lines.append(
+                    f"#pathparam {di} {pi} {pname} {fmt(obj.value)} {fmt(std)}"
+                )
     # synthesized data so the Rust fit consumes byte-identical input
     lines.append("#begin data_k")
     lines.extend(fmt(v) for v in k)

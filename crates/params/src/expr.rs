@@ -335,6 +335,87 @@ impl Expr {
             }
         }
     }
+
+    /// Forward-mode automatic differentiation: evaluate the expression and its
+    /// gradient with respect to a basis of `nvar` variables. `sym` holds each
+    /// symbol's value; `grads` holds the gradient vector for symbols that depend
+    /// on the basis (a symbol absent from `grads` is treated as a constant, with
+    /// zero gradient). This is the first-order error propagation larch performs
+    /// with the `uncertainties` package: `stderr(f) = sqrt(gᵀ C g)`.
+    pub fn eval_dual(
+        &self,
+        sym: &HashMap<String, f64>,
+        grads: &HashMap<String, Vec<f64>>,
+        nvar: usize,
+    ) -> Result<(f64, Vec<f64>), ExprError> {
+        match self {
+            Expr::Num(v) => Ok((*v, vec![0.0; nvar])),
+            Expr::Var(n) => {
+                let v = if let Some(v) = sym.get(n) {
+                    *v
+                } else {
+                    match n.as_str() {
+                        "pi" => PI,
+                        "e" => E,
+                        _ => return Err(ExprError::UnknownVar(n.clone())),
+                    }
+                };
+                let g = grads.get(n).cloned().unwrap_or_else(|| vec![0.0; nvar]);
+                Ok((v, g))
+            }
+            Expr::Neg(e) => {
+                let (v, g) = e.eval_dual(sym, grads, nvar)?;
+                Ok((-v, g.iter().map(|x| -x).collect()))
+            }
+            Expr::Bin(op, a, b) => {
+                let (x, xg) = a.eval_dual(sym, grads, nvar)?;
+                let (y, yg) = b.eval_dual(sym, grads, nvar)?;
+                let g: Vec<f64> = match op {
+                    BinOp::Add => (0..nvar).map(|i| xg[i] + yg[i]).collect(),
+                    BinOp::Sub => (0..nvar).map(|i| xg[i] - yg[i]).collect(),
+                    BinOp::Mul => (0..nvar).map(|i| x * yg[i] + y * xg[i]).collect(),
+                    BinOp::Div => (0..nvar)
+                        .map(|i| (xg[i] * y - x * yg[i]) / (y * y))
+                        .collect(),
+                    // d/d of (x - y*floor(x/y)): floor is locally constant
+                    BinOp::Rem => {
+                        let fl = (x / y).floor();
+                        (0..nvar).map(|i| xg[i] - fl * yg[i]).collect()
+                    }
+                    // d(x^y) = y*x^(y-1) dx + x^y*ln(x) dy; the ln term only
+                    // applies where the exponent itself varies (yg != 0)
+                    BinOp::Pow => {
+                        let val = x.powf(y);
+                        let d_dx = y * x.powf(y - 1.0);
+                        let lnx = if x > 0.0 { x.ln() } else { 0.0 };
+                        (0..nvar)
+                            .map(|i| {
+                                let mut gi = d_dx * xg[i];
+                                if yg[i] != 0.0 {
+                                    gi += val * lnx * yg[i];
+                                }
+                                gi
+                            })
+                            .collect()
+                    }
+                };
+                let v = match op {
+                    BinOp::Add => x + y,
+                    BinOp::Sub => x - y,
+                    BinOp::Mul => x * y,
+                    BinOp::Div => x / y,
+                    BinOp::Rem => x - y * (x / y).floor(),
+                    BinOp::Pow => x.powf(y),
+                };
+                Ok((v, g))
+            }
+            Expr::Call(name, args) => {
+                let evaled: Result<Vec<(f64, Vec<f64>)>, _> =
+                    args.iter().map(|a| a.eval_dual(sym, grads, nvar)).collect();
+                call_func_dual(name, &evaled?, nvar)
+            }
+        }
+    }
 }
 
 fn call_func(name: &str, a: &[f64]) -> Result<f64, ExprError> {
@@ -388,6 +469,143 @@ fn call_func(name: &str, a: &[f64]) -> Result<f64, ExprError> {
                 return Err(ExprError::Arity(name.to_string()));
             }
             a.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        }
+        _ => return Err(ExprError::UnknownFunc(name.to_string())),
+    })
+}
+
+/// Forward-mode AD companion to [`call_func`]: returns the function value and
+/// its gradient given each argument's `(value, gradient)`.
+fn call_func_dual(
+    name: &str,
+    a: &[(f64, Vec<f64>)],
+    nvar: usize,
+) -> Result<(f64, Vec<f64>), ExprError> {
+    // chain rule for a single-argument function f: g = f'(u) * ug
+    let unary = |fval: f64, fprime: f64, ug: &[f64]| -> (f64, Vec<f64>) {
+        (fval, ug.iter().map(|d| fprime * d).collect())
+    };
+    let need1 = || -> Result<(f64, &Vec<f64>), ExprError> {
+        if a.len() == 1 {
+            Ok((a[0].0, &a[0].1))
+        } else {
+            Err(ExprError::Arity(name.to_string()))
+        }
+    };
+    Ok(match name {
+        "sin" => {
+            let (u, ug) = need1()?;
+            unary(u.sin(), u.cos(), ug)
+        }
+        "cos" => {
+            let (u, ug) = need1()?;
+            unary(u.cos(), -u.sin(), ug)
+        }
+        "tan" => {
+            let (u, ug) = need1()?;
+            let t = u.tan();
+            unary(t, 1.0 + t * t, ug)
+        }
+        "asin" | "arcsin" => {
+            let (u, ug) = need1()?;
+            unary(u.asin(), 1.0 / (1.0 - u * u).sqrt(), ug)
+        }
+        "acos" | "arccos" => {
+            let (u, ug) = need1()?;
+            unary(u.acos(), -1.0 / (1.0 - u * u).sqrt(), ug)
+        }
+        "atan" | "arctan" => {
+            let (u, ug) = need1()?;
+            unary(u.atan(), 1.0 / (1.0 + u * u), ug)
+        }
+        "sinh" => {
+            let (u, ug) = need1()?;
+            unary(u.sinh(), u.cosh(), ug)
+        }
+        "cosh" => {
+            let (u, ug) = need1()?;
+            unary(u.cosh(), u.sinh(), ug)
+        }
+        "tanh" => {
+            let (u, ug) = need1()?;
+            let t = u.tanh();
+            unary(t, 1.0 - t * t, ug)
+        }
+        "exp" => {
+            let (u, ug) = need1()?;
+            let ex = u.exp();
+            unary(ex, ex, ug)
+        }
+        "log" | "ln" => {
+            let (u, ug) = need1()?;
+            unary(u.ln(), 1.0 / u, ug)
+        }
+        "log10" => {
+            let (u, ug) = need1()?;
+            unary(u.log10(), 1.0 / (u * std::f64::consts::LN_10), ug)
+        }
+        "sqrt" => {
+            let (u, ug) = need1()?;
+            let s = u.sqrt();
+            unary(s, 0.5 / s, ug)
+        }
+        "abs" | "fabs" => {
+            let (u, ug) = need1()?;
+            unary(u.abs(), u.signum(), ug)
+        }
+        "floor" => {
+            let (u, ug) = need1()?;
+            unary(u.floor(), 0.0, ug)
+        }
+        "ceil" => {
+            let (u, ug) = need1()?;
+            unary(u.ceil(), 0.0, ug)
+        }
+        "atan2" | "arctan2" => {
+            if a.len() != 2 {
+                return Err(ExprError::Arity(name.to_string()));
+            }
+            let (y, yg) = (a[0].0, &a[0].1);
+            let (x, xg) = (a[1].0, &a[1].1);
+            let denom = x * x + y * y;
+            let g = (0..nvar).map(|i| (x * yg[i] - y * xg[i]) / denom).collect();
+            (y.atan2(x), g)
+        }
+        "pow" => {
+            if a.len() != 2 {
+                return Err(ExprError::Arity(name.to_string()));
+            }
+            let (x, xg) = (a[0].0, &a[0].1);
+            let (y, yg) = (a[1].0, &a[1].1);
+            let val = x.powf(y);
+            let d_dx = y * x.powf(y - 1.0);
+            let lnx = if x > 0.0 { x.ln() } else { 0.0 };
+            let g = (0..nvar)
+                .map(|i| {
+                    let mut gi = d_dx * xg[i];
+                    if yg[i] != 0.0 {
+                        gi += val * lnx * yg[i];
+                    }
+                    gi
+                })
+                .collect();
+            (val, g)
+        }
+        "min" | "max" => {
+            if a.is_empty() {
+                return Err(ExprError::Arity(name.to_string()));
+            }
+            // gradient passes through the selected argument
+            let pick = if name == "min" {
+                a.iter()
+                    .enumerate()
+                    .fold(0, |best, (i, c)| if c.0 < a[best].0 { i } else { best })
+            } else {
+                a.iter()
+                    .enumerate()
+                    .fold(0, |best, (i, c)| if c.0 > a[best].0 { i } else { best })
+            };
+            (a[pick].0, a[pick].1.clone())
         }
         _ => return Err(ExprError::UnknownFunc(name.to_string())),
     })

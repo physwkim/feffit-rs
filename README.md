@@ -32,6 +32,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 | `params` (lmfit-style parameters + constraint expressions) | done | vs **asteval** (expr eval, bit-exact) and **lmfit** `update_constraints` (max\|Δ\| < 1e-12) |
 | `lm` Levenberg-Marquardt minimiser (MINPACK `lmdif` port) | done | vs **scipy** `optimize.leastsq`: `info`/`nfev` exact for converged cases; x/cov ≈ 1e-9–1e-7 (ULP drift vs scipy's FORTRAN MINPACK) |
 | `feffit` end-to-end fit (`fit::feffit`: params → path exprs → residual → LM → statistics) | done | vs **larch** `feffit()` on a 2-path Cu fit: `nfev`/`nvarys`/`ndata` exact; best-fit values ≈ 1e-12–1e-7, uncertainties + chi²/reduced/R-factor/AIC/BIC ≈ 1e-6 |
+| Uncertainty propagation onto constraint + path parameters (forward-mode AD, `stderr = sqrt(gᵀ C g)`) | done | AD gradients vs central finite differences (≈ 1e-10); propagated stderrs vs **larch** `eval_stderr`/`uncertainties` on the Cu fit (≈ 1e-4 rel, lmdif ULP drift) |
 | `feff-sys` (FFI to FEFF) | not started | — |
 
 ## Layout
