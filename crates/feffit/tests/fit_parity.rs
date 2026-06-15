@@ -37,7 +37,11 @@ struct Ref {
 
 impl Ref {
     fn load() -> Ref {
-        let text = std::fs::read_to_string(data_dir().join("ref_feffit_fit.txt")).unwrap();
+        Ref::load_named("ref_feffit_fit.txt")
+    }
+
+    fn load_named(name: &str) -> Ref {
+        let text = std::fs::read_to_string(data_dir().join(name)).unwrap();
         let mut transform = HashMap::new();
         let mut vars = Vec::new();
         let mut stats = HashMap::new();
@@ -166,6 +170,15 @@ fn rel(got: f64, want: f64) -> f64 {
     (got - want).abs() / want.abs().max(1e-300)
 }
 
+/// `(value, stderr)` of a path parameter from the reference.
+fn ref_pathparam(r: &Ref, di: usize, pi: usize, name: &str) -> (f64, f64) {
+    r.path_params
+        .iter()
+        .find(|(d, p, n, _, _)| *d == di && *p == pi && n == name)
+        .map(|(_, _, _, v, s)| (*v, *s))
+        .unwrap_or_else(|| panic!("path param {di}/{pi}/{name} not in reference"))
+}
+
 #[test]
 fn feffit_matches_larch() {
     let r = Ref::load();
@@ -287,4 +300,145 @@ fn feffit_matches_larch() {
             assert_eq!(gs, 0.0, "path {di}/{pi} {name} constant stderr");
         }
     }
+}
+
+/// End-to-end fit whose σ² is `sigma2_eins(temp, theta)` — verifies the
+/// path-bound function context on the value path AND the numerical uncertainty
+/// propagation through the opaque function, both against larch (`sigma2_eins`
+/// needs no Feff DLL, so larch runs the fit directly).
+#[test]
+fn feffit_sigma2_eins_matches_larch() {
+    let r = Ref::load_named("ref_feffit_sigma2.txt");
+
+    let path = FeffPath::from_path(data_dir().join("feff0001.dat")).unwrap();
+    let mut spec = PathSpec::defaults(path.feffdat.degen);
+    spec.s02 = Spec::Expr("amp".into());
+    spec.e0 = Spec::Expr("del_e0".into());
+    spec.sigma2 = Spec::Expr("sigma2_eins(temp, theta)".into());
+
+    let dataset = DataSet::new(
+        r.blocks["data_k"].clone(),
+        r.blocks["data_chi"].clone(),
+        vec![path],
+        r.transform(),
+    );
+    let mut fds = vec![FitDataSet {
+        dataset,
+        specs: vec![spec],
+        epsilon_k: Some(r.epsilon_k),
+    }];
+
+    let mut params = Parameters::new();
+    params.add_fixed("temp", r.stats["temp"]);
+    for (name, init) in &r.vars {
+        params.add_var(name, *init);
+    }
+
+    let res = feffit(&mut params, &mut fds).expect("feffit");
+
+    assert_eq!(res.nfev, r.stats["nfev"] as i32, "nfev");
+    assert_eq!(res.nvarys, r.stats["nvarys"] as usize, "nvarys");
+    assert!(
+        res.info >= 1 && res.info <= 4,
+        "info={} not converged",
+        res.info
+    );
+
+    for (got, (name, val, std)) in res.best.iter().zip(&r.best) {
+        assert_eq!(&got.name, name, "var order");
+        println!(
+            "{name:8} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
+            got.value, val, rel(got.value, *val), got.stderr, std, rel(got.stderr, *std)
+        );
+        assert!(rel(got.value, *val) < 1e-6, "{name} value");
+        assert!(rel(got.stderr, *std) < 1e-4, "{name} stderr");
+    }
+
+    // path σ²: value + uncertainty propagated through sigma2_eins
+    let (sv, ss) = ref_pathparam(&r, 0, 0, "sigma2");
+    let got = res
+        .path_params
+        .iter()
+        .find(|p| p.dataset == 0 && p.path == 0 && p.name == "sigma2")
+        .unwrap();
+    println!(
+        "sigma2  value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
+        got.value, sv, rel(got.value, sv), got.stderr, ss, rel(got.stderr, ss)
+    );
+    assert!(rel(got.value, sv) < 1e-6, "sigma2 value");
+    assert!(rel(got.stderr, ss) < 1e-4, "sigma2 stderr");
+}
+
+/// Rust-only consistency check for σ² uncertainty propagated through
+/// `sigma2_debye`. larch's `sigma2_debye` calls the x86_64 Feff DLL, which will
+/// not load on arm64, so there is no larch fit reference here. Instead: fit the
+/// (eins-synthesized, noisy) data with `sigma2 = sigma2_debye(temp, thetad)`,
+/// then confirm the feffit-reported σ² stderr equals an INDEPENDENT first-order
+/// propagation — `|d sigma2_debye/d thetad|` (central difference of
+/// `feffdat::sigma2_debye` directly) times `stderr(thetad)` — since σ² depends
+/// on `thetad` alone. This validates the `sigma2_debye` dispatch in the fit loop
+/// and the numerical propagation wiring without a larch reference.
+#[test]
+fn feffit_sigma2_debye_propagation_consistent() {
+    let r = Ref::load_named("ref_feffit_sigma2.txt");
+
+    let path = FeffPath::from_path(data_dir().join("feff0001.dat")).unwrap();
+    let fdat = path.feffdat.clone();
+    let mut spec = PathSpec::defaults(path.feffdat.degen);
+    spec.s02 = Spec::Expr("amp".into());
+    spec.sigma2 = Spec::Expr("sigma2_debye(temp, thetad)".into());
+
+    let dataset = DataSet::new(
+        r.blocks["data_k"].clone(),
+        r.blocks["data_chi"].clone(),
+        vec![path],
+        r.transform(),
+    );
+    let mut fds = vec![FitDataSet {
+        dataset,
+        specs: vec![spec],
+        epsilon_k: Some(r.epsilon_k),
+    }];
+
+    let mut params = Parameters::new();
+    params.add_fixed("temp", 300.0);
+    params.add_var("amp", 0.9);
+    params.add_var("thetad", 315.0);
+
+    let res = feffit(&mut params, &mut fds).expect("feffit");
+    assert!(
+        res.info >= 1 && res.info <= 4,
+        "debye fit info={} not converged",
+        res.info
+    );
+
+    let thetad = res.best.iter().find(|b| b.name == "thetad").unwrap();
+    let sigma2 = res
+        .path_params
+        .iter()
+        .find(|p| p.name == "sigma2" && p.path == 0)
+        .unwrap();
+
+    // value: reported σ² must equal sigma2_debye at the best thetad
+    let val_exp = feffdat::sigma2_debye(300.0, thetad.value, fdat.rnorman, &fdat.geom);
+    assert!(rel(sigma2.value, val_exp) < 1e-9, "debye σ² value");
+
+    // stderr: independent single-variable propagation
+    let h = 1.0e-3;
+    let sp = feffdat::sigma2_debye(300.0, thetad.value + h, fdat.rnorman, &fdat.geom);
+    let sm = feffdat::sigma2_debye(300.0, thetad.value - h, fdat.rnorman, &fdat.geom);
+    let stderr_exp = ((sp - sm) / (2.0 * h)).abs() * thetad.stderr;
+    println!(
+        "debye σ²: value={:.8e} thetad={:.4}±{:.4} | stderr got={:.6e} expect={:.6e} (rel {:.2e})",
+        sigma2.value,
+        thetad.value,
+        thetad.stderr,
+        sigma2.stderr,
+        stderr_exp,
+        rel(sigma2.stderr, stderr_exp)
+    );
+    assert!(
+        rel(sigma2.stderr, stderr_exp) < 1e-3,
+        "debye σ² stderr propagation"
+    );
 }

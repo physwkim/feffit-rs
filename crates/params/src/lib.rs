@@ -6,11 +6,13 @@
 //! turn path parameters (`s02`, `e0`, `deltar`, …) into either fit variables or
 //! algebraic constraints — the role `asteval` plays inside `lmfit`.
 //!
-//! Verified against `lmfit`/`asteval` for the supported grammar. Not yet
-//! ported: the EXAFS `sigma2_debye`/`sigma2_eins` helper functions.
+//! Verified against `lmfit`/`asteval` for the supported grammar. The EXAFS
+//! `sigma2_debye`/`sigma2_eins` helpers are not built in; they are supplied by
+//! the caller through [`expr::FuncCtx`] (feffit binds them to a path's
+//! geometry), since they need data this crate does not own.
 
 pub mod expr;
 pub mod parameters;
 
-pub use expr::{parse, BinOp, Expr, ExprError};
+pub use expr::{parse, BinOp, Expr, ExprError, FuncCtx, NoCtx};
 pub use parameters::{Param, ParamError, Parameters};

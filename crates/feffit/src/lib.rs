@@ -19,9 +19,12 @@
 //! first-order propagation larch performs with the `uncertainties` package).
 //! Verified against larch's `feffit()` on a two-path Cu fit.
 //!
+//! The `sigma2_eins`/`sigma2_debye` Debye-Waller constraint helpers are
+//! available in path expressions, bound to each path's geometry through a
+//! [`params::FuncCtx`].
+//!
 //! Not yet ported: list-valued k-weights, the `'w'` (Cauchy-wavelet) fit space,
-//! background refinement (`refine_bkg`), and the `sigma2_debye`/`sigma2_eins`
-//! constraint helpers.
+//! background refinement (`refine_bkg`), and the GNXAS g(r) model.
 
 pub mod dataset;
 pub mod fit;

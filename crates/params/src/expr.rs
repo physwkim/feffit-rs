@@ -278,6 +278,27 @@ pub fn parse(s: &str) -> Result<Expr, ExprError> {
     Ok(e)
 }
 
+/// Resolver for application-specific functions not built into the evaluator.
+///
+/// feffit uses this to expose `sigma2_eins`/`sigma2_debye`, which close over a
+/// Feff path's geometry. [`Expr::eval_ctx`] consults `call` before the built-in
+/// functions; returning `None` means "not my function — fall through to the
+/// built-ins" (and then to [`ExprError::UnknownFunc`]).
+pub trait FuncCtx {
+    /// Evaluate function `name` with already-evaluated argument values, or
+    /// `None` if this resolver does not handle `name`.
+    fn call(&self, name: &str, args: &[f64]) -> Option<Result<f64, ExprError>>;
+}
+
+/// A [`FuncCtx`] that resolves nothing: only the built-in functions apply.
+pub struct NoCtx;
+
+impl FuncCtx for NoCtx {
+    fn call(&self, _name: &str, _args: &[f64]) -> Option<Result<f64, ExprError>> {
+        None
+    }
+}
+
 impl Expr {
     /// Collect the variable names referenced by this expression (for dependency
     /// resolution). Function names are not included.
@@ -301,6 +322,16 @@ impl Expr {
     /// Evaluate against a symbol table. Built-in constants `pi`/`e` are used as
     /// fallbacks only when not shadowed by the table.
     pub fn eval(&self, sym: &HashMap<String, f64>) -> Result<f64, ExprError> {
+        self.eval_ctx(sym, &NoCtx)
+    }
+
+    /// Like [`Expr::eval`], but `ctx` may resolve application-specific functions
+    /// (e.g. feffit's `sigma2_eins`/`sigma2_debye`) before the built-ins.
+    pub fn eval_ctx(
+        &self,
+        sym: &HashMap<String, f64>,
+        ctx: &dyn FuncCtx,
+    ) -> Result<f64, ExprError> {
         match self {
             Expr::Num(v) => Ok(*v),
             Expr::Var(n) => {
@@ -315,10 +346,10 @@ impl Expr {
                     }
                 }
             }
-            Expr::Neg(e) => Ok(-e.eval(sym)?),
+            Expr::Neg(e) => Ok(-e.eval_ctx(sym, ctx)?),
             Expr::Bin(op, a, b) => {
-                let x = a.eval(sym)?;
-                let y = b.eval(sym)?;
+                let x = a.eval_ctx(sym, ctx)?;
+                let y = b.eval_ctx(sym, ctx)?;
                 Ok(match op {
                     BinOp::Add => x + y,
                     BinOp::Sub => x - y,
@@ -330,8 +361,12 @@ impl Expr {
                 })
             }
             Expr::Call(name, args) => {
-                let vals: Result<Vec<f64>, _> = args.iter().map(|a| a.eval(sym)).collect();
-                call_func(name, &vals?)
+                let vals: Result<Vec<f64>, _> = args.iter().map(|a| a.eval_ctx(sym, ctx)).collect();
+                let vals = vals?;
+                if let Some(r) = ctx.call(name, &vals) {
+                    return r;
+                }
+                call_func(name, &vals)
             }
         }
     }
@@ -347,6 +382,20 @@ impl Expr {
         sym: &HashMap<String, f64>,
         grads: &HashMap<String, Vec<f64>>,
         nvar: usize,
+    ) -> Result<(f64, Vec<f64>), ExprError> {
+        self.eval_dual_ctx(sym, grads, nvar, &NoCtx)
+    }
+
+    /// Like [`Expr::eval_dual`], but `ctx` may resolve application-specific
+    /// functions. Their partial derivatives are taken numerically (central
+    /// differences), matching how larch's `uncertainties` package propagates
+    /// through opaque functions such as `sigma2_eins`/`sigma2_debye`.
+    pub fn eval_dual_ctx(
+        &self,
+        sym: &HashMap<String, f64>,
+        grads: &HashMap<String, Vec<f64>>,
+        nvar: usize,
+        ctx: &dyn FuncCtx,
     ) -> Result<(f64, Vec<f64>), ExprError> {
         match self {
             Expr::Num(v) => Ok((*v, vec![0.0; nvar])),
@@ -364,12 +413,12 @@ impl Expr {
                 Ok((v, g))
             }
             Expr::Neg(e) => {
-                let (v, g) = e.eval_dual(sym, grads, nvar)?;
+                let (v, g) = e.eval_dual_ctx(sym, grads, nvar, ctx)?;
                 Ok((-v, g.iter().map(|x| -x).collect()))
             }
             Expr::Bin(op, a, b) => {
-                let (x, xg) = a.eval_dual(sym, grads, nvar)?;
-                let (y, yg) = b.eval_dual(sym, grads, nvar)?;
+                let (x, xg) = a.eval_dual_ctx(sym, grads, nvar, ctx)?;
+                let (y, yg) = b.eval_dual_ctx(sym, grads, nvar, ctx)?;
                 let g: Vec<f64> = match op {
                     BinOp::Add => (0..nvar).map(|i| xg[i] + yg[i]).collect(),
                     BinOp::Sub => (0..nvar).map(|i| xg[i] - yg[i]).collect(),
@@ -410,9 +459,39 @@ impl Expr {
                 Ok((v, g))
             }
             Expr::Call(name, args) => {
-                let evaled: Result<Vec<(f64, Vec<f64>)>, _> =
-                    args.iter().map(|a| a.eval_dual(sym, grads, nvar)).collect();
-                call_func_dual(name, &evaled?, nvar)
+                let evaled: Result<Vec<(f64, Vec<f64>)>, _> = args
+                    .iter()
+                    .map(|a| a.eval_dual_ctx(sym, grads, nvar, ctx))
+                    .collect();
+                let evaled = evaled?;
+                let vals: Vec<f64> = evaled.iter().map(|(v, _)| *v).collect();
+                if let Some(r) = ctx.call(name, &vals) {
+                    let fval = r?;
+                    // Context functions are opaque: take partials numerically by
+                    // central difference, then chain through each argument's
+                    // gradient. Mirrors larch's `uncertainties` propagation
+                    // through `sigma2_eins`/`sigma2_debye`.
+                    let mut g = vec![0.0; nvar];
+                    for (i, (ai, ai_grad)) in evaled.iter().enumerate() {
+                        if ai_grad.iter().all(|&d| d == 0.0) {
+                            continue; // argument does not vary -> no contribution
+                        }
+                        let h = 1.0e-6 * ai.abs().max(1.0);
+                        let mut ap = vals.clone();
+                        let mut am = vals.clone();
+                        ap[i] = ai + h;
+                        am[i] = ai - h;
+                        let unknown = || ExprError::UnknownFunc(name.clone());
+                        let fp = ctx.call(name, &ap).ok_or_else(unknown)??;
+                        let fm = ctx.call(name, &am).ok_or_else(unknown)??;
+                        let dfi = (fp - fm) / (2.0 * h);
+                        for (gk, &gik) in g.iter_mut().zip(ai_grad.iter()) {
+                            *gk += dfi * gik;
+                        }
+                    }
+                    return Ok((fval, g));
+                }
+                call_func_dual(name, &evaled, nvar)
             }
         }
     }

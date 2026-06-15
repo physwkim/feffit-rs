@@ -5,15 +5,16 @@
 //!
 //! Each path parameter (`degen`, `s02`, `e0`, `ei`, `deltar`, `sigma2`,
 //! `third`, `fourth`) is either a constant or an expression over the global
-//! parameters augmented with path-local symbols (`reff`, `degen`, `nleg`,
-//! `rnorman`, `gam_ch`, `rs_int`, `vint`, `vmu`, `vfermi`). `rmass` (and the
-//! `sigma2_debye`/`sigma2_eins` helpers that use it) are not yet ported.
+//! parameters augmented with path-local symbols (`reff`, `nleg`, `degen`,
+//! `rmass`, `rnorman`, `gam_ch`, `rs_int`, `vint`, `vmu`, `vfermi`) and the
+//! path-bound σ² helpers `sigma2_eins(t, theta)` / `sigma2_debye(t, theta)`
+//! (bound to the path geometry through a [`params::FuncCtx`]).
 
 use std::collections::HashMap;
 
-use feffdat::{FeffDatFile, PathParams};
+use feffdat::{sigma2_debye, sigma2_eins, FeffDatFile, PathParams};
 use lm::{lmdif, LmConfig};
-use params::{parse, Expr, ExprError, ParamError, Parameters};
+use params::{parse, Expr, ExprError, FuncCtx, ParamError, Parameters};
 
 use crate::dataset::DataSet;
 
@@ -194,28 +195,19 @@ impl CompiledPathSpec {
     }
 
     /// Evaluate the eight specs into numeric [`PathParams`], using `base` (the
-    /// global parameter values) augmented with this path's local symbols.
+    /// global parameter values) augmented with this path's local symbols and
+    /// the path-bound σ² helpers.
     fn eval(
         &self,
         base: &HashMap<String, f64>,
         fdat: &FeffDatFile,
     ) -> Result<PathParams, ExprError> {
-        let mut sym = base.clone();
-        // path-local symbols (larch FEFFDAT_VALUES, minus the deferred `rmass`)
-        sym.insert("reff".to_string(), fdat.reff);
-        sym.insert("degen".to_string(), fdat.degen);
-        sym.insert("nleg".to_string(), fdat.nleg as f64);
-        sym.insert("rnorman".to_string(), fdat.rnorman);
-        sym.insert("gam_ch".to_string(), fdat.gam_ch);
-        sym.insert("rs_int".to_string(), fdat.rs_int);
-        sym.insert("vint".to_string(), fdat.vint);
-        sym.insert("vmu".to_string(), fdat.vmu);
-        sym.insert("vfermi".to_string(), fdat.vfermi);
-
+        let sym = path_symbols(base, fdat);
+        let ctx = PathFuncCtx { fdat };
         let ev = |c: &CompiledSpec| -> Result<f64, ExprError> {
             match c {
                 CompiledSpec::Const(v) => Ok(*v),
-                CompiledSpec::Expr(e) => e.eval(&sym),
+                CompiledSpec::Expr(e) => e.eval_ctx(&sym, &ctx),
             }
         };
         Ok(PathParams {
@@ -242,21 +234,12 @@ impl CompiledPathSpec {
         nvar: usize,
         fdat: &FeffDatFile,
     ) -> Result<[(f64, Vec<f64>); 8], ExprError> {
-        let mut sym = base.clone();
-        sym.insert("reff".to_string(), fdat.reff);
-        sym.insert("degen".to_string(), fdat.degen);
-        sym.insert("nleg".to_string(), fdat.nleg as f64);
-        sym.insert("rnorman".to_string(), fdat.rnorman);
-        sym.insert("gam_ch".to_string(), fdat.gam_ch);
-        sym.insert("rs_int".to_string(), fdat.rs_int);
-        sym.insert("vint".to_string(), fdat.vint);
-        sym.insert("vmu".to_string(), fdat.vmu);
-        sym.insert("vfermi".to_string(), fdat.vfermi);
-
+        let sym = path_symbols(base, fdat);
+        let ctx = PathFuncCtx { fdat };
         let ev = |c: &CompiledSpec| -> Result<(f64, Vec<f64>), ExprError> {
             match c {
                 CompiledSpec::Const(v) => Ok((*v, vec![0.0; nvar])),
-                CompiledSpec::Expr(e) => e.eval_dual(&sym, grads, nvar),
+                CompiledSpec::Expr(e) => e.eval_dual_ctx(&sym, grads, nvar, &ctx),
             }
         };
         Ok([
@@ -269,6 +252,50 @@ impl CompiledPathSpec {
             ev(&self.third)?,
             ev(&self.fourth)?,
         ])
+    }
+}
+
+/// `base` (global parameters) augmented with this path's local symbols — the
+/// larch `FEFFDAT_VALUES`. These are constants for the fit (zero gradient).
+fn path_symbols(base: &HashMap<String, f64>, fdat: &FeffDatFile) -> HashMap<String, f64> {
+    let mut sym = base.clone();
+    sym.insert("reff".to_string(), fdat.reff);
+    sym.insert("nleg".to_string(), fdat.nleg as f64);
+    sym.insert("degen".to_string(), fdat.degen);
+    sym.insert("rmass".to_string(), fdat.rmass());
+    sym.insert("rnorman".to_string(), fdat.rnorman);
+    sym.insert("gam_ch".to_string(), fdat.gam_ch);
+    sym.insert("rs_int".to_string(), fdat.rs_int);
+    sym.insert("vint".to_string(), fdat.vint);
+    sym.insert("vmu".to_string(), fdat.vmu);
+    sym.insert("vfermi".to_string(), fdat.vfermi);
+    sym
+}
+
+/// Binds the EXAFS σ² helpers to one path's geometry so a path expression can
+/// call `sigma2_eins(t, theta)` / `sigma2_debye(t, theta)`, mirroring larch's
+/// `add_sigma2funcs` (which closes the asteval-injected helpers over the
+/// current path's `feffpath`).
+struct PathFuncCtx<'a> {
+    fdat: &'a FeffDatFile,
+}
+
+impl FuncCtx for PathFuncCtx<'_> {
+    fn call(&self, name: &str, args: &[f64]) -> Option<Result<f64, ExprError>> {
+        let arity2 = |f: &dyn Fn(f64, f64) -> f64| {
+            if args.len() == 2 {
+                Ok(f(args[0], args[1]))
+            } else {
+                Err(ExprError::Arity(name.to_string()))
+            }
+        };
+        match name {
+            "sigma2_eins" => Some(arity2(&|t, th| sigma2_eins(t, th, &self.fdat.geom))),
+            "sigma2_debye" => Some(arity2(&|t, th| {
+                sigma2_debye(t, th, self.fdat.rnorman, &self.fdat.geom)
+            })),
+            _ => None,
+        }
     }
 }
 
