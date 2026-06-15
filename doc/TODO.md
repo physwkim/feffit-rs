@@ -8,9 +8,10 @@ without re-deriving scope).
 
 - Branch `main` tracks `origin/main` (remote `origin` =
   `https://github.com/physwkim/feffit-rs.git`, added 2026-06-15). The first 17
-  commits are pushed; the next 3 (push-state doc, `feffrun`, `gnxas`/gamma) are
-  **ahead of origin and unpushed** — pushing requires explicit user confirmation
-  per the global rules (`git push` only when asked).
+  commits are pushed; the next 5 (push-state doc, `feffrun`, `gnxas`/gamma, this
+  TODO, the `feffrun`→`feffit` capstone) are **ahead of origin and unpushed** —
+  pushing requires explicit user confirmation per the global rules (`git push`
+  only when asked).
 
 ## Done + larch-verified (see README status table)
 
@@ -30,6 +31,7 @@ without re-deriving scope).
 | **Background refinement** (`refine_bkg`: cubic B-spline bkg as extra `bkg*` vars) + FITPACK `splev`/knots | `splev` vs scipy (≈1e-16); end-to-end vs larch `feffit(refine_bkg=True)` (nspline=12): `nfev` exact (91), knots bit-exact, 12 bkg coefs match |
 | **FEFF path generation** (`feffrun`: subprocess driver for the FEFF8L `feff8l_*` pipeline) | full pipeline on a Cu `feff.inp` → 14 `feffNNNN.dat` parsed by `feffdat` (1st shell reff=2.5527, nleg=2, degen=12); FEFF8L built native arm64 from `feff85exafs` |
 | **GNXAS `gnxas` path-amplitude helper** (`feffdat::gnxas`, wired into feffit path expressions; needs `feffdat::gamma`, a Cephes `Gamma` port) | gamma vs `scipy.special.gamma` and gnxas vs larch's module-level `gnxas` both **bit-exact** (max rel err 0e0). Upstream asteval-injected `gnxas` is broken (`NameError` on an undefined `reff`), so parity is against the numerically-identical module-level `gnxas` |
+| **End-to-end `feffrun` → `feffit` capstone** (`crates/feffit/tests/feffrun_capstone.rs`) | one flow: FEFF8L subprocess on a Cu `feff.inp` → `feff0001.dat` → synthetic χ(k) at known params (s02=0.9, σ²=0.005) → `feffit` recovers them exactly (amp=0.900000, sig2=0.005000, nfev=16). Gated on FEFF8L (`FEFF8L_DIR`/PATH); SKIPs cleanly when absent |
 
 ## Candidate next milestones (not yet ported)
 
@@ -40,10 +42,9 @@ the FITPACK knot vector in closed form (only the knots are needed; larch's
 coefficients are the fit variables) and ports `splev`, so no full
 `splrep`/FITPACK port was required.)*
 
-No further larch feffit/feffdat features are currently queued. Remaining
-candidate work is integration polish (an end-to-end `feffrun` → `feffit`
-capstone test that generates `feffNNNN.dat` and fits them in one flow) rather
-than new ports.
+No further larch feffit/feffdat features are currently queued, and the
+end-to-end `feffrun` → `feffit` capstone (above) now guards their
+composition. The port is feature-complete against the milestones tracked here.
 
 ## Resolved blockers
 
