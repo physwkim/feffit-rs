@@ -6,9 +6,11 @@
 //! background removal, rebinning, and deconvolution. Each piece is verified
 //! against `larch` on a real `mu(E)` dataset.
 
+pub mod autobk;
 pub mod e0;
 pub mod mathutils;
 pub mod preedge;
 
+pub use autobk::{autobk, Autobk, AutobkParams};
 pub use e0::{find_e0, find_energy_step};
 pub use preedge::{pre_edge, PreEdge, PreEdgeParams};

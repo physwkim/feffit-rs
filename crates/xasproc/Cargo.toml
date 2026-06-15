@@ -11,3 +11,5 @@ description = "XAS data reduction (pre_edge, autobk, rebin, deconvolve, …) —
 feffdat = { path = "../feffdat" }
 xafsft = { path = "../xafsft" }
 lm = { path = "../lm" }
+num-complex = "0.4"
+rusty-fitpack = "0.1.2"
