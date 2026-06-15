@@ -39,7 +39,7 @@ out = os.path.join(data, "ref_rebin.txt")
 with open(out, "w") as f:
     f.write("# rebin_xafs reference (larch)\n")
     f.write(f"e0 {E0!r}\n")
-    for method in ("boxcar", "centroid"):
+    for method in ("boxcar", "centroid", "spline"):
         g = Group(energy=energy.copy(), mu=mu.copy())
         rebin_xafs(g, e0=E0, method=method)
         rb = g.rebinned

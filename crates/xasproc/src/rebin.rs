@@ -3,9 +3,14 @@
 //!
 //! `rebin_xafs` resamples `mu(E)` onto a standard 3-region grid (pre-edge in
 //! E, XANES in E, EXAFS in k). Each output bin draws from the input points
-//! assigned to its energy segment: a boxcar mean, a centroid, or — for short
-//! segments — a NaN-filling linear interpolation. The `'spline'` method
-//! (scipy `CubicSpline`, not the default) is not yet ported.
+//! assigned to its energy segment: a boxcar mean, a centroid, a not-a-knot
+//! cubic spline (scipy `CubicSpline`), or — for short segments — a NaN-filling
+//! linear interpolation.
+//!
+//! Boxcar / centroid / interp paths are bit-exact vs larch. The `'spline'`
+//! method stands a Thomas tridiagonal solve in for scipy's LAPACK
+//! `solve_banded`; for these well-conditioned interpolation systems the two
+//! agree to round-off (~1e-16 on the Cu foil), see [`cubic_spline_at`].
 
 use crate::mathutils::{etok, index_of, ktoe, remove_dups, remove_nans2};
 
@@ -19,6 +24,9 @@ pub enum RebinMethod {
     Boxcar,
     /// energy-weighted centroid `mean(mu*E)/mean(E)` (`larch` `'centroid'`).
     Centroid,
+    /// not-a-knot cubic spline through the segment, evaluated at the bin
+    /// energy (`larch` `'spline'`, scipy `CubicSpline`).
+    Spline,
 }
 
 /// Tunable inputs to [`rebin_xafs`]; `None` fields reproduce larch's defaults.
@@ -130,6 +138,85 @@ fn interp1d_point(x: &[f64], y: &[f64], xv: f64) -> f64 {
 
 fn mean(s: &[f64]) -> f64 {
     s.iter().sum::<f64>() / s.len() as f64
+}
+
+/// First derivatives at each node for scipy's not-a-knot `CubicSpline`. Builds
+/// the same tridiagonal system scipy does and solves it with the Thomas
+/// algorithm (scipy uses LAPACK `solve_banded`). The not-a-knot boundary rows
+/// are not diagonally dominant, so Thomas (no pivoting) could in principle
+/// differ from LAPACK's pivoted banded LU, but for these well-conditioned
+/// interpolation systems the two agree to round-off. `x` strictly increasing,
+/// `n >= 3`.
+fn cubic_spline_derivs(x: &[f64], dx: &[f64], slope: &[f64]) -> Vec<f64> {
+    let n = x.len();
+    if n == 3 {
+        // scipy's parabola special case: a 3x3 dense solve. Closed form, since
+        // rows 0 and 2 give s0 = 2*slope0 - s1 and s2 = 2*slope1 - s1.
+        let s1 = (dx[0] * slope[1] + dx[1] * slope[0]) / (dx[0] + dx[1]);
+        return vec![2.0 * slope[0] - s1, s1, 2.0 * slope[1] - s1];
+    }
+
+    let mut sub = vec![0.0; n]; // sub[i] multiplies s[i-1]
+    let mut diag = vec![0.0; n];
+    let mut sup = vec![0.0; n]; // sup[i] multiplies s[i+1]
+    let mut rhs = vec![0.0; n];
+    for i in 1..n - 1 {
+        sub[i] = dx[i];
+        diag[i] = 2.0 * (dx[i - 1] + dx[i]);
+        sup[i] = dx[i - 1];
+        rhs[i] = 3.0 * (dx[i] * slope[i - 1] + dx[i - 1] * slope[i]);
+    }
+    // not-a-knot start
+    let d0 = x[2] - x[0];
+    diag[0] = dx[1];
+    sup[0] = d0;
+    rhs[0] = ((dx[0] + 2.0 * d0) * dx[1] * slope[0] + dx[0] * dx[0] * slope[1]) / d0;
+    // not-a-knot end (mirror of the start row: diag uses dx[-2] = dx[n-3])
+    let dn = x[n - 1] - x[n - 3];
+    diag[n - 1] = dx[n - 3];
+    sub[n - 1] = dn;
+    rhs[n - 1] = (dx[n - 2] * dx[n - 2] * slope[n - 3]
+        + (2.0 * dn + dx[n - 2]) * dx[n - 3] * slope[n - 2])
+        / dn;
+
+    // Thomas algorithm
+    let mut cprime = vec![0.0; n];
+    let mut dprime = vec![0.0; n];
+    cprime[0] = sup[0] / diag[0];
+    dprime[0] = rhs[0] / diag[0];
+    for i in 1..n {
+        let m = diag[i] - sub[i] * cprime[i - 1];
+        cprime[i] = sup[i] / m;
+        dprime[i] = (rhs[i] - sub[i] * dprime[i - 1]) / m;
+    }
+    let mut s = vec![0.0; n];
+    s[n - 1] = dprime[n - 1];
+    for i in (0..n - 1).rev() {
+        s[i] = dprime[i] - cprime[i] * s[i + 1];
+    }
+    s
+}
+
+/// scipy `CubicSpline(x, y)` (default not-a-knot, `extrapolate=True`) evaluated
+/// at a single point `xv`. Solves for the node first derivatives, forms the
+/// cubic-Hermite coefficients, and evaluates by Horner — matching scipy's
+/// algorithm except for the banded solve (Thomas vs LAPACK; agrees to round-off
+/// here, see [`cubic_spline_derivs`]). `x` strictly increasing with `n >= 3`.
+fn cubic_spline_at(x: &[f64], y: &[f64], xv: f64) -> f64 {
+    let n = x.len();
+    let dx: Vec<f64> = (0..n - 1).map(|i| x[i + 1] - x[i]).collect();
+    let slope: Vec<f64> = (0..n - 1).map(|i| (y[i + 1] - y[i]) / dx[i]).collect();
+    let s = cubic_spline_derivs(x, &dx, &slope);
+
+    // interval containing xv (extrapolate by clamping to [0, n-2])
+    let i = x.partition_point(|&v| v <= xv).saturating_sub(1).min(n - 2);
+    let z = xv - x[i];
+    let t = (s[i] + s[i + 1] - 2.0 * slope[i]) / dx[i];
+    let c0 = t / dx[i];
+    let c1 = (slope[i] - s[i]) / dx[i] - t;
+    let c2 = s[i];
+    let c3 = y[i];
+    ((c0 * z + c1) * z + c2) * z + c3
 }
 
 /// `numpy.ndarray.std` with `ddof=0` (population standard deviation).
@@ -256,6 +343,7 @@ pub fn rebin_xafs(energy: &[f64], mu: &[f64], p: &RebinParams) -> Rebinned {
                     );
                     num / mean(&energy[j0..j1])
                 }
+                RebinMethod::Spline => cubic_spline_at(&energy[j0..j1], &mu[j0..j1], en[i]),
             }
         };
         mu_out.push(val);

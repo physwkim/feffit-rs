@@ -47,7 +47,7 @@ fn load_ref() -> Rows {
         let mut it = s.split_whitespace();
         let key = it.next().unwrap();
         match key {
-            "boxcar" | "centroid" => {
+            "boxcar" | "centroid" | "spline" => {
                 let _i: usize = it.next().unwrap().parse().unwrap();
                 let e: f64 = it.next().unwrap().parse().unwrap();
                 let m: f64 = it.next().unwrap().parse().unwrap();
@@ -75,9 +75,13 @@ fn rebin_matches_larch() {
     let r = load_ref();
     let e0 = r.scalars["e0"];
 
-    for (method_name, method) in [
-        ("boxcar", RebinMethod::Boxcar),
-        ("centroid", RebinMethod::Centroid),
+    // boxcar/centroid are bit-exact; the spline method routes through a Thomas
+    // solve in place of scipy's LAPACK solve_banded but, for these
+    // well-conditioned interpolation systems, still agrees to round-off.
+    for (method_name, method, mu_tol) in [
+        ("boxcar", RebinMethod::Boxcar, 1e-12_f64),
+        ("centroid", RebinMethod::Centroid, 1e-12_f64),
+        ("spline", RebinMethod::Spline, 1e-12_f64),
     ] {
         let mut p = RebinParams::new(e0);
         p.method = method;
@@ -91,6 +95,7 @@ fn rebin_matches_larch() {
         );
         assert_eq!(rb.energy.len(), want.len(), "{method_name} row count");
 
+        let mut worst = 0.0_f64;
         for (i, &(we, wm, wd)) in want.iter().enumerate() {
             assert!(
                 close(rb.energy[i], we, 1e-12),
@@ -98,16 +103,21 @@ fn rebin_matches_larch() {
                 rb.energy[i]
             );
             assert!(
-                close(rb.mu[i], wm, 1e-12),
+                close(rb.mu[i], wm, mu_tol),
                 "{method_name} mu[{i}] {} vs {wm}",
                 rb.mu[i]
             );
+            // delta_mu is the segment std (no spline) -> bit-exact for all methods
             assert!(
                 close(rb.delta_mu[i], wd, 1e-12),
                 "{method_name} delta_mu[{i}] {} vs {wd}",
                 rb.delta_mu[i]
             );
+            if !rb.mu[i].is_nan() {
+                worst = worst.max((rb.mu[i] - wm).abs());
+            }
         }
+        eprintln!("rebin {method_name} worst abs mu delta: {worst:.2e}");
     }
 }
 
