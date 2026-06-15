@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/feffdat"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.74"
+repository = "https://github.com/pls-controls/feffit-rs"
+
+[workspace.dependencies]
+num-complex = "0.4"
