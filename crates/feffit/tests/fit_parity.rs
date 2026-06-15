@@ -35,6 +35,9 @@ struct Ref {
     stats: HashMap<String, f64>,
     best: Vec<(String, f64, f64)>,    // (name, value, stderr)
     derived: Vec<(String, f64, f64)>, // (name, value, stderr)
+    /// `#bkg idx value stderr` — refined-background spline coefficients in index
+    /// order (their larch names carry an opaque hashkey, so compare by position).
+    bkg: Vec<(usize, f64, f64)>,
     // (dataset, path, name, value, stderr); stderr is NaN for constant specs
     path_params: Vec<(usize, usize, String, f64, f64)>,
     fitspace: String,
@@ -52,6 +55,7 @@ impl Ref {
         let mut stats = HashMap::new();
         let mut best = Vec::new();
         let mut derived = Vec::new();
+        let mut bkg: Vec<(usize, f64, f64)> = Vec::new();
         let mut path_params = Vec::new();
         let mut blocks: HashMap<String, Vec<f64>> = HashMap::new();
         let mut fitspace = String::new();
@@ -95,6 +99,12 @@ impl Ref {
                 let v: f64 = it.next().unwrap().parse().unwrap();
                 let s: f64 = it.next().unwrap().parse().unwrap();
                 derived.push((name, v, s));
+            } else if let Some(rest) = line.strip_prefix("#bkg ") {
+                let mut it = rest.split_whitespace();
+                let idx: usize = it.next().unwrap().parse().unwrap();
+                let v: f64 = it.next().unwrap().parse().unwrap();
+                let s: f64 = it.next().unwrap().parse().unwrap();
+                bkg.push((idx, v, s));
             } else if let Some(rest) = line.strip_prefix("#pathparam ") {
                 let mut it = rest.split_whitespace();
                 let di: usize = it.next().unwrap().parse().unwrap();
@@ -128,6 +138,7 @@ impl Ref {
             stats,
             best,
             derived,
+            bkg,
             path_params,
             fitspace,
             epsilon_k,
@@ -461,6 +472,121 @@ fn feffit_multidataset_matches_larch() {
         "second dataset's path parameters present"
     );
     assert_two_path_parity(&r, &res);
+}
+
+/// Background-refinement parity (`refine_bkg`): the same two-path Cu fit with a
+/// refined cubic B-spline background. larch adds `nspline` extra `bkg*` fit
+/// variables (here 12), mutates the transform (`rmin → rstep`) and `n_idp`
+/// (`1 + 2·rmax·(kmax−kmin)/π`), and subtracts the spline from χ(k) before the
+/// model. The data has no real background, so the refined coefficients sit near
+/// zero; the test verifies the whole machinery (knots, nspline, the modified
+/// counts, the extra variables) against larch.
+#[test]
+fn feffit_refine_bkg_matches_larch() {
+    let r = Ref::load_named("ref_feffit_bkg.txt");
+
+    let (p1, s1) = wired_path("feff0001.dat", "sig2_1");
+    let (p2, s2) = wired_path("feff0002.dat", "sig2_2");
+    let mut dataset = DataSet::new(
+        r.blocks["data_k"].clone(),
+        r.blocks["data_chi"].clone(),
+        vec![p1, p2],
+        r.transform(),
+    );
+    dataset.enable_refine_bkg();
+    let mut fds = vec![FitDataSet {
+        dataset,
+        specs: vec![s1, s2],
+        epsilon_k: Some(r.epsilon_k),
+    }];
+
+    let mut params = Parameters::new();
+    for (name, init) in &r.vars {
+        params.add_var(name, *init);
+    }
+    params.add_expr("alpha_x10", "alpha*10");
+
+    let res = feffit(&mut params, &mut fds).expect("feffit");
+
+    // structural counts: nspline extra vars, modified ndata/n_idp
+    let nspline = r.stats["nspline"] as usize;
+    assert_eq!(nspline, 12, "reference nspline");
+    assert_eq!(fds[0].dataset.bkg_nspline(), nspline, "rust nspline");
+    assert_eq!(
+        res.nvarys, r.stats["nvarys"] as usize,
+        "nvarys (5 + nspline)"
+    );
+    assert_eq!(res.nvarys, 5 + nspline, "nvarys = user vars + nspline");
+    assert_eq!(res.ndata, r.stats["ndata"] as usize, "ndata");
+    assert_eq!(res.nfev, r.stats["nfev"] as i32, "nfev");
+    assert!(rel(res.n_idp, r.stats["n_idp"]) < 1e-12, "n_idp");
+
+    // knot vector matches larch's splrep knots exactly
+    let knots = &r.blocks["knots"];
+    let got_knots = fds[0].dataset.bkg_knots();
+    assert_eq!(got_knots.len(), knots.len(), "knot count");
+    let kmaxd = got_knots
+        .iter()
+        .zip(knots)
+        .fold(0.0f64, |m, (g, w)| m.max((g - w).abs()));
+    assert_eq!(kmaxd, 0.0, "knots differ (max {kmaxd:.3e})");
+
+    // statistics
+    assert!(
+        rel(res.chi_square, r.stats["chi_square"]) < 1e-6,
+        "chi_square"
+    );
+    assert!(
+        rel(res.chi2_reduced, r.stats["chi2_reduced"]) < 1e-6,
+        "chi2_reduced"
+    );
+    assert!(rel(res.rfactor, r.stats["rfactor"]) < 1e-6, "rfactor");
+
+    // the five user variables: value + uncertainty
+    for (name, val, std) in &r.best {
+        let got = res.best.iter().find(|b| &b.name == name).unwrap();
+        println!(
+            "{name:8} value got={:.8e} want={:.8e} (rel {:.2e}) | stderr got={:.6e} want={:.6e} (rel {:.2e})",
+            got.value, val, rel(got.value, *val), got.stderr, std, rel(got.stderr, *std)
+        );
+        assert!(rel(got.value, *val) < 1e-6, "{name} value");
+        assert!(rel(got.stderr, *std) < 1e-4, "{name} stderr");
+    }
+
+    // derived parameter
+    for (name, val, std) in &r.derived {
+        let got = res.derived.iter().find(|b| &b.name == name).unwrap();
+        assert!(rel(got.value, *val) < 1e-6, "derived {name} value");
+        assert!(rel(got.stderr, *std) < 1e-4, "derived {name} stderr");
+    }
+
+    // background spline coefficients (compare by index; larch names carry an
+    // opaque hashkey). The values are ~1e-6, so use an absolute floor alongside
+    // the relative check.
+    assert_eq!(r.bkg.len(), nspline, "reference bkg count");
+    let mut got_bkg: Vec<&feffit::Best> = res
+        .best
+        .iter()
+        .filter(|b| b.name.starts_with("bkg"))
+        .collect();
+    got_bkg.sort_by_key(|b| b.name.clone());
+    assert_eq!(got_bkg.len(), nspline, "rust bkg count");
+    for ((idx, val, std), got) in r.bkg.iter().zip(&got_bkg) {
+        println!(
+            "bkg{idx:02} value got={:.6e} want={:.6e} | stderr got={:.6e} want={:.6e}",
+            got.value, val, got.stderr, std
+        );
+        assert!(
+            (got.value - val).abs() < 1e-9 || rel(got.value, *val) < 1e-5,
+            "bkg{idx} value got={} want={val}",
+            got.value
+        );
+        assert!(
+            (got.stderr - std).abs() < 1e-9 || rel(got.stderr, *std) < 1e-4,
+            "bkg{idx} stderr got={} want={std}",
+            got.stderr
+        );
+    }
 }
 
 /// Compare one output array against its reference block by peak-relative max

@@ -27,9 +27,13 @@
 //! model (and optionally each path) χ(k) into χ(R)/χ(q) output arrays (larch
 //! `save_outputs`/`_xafsft`).
 //!
-//! Not yet ported: background refinement (`refine_bkg`) and the GNXAS g(r)
-//! model.
+//! Background refinement ([`DataSet::enable_refine_bkg`]) fits a cubic B-spline
+//! background as extra variables (larch `refine_bkg`), with the FITPACK spline
+//! pieces in [`bkg`].
+//!
+//! Not yet ported: the GNXAS g(r) model.
 
+pub mod bkg;
 pub mod dataset;
 pub mod fit;
 pub mod outputs;

@@ -305,12 +305,19 @@ fn apply_params(
     params: &mut Parameters,
     datasets: &mut [FitDataSet],
     compiled: &[Vec<CompiledPathSpec>],
+    bkg_names: &[Vec<String>],
 ) -> Result<(), FitError> {
     params.update_constraints()?;
     let base = params.symbols();
-    for (fds, cds) in datasets.iter_mut().zip(compiled) {
+    for (di, (fds, cds)) in datasets.iter_mut().zip(compiled).enumerate() {
         for (path, cspec) in fds.dataset.paths.iter_mut().zip(cds) {
             path.params = cspec.eval(&base, &path.feffdat)?;
+        }
+        // feed the current background spline coefficients (the `bkg*` variables)
+        // into the dataset so its residual subtracts the refined background.
+        if !bkg_names[di].is_empty() {
+            let coefs: Vec<f64> = bkg_names[di].iter().map(|n| base[n]).collect();
+            fds.dataset.set_bkg_coefs(&coefs);
         }
     }
     Ok(())
@@ -344,6 +351,25 @@ pub fn feffit(
         compiled.push(cspecs);
     }
 
+    // refine_bkg: each background-refining dataset contributes `nspline` free
+    // variables (the spline coefficients), added after the user's variables so
+    // the variable order matches larch (user variables, then bkg coefficients).
+    // `bkg_names[di]` is empty for datasets that do not refine a background.
+    let mut bkg_names: Vec<Vec<String>> = Vec::with_capacity(datasets.len());
+    for (di, fds) in datasets.iter().enumerate() {
+        if fds.dataset.refine_bkg() {
+            let names: Vec<String> = (0..fds.dataset.bkg_nspline())
+                .map(|i| format!("bkg{i:02}_ds{di}"))
+                .collect();
+            for name in &names {
+                params.add_var(name, 0.0);
+            }
+            bkg_names.push(names);
+        } else {
+            bkg_names.push(Vec::new());
+        }
+    }
+
     let var_names = params.var_names();
     let nvarys = var_names.len();
 
@@ -356,7 +382,7 @@ pub fn feffit(
     // back to external values before evaluating, so lmdif stays a plain
     // unconstrained least-squares (matching lmfit/larch with bounds).
     let x0 = params.internal_x0();
-    apply_params(params, datasets, &compiled)?;
+    apply_params(params, datasets, &compiled, &bkg_names)?;
 
     let cfg = LmConfig {
         ftol: 1.0e-6,
@@ -373,9 +399,10 @@ pub fn feffit(
         let params = &mut *params;
         let datasets = &mut *datasets;
         let compiled = &compiled;
+        let bkg_names = &bkg_names;
         let fcn = |vars: &[f64]| -> Vec<f64> {
             params.set_var_internal(vars);
-            apply_params(params, datasets, compiled)
+            apply_params(params, datasets, compiled, bkg_names)
                 .expect("constraint/expression resolution failed mid-fit");
             let mut out = Vec::new();
             for fds in datasets.iter_mut() {
@@ -388,7 +415,7 @@ pub fn feffit(
 
     // pin params + paths at the best-fit point (result.x is internal; map back)
     params.set_var_internal(&result.x);
-    apply_params(params, datasets, &compiled)?;
+    apply_params(params, datasets, &compiled, &bkg_names)?;
 
     // ---- statistics (larch feffit(): rescaled to n_idp) ----
     let ndata = result.fvec.len();

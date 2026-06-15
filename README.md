@@ -39,6 +39,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 | Parameter bounds (min/max, lmfit Minuit internal↔external transform) | done | vs **larch** `feffit()` on the two-path Cu fit with `amp`/`sig2_1`/`sig2_2` bounded (interior solution): the fit runs on internal coords so `nfev` is exact (31), best-fit values match to lmdif ULP drift, and the gradient-scaled (`cov_ext = g⊗g·cov_int`) uncertainties match (≈ 1e-4 rel) |
 | Multi-dataset simultaneous fit (`feffit(&mut [FitDataSet])`: residual concatenated, `n_idp` summed, shared globals couple datasets) | done | vs **larch** `feffit(params, [ds0, ds1])` on a two-dataset Cu fit (one path each, shared `amp`/`del_e0`/`alpha`, per-dataset σ²): `ndata` = 208 = 2×104, `n_idp` ≈ 2×13.223, `nfev` exact (31); best-fit values/uncertainties match to lmdif ULP drift |
 | Fit output arrays (`DataSet::save_outputs`/`_xafsft`: data/model/per-path χ(R) + χ(q), `chir_re`/`im`/`mag`/`pha` + `chiq_*`) | done | vs **larch** `feffit(..., path_outputs=True)` on the two-path Cu fit: data χ(R)/χ(q) (fixed FFT of the data) to round-off (≈ 1e-15 rel), model + per-path arrays to ≈ 1e-12 |
+| Background refinement (`refine_bkg`: cubic B-spline background as extra `bkg*` fit variables) + FITPACK `splev`/knot vector | done | `splev` vs **scipy** `interpolate.splev` (≈ 1e-16, incl. extrapolation); end-to-end vs **larch** `feffit(refine_bkg=True)` on the two-path Cu fit (`nspline`=12): `nfev` exact (91), `nvarys`=17, `ndata`=192, knots bit-exact, the 12 `bkg*` coefficients + all values/uncertainties match to lmdif ULP drift |
 | `feff-sys` (FFI to FEFF) | not started | — |
 
 ## Layout
@@ -63,6 +64,7 @@ crates/feffit/         # path-sum fitting core
   src/dataset.rs       # FeffitDataSet: prepare_fit, residual, epsilon estimation
   src/fit.rs           # feffit(): params + path exprs + LM + statistics
   src/outputs.rs       # save_outputs/_xafsft: data/model/path chi(R) + chi(q)
+  src/bkg.rs           # refine_bkg cubic B-spline: FITPACK splev + knot vector
 crates/params/         # lmfit-style parameters with constraint expressions
   src/expr.rs          # asteval-subset parser/evaluator (+ AD, FuncCtx hook)
   src/parameters.rs    # Parameters: vary/fixed/expr, dependency-ordered resolve
@@ -76,6 +78,8 @@ scripts/ref_feffit_multikw.py # larch feffit reference for a kweight=[1,2,3] fit
 scripts/ref_feffit_bounds.py  # larch feffit reference for a bounded-variable fit
 scripts/ref_feffit_multidataset.py # larch feffit reference for a 2-dataset simultaneous fit
 scripts/ref_feffit_outputs.py # larch feffit save_outputs (chi(R)/chi(q)) reference
+scripts/ref_feffit_bkg.py     # larch feffit reference for a refine_bkg fit
+scripts/ref_splev.py          # scipy FITPACK splev reference for the bkg spline
 scripts/ref_feffit_sigma2.py  # larch feffit reference for a sigma2_eins fit
 scripts/ref_sigma2.py  # larch rmass / sigma2_eins / sigma2_debye reference
 scripts/gen_atomic_mass.py # emit crates/feffdat/src/mass.rs from xraydb

@@ -6,7 +6,7 @@ without re-deriving scope).
 
 ## Repo / push state
 
-- Branch `main` has **16 commits, none pushed** — there is **no git remote
+- Branch `main` has **17 commits, none pushed** — there is **no git remote
   configured** (`git remote -v` is empty). The push the user requested
   (`push 후 다음 계속`, choice: "Push main to origin") is **blocked on a remote
   URL**, which must be added by the user:
@@ -31,28 +31,11 @@ without re-deriving scope).
 | **Parameter bounds** (min/max, lmfit Minuit internal↔external transform) | vs larch `feffit()` with `amp`/`sig2_1`/`sig2_2` bounded (interior): `nfev` exact (31), values + grad-scaled stderr match |
 | **Multi-dataset simultaneous fit** (`feffit(&mut [FitDataSet])`) | vs larch `feffit(params, [ds0, ds1])`: 2 datasets, 1 path each, shared globals; `ndata`=208, `n_idp`≈2×13.223, `nfev` exact |
 | **Fit output arrays** (`save_outputs`/`_xafsft`: data/model/path χ(R)+χ(q)) | vs larch `feffit(..., path_outputs=True)`: data χ(R)/χ(q) to round-off (≈1e-15), model+path ≈1e-12 |
+| **Background refinement** (`refine_bkg`: cubic B-spline bkg as extra `bkg*` vars) + FITPACK `splev`/knots | `splev` vs scipy (≈1e-16); end-to-end vs larch `feffit(refine_bkg=True)` (nspline=12): `nfev` exact (91), knots bit-exact, 12 bkg coefs match |
 
 ## Candidate next milestones (not yet ported)
 
-Pick one — they are independent. Effort/value notes below.
-
-### 1. `refine_bkg` (background refinement)  — *large*
-
-larch refines a cubic B-spline background as extra fit variables
-(`feffit.py` `prepare_fit` lines ~421-435, residual lines ~526-535).
-
-- **What:** `nspline = 1 + round(2*rbkg*(kmax-kmin)/π)` knots over `[kmin,kmax]`;
-  create `bkg00..bkgNN` fit vars; residual subtracts
-  `_bkg = splev(model.k, [knots, coefs, order])`.
-- **Blocker:** needs a **FITPACK** cubic B-spline port — `splrep` (build the
-  knot vector + coefficients) and `splev` (de Boor evaluation) — for bit-parity.
-  This is a substantial, error-prone numeric port (comparable to the cubic-spline
-  interp already in `feffdat/src/interp.rs`, but a different B-spline representation).
-- **Also touches:** `feffit()`'s "unused variable" handling, dataset hashkeys,
-  and n_idp accounting (bkg vars are excluded from some bookkeeping).
-- **Effort:** large.
-
-### 2. GNXAS g(r) model  — *niche*
+### 1. GNXAS g(r) model  — *niche*
 
 A separate modeling paradigm: χ from an asymmetric radial distribution `g(r)`
 parametrised by `(N, R, σ, β)` rather than a FEFF path sum.
@@ -62,8 +45,11 @@ parametrised by `(N, R, σ, β)` rather than a FEFF path sum.
 - **Effort:** medium; mostly self-contained but a different code path, and used
   by fewer people than FEFF-path fitting.
 
-*(Multi-dataset simultaneous fitting and fit output arrays (`save_outputs`) are
-now done + larch-verified — see the table above.)*
+*(Multi-dataset simultaneous fitting, fit output arrays (`save_outputs`), and
+background refinement (`refine_bkg`) are now done + larch-verified — see the
+table above. The `refine_bkg` port reproduces the FITPACK knot vector in closed
+form (only the knots are needed; larch's coefficients are the fit variables) and
+ports `splev`, so no full `splrep`/FITPACK port was required.)*
 
 ## Blocked
 

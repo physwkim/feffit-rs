@@ -140,6 +140,26 @@ impl Transform {
         self.rstep
     }
 
+    /// Apply larch's `refine_bkg` transform adjustments (`prepare_fit`):
+    /// `rbkg = max(rbkg, rmin)`, then `rmin = rstep`, so the low-R region (where
+    /// the refined background lives) enters the R-space residual. The R-window
+    /// is rebuilt with the new `xmin = max(rbkg, rmin)`, matching larch building
+    /// `rwin` lazily *after* the mutation.
+    pub fn enable_refine_bkg(&mut self) {
+        self.rbkg = self.rbkg.max(self.rmin);
+        self.rmin = self.rstep;
+        let r_: Vec<f64> = (0..self.nfft).map(|i| self.rstep * i as f64).collect();
+        let xmin = self.rbkg.max(self.rmin);
+        self.rwin = ftwindow(
+            &r_,
+            Some(xmin),
+            Some(self.rmax),
+            self.dr,
+            self.dr2,
+            self.rwindow,
+        );
+    }
+
     /// The full FFT-grid k array (`kstep * arange(nfft)`).
     pub fn k_grid(&self) -> &[f64] {
         &self.k_

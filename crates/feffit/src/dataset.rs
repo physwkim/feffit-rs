@@ -11,6 +11,7 @@ use std::f64::consts::PI;
 
 use feffdat::{ff2chi, interp_linear, FeffPath, Interp, KGrid};
 
+use crate::bkg::{self, splev};
 use crate::outputs::{xafsft, DataSetOutput};
 use crate::transform::{FitSpace, Transform};
 
@@ -51,6 +52,16 @@ pub struct DataSet {
     epsilon_k: Vec<f64>,
     epsilon_r: Vec<f64>,
     prepared: bool,
+
+    /// Refine a cubic B-spline background as extra fit variables (larch
+    /// `refine_bkg`). When set, `prepare_fit` mutates the transform and builds
+    /// the knot vector below; the residual subtracts the spline.
+    refine_bkg: bool,
+    bkg_knots: Vec<f64>,
+    bkg_nspline: usize,
+    /// Current background spline coefficients (the `bkg00..bkgNN` fit variables);
+    /// set by the fit loop before each residual evaluation.
+    bkg_coefs: Vec<f64>,
 }
 
 impl DataSet {
@@ -73,7 +84,42 @@ impl DataSet {
             epsilon_k: Vec::new(),
             epsilon_r: Vec::new(),
             prepared: false,
+            refine_bkg: false,
+            bkg_knots: Vec::new(),
+            bkg_nspline: 0,
+            bkg_coefs: Vec::new(),
         }
+    }
+
+    /// Enable background refinement for this dataset (larch `refine_bkg=True`).
+    /// The knot vector and the transform/n_idp adjustments are applied in
+    /// [`DataSet::prepare_fit`]; the `bkg00..bkgNN` coefficients are supplied by
+    /// the fit loop via [`DataSet::set_bkg_coefs`].
+    pub fn enable_refine_bkg(&mut self) {
+        self.refine_bkg = true;
+    }
+
+    /// Whether background refinement is enabled.
+    pub fn refine_bkg(&self) -> bool {
+        self.refine_bkg
+    }
+
+    /// Number of background spline coefficients (`nspline`), valid after
+    /// [`DataSet::prepare_fit`]; `0` when background refinement is off.
+    pub fn bkg_nspline(&self) -> usize {
+        self.bkg_nspline
+    }
+
+    /// The background spline knot vector, valid after [`DataSet::prepare_fit`].
+    pub fn bkg_knots(&self) -> &[f64] {
+        &self.bkg_knots
+    }
+
+    /// Set the current background spline coefficients (the `bkg00..bkgNN` fit
+    /// variables) before a residual evaluation.
+    pub fn set_bkg_coefs(&mut self, coefs: &[f64]) {
+        self.bkg_coefs.clear();
+        self.bkg_coefs.extend_from_slice(coefs);
     }
 
     /// Number of independent points: `1 + 2*(rmax-rmin)*(kmax-kmin)/pi`.
@@ -131,6 +177,26 @@ impl DataSet {
                 self.estimate_noise(&chi, 15.0, 30.0);
             }
         }
+
+        // refine_bkg: mutate the transform (rbkg/rmin), overwrite n_idp with the
+        // background-refinement formula, and build the spline knot vector
+        // (larch `prepare_fit`). Done after epsilon (which is independent of
+        // rmin/rbkg), matching larch's ordering.
+        if self.refine_bkg {
+            self.transform.enable_refine_bkg();
+            let (rmax, kmin, kmax, rbkg) = (
+                self.transform.rmax,
+                self.transform.kmin,
+                self.transform.kmax,
+                self.transform.rbkg,
+            );
+            self.n_idp = 1.0 + 2.0 * rmax * (kmax - kmin) / PI;
+            let ns = bkg::nspline(rbkg, kmin, kmax);
+            self.bkg_knots = bkg::bkg_knots(kmin, kmax, ns);
+            self.bkg_nspline = ns;
+            self.bkg_coefs = vec![0.0; ns];
+        }
+
         self.prepared = true;
     }
 
@@ -247,8 +313,16 @@ impl DataSet {
         let grid = KGrid::Explicit(self.model_k.clone());
         let (_mk, model_chi) = ff2chi(&mut self.paths, &grid, self.interp);
 
-        // diff = data - bkg(0) - model  (no refine_bkg support here)
+        // diff = data - bkg - model. The refined background (a cubic B-spline on
+        // the model k-grid) is subtracted on both the data-only and full paths,
+        // matching larch (`diff = _chi - _bkg; if not data_only: diff -= model`).
         let mut diff: Vec<f64> = self.chi_interp.clone();
+        if self.refine_bkg {
+            let bkg = splev(&self.bkg_knots, &self.bkg_coefs, 3, &self.model_k);
+            for (d, b) in diff.iter_mut().zip(&bkg) {
+                *d -= *b;
+            }
+        }
         if !data_only {
             for (d, m) in diff.iter_mut().zip(&model_chi) {
                 *d -= *m;
