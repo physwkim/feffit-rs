@@ -22,6 +22,22 @@
 //! `libfeff8lpath`/`libpotph` shared libraries are an alternative, per-path FFI
 //! route not taken here.
 //!
+//! # Backends
+//!
+//! Two interchangeable backends produce the same `feffNNNN.dat` interface:
+//!
+//! - [`Feff8l`] — the FEFF8L subprocess pipeline described above; always
+//!   available, needs the external `feff8l_*` executables.
+//! - [`Feff10`] — the in-process FEFF10 pipeline from the `feff10` crate,
+//!   gated behind the **`feff10`** cargo feature, which is **on by default**.
+//!   It runs the FEFF10 Fortran in-process (one forked process per stage), so
+//!   it needs no external executables. Build with `--no-default-features` to
+//!   drop it and keep only [`Feff8l`].
+//!
+//! Pick one directly, or select at run time with [`Backend`] — whose
+//! [`Default`] is [`Backend::Feff10`] in the default build. Both return a
+//! [`RunOutput`] and write `feffNNNN.dat` into the working directory.
+//!
 //! # Locating the executables
 //!
 //! [`Feff8l`] resolves each `feff8l_*` in this order: an explicit directory from
@@ -59,9 +75,9 @@ pub struct Feff8l {
     bin_dir: Option<PathBuf>,
 }
 
-/// Result of a successful pipeline run.
+/// Result of a successful pipeline run, from either backend.
 #[derive(Debug, Clone)]
-pub struct Feff8lOutput {
+pub struct RunOutput {
     /// The directory the pipeline ran in (holds `feff.inp` and all outputs).
     pub workdir: PathBuf,
     /// `feffNNNN.dat` paths, sorted by file name.
@@ -86,6 +102,14 @@ pub enum FeffError {
     },
     /// The pipeline finished but produced no `feffNNNN.dat`.
     NoOutput(PathBuf),
+    /// A non-FEFF8L backend pipeline (e.g. FEFF10) failed.
+    #[cfg(feature = "feff10")]
+    Backend {
+        /// Backend name, e.g. `"feff10"`.
+        backend: &'static str,
+        /// The backend's own error message.
+        message: String,
+    },
     /// An I/O error while spawning a module or handling the working directory.
     Io {
         action: String,
@@ -114,6 +138,10 @@ impl fmt::Display for FeffError {
             }
             FeffError::NoOutput(p) => {
                 write!(f, "pipeline produced no feffNNNN.dat in {}", p.display())
+            }
+            #[cfg(feature = "feff10")]
+            FeffError::Backend { backend, message } => {
+                write!(f, "{backend} pipeline failed: {message}")
             }
             FeffError::Io { action, source } => write!(f, "{action}: {source}"),
         }
@@ -173,7 +201,7 @@ impl Feff8l {
 
     /// Run the full FEFF8L pipeline in `workdir`, which must already contain a
     /// `feff.inp`. Returns the generated `feffNNNN.dat` paths.
-    pub fn run_in(&self, workdir: &Path) -> Result<Feff8lOutput, FeffError> {
+    pub fn run_in(&self, workdir: &Path) -> Result<RunOutput, FeffError> {
         let inp = workdir.join("feff.inp");
         if !inp.is_file() {
             return Err(FeffError::NoFeffInp(inp));
@@ -195,23 +223,8 @@ impl Feff8l {
             }
         }
 
-        let mut dat_files: Vec<PathBuf> = std::fs::read_dir(workdir)
-            .map_err(|e| FeffError::Io {
-                action: format!("read_dir {}", workdir.display()),
-                source: e,
-            })?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| {
-                p.file_name()
-                    .and_then(OsStr::to_str)
-                    .is_some_and(is_feff_dat)
-            })
-            .collect();
-        dat_files.sort();
-        if dat_files.is_empty() {
-            return Err(FeffError::NoOutput(workdir.to_path_buf()));
-        }
-        Ok(Feff8lOutput {
+        let dat_files = collect_dat_files(workdir)?;
+        Ok(RunOutput {
             workdir: workdir.to_path_buf(),
             dat_files,
         })
@@ -219,7 +232,7 @@ impl Feff8l {
 
     /// Write `feff_inp` into `workdir/feff.inp` (creating `workdir` if needed),
     /// then run the pipeline there.
-    pub fn run(&self, feff_inp: &str, workdir: &Path) -> Result<Feff8lOutput, FeffError> {
+    pub fn run(&self, feff_inp: &str, workdir: &Path) -> Result<RunOutput, FeffError> {
         std::fs::create_dir_all(workdir).map_err(|e| FeffError::Io {
             action: format!("create {}", workdir.display()),
             source: e,
@@ -230,6 +243,113 @@ impl Feff8l {
         })?;
         self.run_in(workdir)
     }
+}
+
+/// An in-process FEFF10 runner backed by the `feff10` crate.
+///
+/// Available only with the **`feff10`** cargo feature. Unlike [`Feff8l`],
+/// FEFF10 needs no external executables: the `feff10` crate compiles the FEFF10
+/// Fortran into this binary and runs each stage in a forked child, writing the
+/// same `feffNNNN.dat` files into the working directory.
+#[cfg(feature = "feff10")]
+#[derive(Debug, Clone, Default)]
+pub struct Feff10 {
+    _priv: (),
+}
+
+#[cfg(feature = "feff10")]
+impl Feff10 {
+    /// A FEFF10 runner.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Run the full FEFF10 pipeline in `workdir`, which must already contain a
+    /// `feff.inp`. Returns the generated `feffNNNN.dat` paths.
+    pub fn run_in(&self, workdir: &Path) -> Result<RunOutput, FeffError> {
+        let inp = workdir.join("feff.inp");
+        if !inp.is_file() {
+            return Err(FeffError::NoFeffInp(inp));
+        }
+        let content = std::fs::read_to_string(&inp).map_err(|e| FeffError::Io {
+            action: format!("read {}", inp.display()),
+            source: e,
+        })?;
+        feff10::run_str(&content, workdir).map_err(|e| FeffError::Backend {
+            backend: "feff10",
+            message: e.to_string(),
+        })?;
+        let dat_files = collect_dat_files(workdir)?;
+        Ok(RunOutput {
+            workdir: workdir.to_path_buf(),
+            dat_files,
+        })
+    }
+
+    /// Write `feff_inp` into `workdir/feff.inp` (creating `workdir` if needed),
+    /// then run the pipeline there.
+    pub fn run(&self, feff_inp: &str, workdir: &Path) -> Result<RunOutput, FeffError> {
+        std::fs::create_dir_all(workdir).map_err(|e| FeffError::Io {
+            action: format!("create {}", workdir.display()),
+            source: e,
+        })?;
+        std::fs::write(workdir.join("feff.inp"), feff_inp).map_err(|e| FeffError::Io {
+            action: "write feff.inp".to_string(),
+            source: e,
+        })?;
+        self.run_in(workdir)
+    }
+}
+
+/// Which path-generator backend to drive.
+///
+/// A runtime selector over the available backends. [`Backend::Feff10`] exists
+/// only with the `feff10` cargo feature (on by default). [`Default`] is
+/// [`Backend::Feff10`] in the default build, falling back to [`Backend::Feff8l`]
+/// when the feature is disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Backend {
+    /// The external FEFF8L subprocess pipeline ([`Feff8l`]). Always available;
+    /// resolves executables from [`BIN_DIR_ENV`] then `PATH`.
+    #[cfg_attr(not(feature = "feff10"), default)]
+    Feff8l,
+    /// The in-process FEFF10 pipeline ([`Feff10`]); the default backend.
+    #[cfg(feature = "feff10")]
+    #[default]
+    Feff10,
+}
+
+impl Backend {
+    /// Write `feff_inp` into `workdir/feff.inp` and run it with this backend,
+    /// using each backend's default configuration.
+    pub fn run(self, feff_inp: &str, workdir: &Path) -> Result<RunOutput, FeffError> {
+        match self {
+            Backend::Feff8l => Feff8l::new().run(feff_inp, workdir),
+            #[cfg(feature = "feff10")]
+            Backend::Feff10 => Feff10::new().run(feff_inp, workdir),
+        }
+    }
+}
+
+/// Collect and sort the `feffNNNN.dat` files a pipeline left in `workdir`.
+fn collect_dat_files(workdir: &Path) -> Result<Vec<PathBuf>, FeffError> {
+    let mut dat_files: Vec<PathBuf> = std::fs::read_dir(workdir)
+        .map_err(|e| FeffError::Io {
+            action: format!("read_dir {}", workdir.display()),
+            source: e,
+        })?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(is_feff_dat)
+        })
+        .collect();
+    dat_files.sort();
+    if dat_files.is_empty() {
+        return Err(FeffError::NoOutput(workdir.to_path_buf()));
+    }
+    Ok(dat_files)
 }
 
 /// Does `name` match `feffNNNN.dat` with one or more digits?

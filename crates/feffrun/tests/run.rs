@@ -95,3 +95,64 @@ fn feff8l_pipeline_generates_and_parses_cu_paths() {
 
     std::fs::remove_dir_all(&workdir).ok();
 }
+
+/// The same Cu pipeline driven through the in-process FEFF10 backend, selected
+/// via [`feffrun::Backend::Feff10`]. Only built with the `feff10` feature; it
+/// needs no external executables (FEFF10 Fortran is compiled into the binary).
+#[cfg(feature = "feff10")]
+#[test]
+fn feff10_pipeline_generates_and_parses_cu_paths() {
+    let workdir = std::env::temp_dir().join(format!("feffrun-it-feff10-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&workdir);
+
+    let out = feffrun::Backend::Feff10
+        .run(CU_FEFF_INP, &workdir)
+        .expect("FEFF10 pipeline failed");
+
+    // Copper fcc generates many paths within RPATH = 5.2 Å.
+    assert!(
+        out.dat_files.len() >= 10,
+        "expected many feffNNNN.dat, got {}",
+        out.dat_files.len()
+    );
+
+    let first = workdir.join("feff0001.dat");
+    assert!(first.is_file(), "feff0001.dat was not generated");
+    assert_eq!(
+        out.dat_files[0], first,
+        "first dat file should be feff0001.dat"
+    );
+
+    // Parse it with the ported feffdat reader and check the first-shell path.
+    let dat = feffdat::FeffDatFile::from_path(&first).expect("parse feff0001.dat");
+    assert_eq!(
+        dat.nleg, 2,
+        "first path is a single-scattering (2-leg) path"
+    );
+    assert!(
+        (dat.reff - 2.5527).abs() < 2e-3,
+        "Cu first-shell reff ≈ 2.5527 Å, got {}",
+        dat.reff
+    );
+    assert!(
+        (dat.degen - 12.0).abs() < 1e-9,
+        "Cu fcc first shell has 12 neighbours, got {}",
+        dat.degen
+    );
+    // k grid is populated and the amplitude is non-trivial.
+    assert!(!dat.k.is_empty(), "empty k grid");
+    assert!(
+        dat.amp.iter().any(|&a| a > 0.0),
+        "first-shell amplitude is all zero"
+    );
+
+    eprintln!(
+        "RAN feff10 pipeline: {} feffNNNN.dat, feff0001 reff={:.4} nleg={} degen={}",
+        out.dat_files.len(),
+        dat.reff,
+        dat.nleg,
+        dat.degen
+    );
+
+    std::fs::remove_dir_all(&workdir).ok();
+}
