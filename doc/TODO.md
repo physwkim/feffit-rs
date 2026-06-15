@@ -8,9 +8,9 @@ without re-deriving scope).
 
 - Branch `main` tracks `origin/main` (remote `origin` =
   `https://github.com/physwkim/feffit-rs.git`, added 2026-06-15). The first 17
-  commits are pushed; later commits (push-state doc, `feffrun`) are **ahead of
-  origin and unpushed** — pushing requires explicit user confirmation per the
-  global rules (`git push` only when asked).
+  commits are pushed; the next 3 (push-state doc, `feffrun`, `gnxas`/gamma) are
+  **ahead of origin and unpushed** — pushing requires explicit user confirmation
+  per the global rules (`git push` only when asked).
 
 ## Done + larch-verified (see README status table)
 
@@ -29,32 +29,21 @@ without re-deriving scope).
 | **Fit output arrays** (`save_outputs`/`_xafsft`: data/model/path χ(R)+χ(q)) | vs larch `feffit(..., path_outputs=True)`: data χ(R)/χ(q) to round-off (≈1e-15), model+path ≈1e-12 |
 | **Background refinement** (`refine_bkg`: cubic B-spline bkg as extra `bkg*` vars) + FITPACK `splev`/knots | `splev` vs scipy (≈1e-16); end-to-end vs larch `feffit(refine_bkg=True)` (nspline=12): `nfev` exact (91), knots bit-exact, 12 bkg coefs match |
 | **FEFF path generation** (`feffrun`: subprocess driver for the FEFF8L `feff8l_*` pipeline) | full pipeline on a Cu `feff.inp` → 14 `feffNNNN.dat` parsed by `feffdat` (1st shell reff=2.5527, nleg=2, degen=12); FEFF8L built native arm64 from `feff85exafs` |
+| **GNXAS `gnxas` path-amplitude helper** (`feffdat::gnxas`, wired into feffit path expressions; needs `feffdat::gamma`, a Cephes `Gamma` port) | gamma vs `scipy.special.gamma` and gnxas vs larch's module-level `gnxas` both **bit-exact** (max rel err 0e0). Upstream asteval-injected `gnxas` is broken (`NameError` on an undefined `reff`), so parity is against the numerically-identical module-level `gnxas` |
 
 ## Candidate next milestones (not yet ported)
 
-### 1. GNXAS `gnxas` path-expression helper  — *niche, broken upstream*
+*(Multi-dataset simultaneous fitting, fit output arrays (`save_outputs`),
+background refinement (`refine_bkg`), and the GNXAS `gnxas` path helper are now
+done + larch-verified — see the table above. The `refine_bkg` port reproduces
+the FITPACK knot vector in closed form (only the knots are needed; larch's
+coefficients are the fit variables) and ports `splev`, so no full
+`splrep`/FITPACK port was required.)*
 
-`gnxas(r0, sigma, beta)` is a path-expression amplitude helper (registered in
-asteval like `sigma2_eins`), not a separate solver. For a path of radius `reff`:
-`q = 4/β²`; `alpha = q + 2·(reff−r0)/(β·σ)`; `out = max(0, 2·e^(−alpha)·alpha^(q−1)/(σ·|β|·Γ(q)))`.
-Needs the gamma function `Γ(q)` (Cephes port for bit-exactness, or Lanczos).
-
-- **Upstream is broken** in this larch: the asteval-injected `gnxas`
-  (`sigma2_models.py` `_sigma2_funcs` string, ~line 379) has a debug
-  `print('> ', reff, …)` referencing an undefined `reff` → `NameError`, so a
-  feffit path expression using `gnxas(...)` evaluates to `None`. Confirmed:
-  removing that one debug line makes it run and its value is **bit-identical**
-  to the working module-level `gnxas(r0,sigma,beta,path)` (line 19). So there is
-  **no stock-larch end-to-end feffit reference**; parity must be against the
-  module-level `gnxas` (the documented-correct formula), with the upstream
-  defect noted.
-- **Effort:** small (one path helper + a gamma function), but niche.
-
-*(Multi-dataset simultaneous fitting, fit output arrays (`save_outputs`), and
-background refinement (`refine_bkg`) are now done + larch-verified — see the
-table above. The `refine_bkg` port reproduces the FITPACK knot vector in closed
-form (only the knots are needed; larch's coefficients are the fit variables) and
-ports `splev`, so no full `splrep`/FITPACK port was required.)*
+No further larch feffit/feffdat features are currently queued. Remaining
+candidate work is integration polish (an end-to-end `feffrun` → `feffit`
+capstone test that generates `feffNNNN.dat` and fits them in one flow) rather
+than new ports.
 
 ## Resolved blockers
 
