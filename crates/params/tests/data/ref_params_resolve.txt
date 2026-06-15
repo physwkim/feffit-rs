@@ -1,0 +1,19 @@
+#const reff 2.5478
+#var amp 2.0
+#var alpha 0.002
+#varb s02 0.9 0.0 1.2
+#varb tight 1.5 0.0 1.2
+#fix e0 1.5
+#expr delr alpha*reff
+#expr sig 0.003 + amp*1e-4
+#expr chained delr*2 + sqrt(s02)
+#expr combo e0 + max(amp, s02) - min(alpha, 0.001)
+#expect amp 2.0
+#expect alpha 0.002
+#expect s02 0.9
+#expect tight 1.2
+#expect e0 1.5
+#expect delr 0.0050956000000000005
+#expect sig 0.0032
+#expect chained 0.9588744980505137
+#expect combo 3.499

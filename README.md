@@ -29,7 +29,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 | Cubic-spline interp (larch default, `interp='cubic'`) | done | vs scipy `UnivariateSpline(s=0)` reference (max\|Δχ\| ≈ 5e-14, incl. extrapolation) |
 | `xafsft` (Fourier transforms: `xftf`/`xftr`/windows) | done | vs scipy.fftpack + scipy.special references (kwin ≈ 2e-16, χ(R) ≈ 3e-14, FFT round-off) |
 | `feffit` residual core (`Transform`, `DataSet._residual` in k/R/q) | done | vs **larch** `FeffitDataSet._residual` (model χ ≈ 7e-16, residual ≈ 1e-13–3e-11) |
-| `feffit` parameters + constraint expressions | not started | — |
+| `params` (lmfit-style parameters + constraint expressions) | done | vs **asteval** (expr eval, bit-exact) and **lmfit** `update_constraints` (max\|Δ\| < 1e-12) |
 | `feffit` Levenberg-Marquardt minimiser + statistics | not started | — |
 | `feff-sys` (FFI to FEFF) | not started | — |
 
@@ -50,6 +50,9 @@ crates/xafsft/         # XAFS Fourier transforms (xftf/xftr) + FT windows
 crates/feffit/         # path-sum fitting core
   src/transform.rs     # TransformGroup: k/R windows, fftf/fftr
   src/dataset.rs       # FeffitDataSet: prepare_fit, residual, epsilon estimation
+crates/params/         # lmfit-style parameters with constraint expressions
+  src/expr.rs          # asteval-subset expression parser/evaluator
+  src/parameters.rs    # Parameters: vary/fixed/expr, dependency-ordered resolve
 scripts/ref_chi.py     # numpy-only reference generator (also emits cubic when scipy present)
 scripts/ref_xftf.py    # scipy.fftpack/scipy.special reference for xafsft
 scripts/ref_feffit.py  # larch.xafs.feffit reference for feffit (needs xraylarch)

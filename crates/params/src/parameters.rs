@@ -1,0 +1,250 @@
+//! An `lmfit.Parameters`-style collection: named parameters that are either a
+//! free variable (`vary`), a fixed value, or a constraint expression evaluated
+//! against the other parameters. Mirrors how `lmfit` resolves constraints with
+//! `asteval`, including dependency ordering so chained expressions
+//! (`b = a*2`, `c = b+1`) evaluate correctly.
+
+use std::collections::HashMap;
+
+use crate::expr::{parse, Expr, ExprError};
+
+/// A single parameter.
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    /// Current value (updated by [`Parameters::update_constraints`] for exprs).
+    pub value: f64,
+    /// Free fit variable when `true` and `expr` is `None`.
+    pub vary: bool,
+    pub min: f64,
+    pub max: f64,
+    /// Constraint expression; when set, `value` is derived, not fit.
+    pub expr: Option<String>,
+}
+
+impl Param {
+    fn var(name: &str, value: f64) -> Param {
+        Param {
+            name: name.to_string(),
+            value,
+            vary: true,
+            min: f64::NEG_INFINITY,
+            max: f64::INFINITY,
+            expr: None,
+        }
+    }
+}
+
+/// Errors specific to resolving a [`Parameters`] set.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParamError {
+    /// A constraint expression failed to parse or evaluate.
+    Expr(String, ExprError),
+    /// The constraint dependency graph contains a cycle.
+    Cycle(Vec<String>),
+}
+
+impl std::fmt::Display for ParamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParamError::Expr(n, e) => write!(f, "parameter '{n}': {e}"),
+            ParamError::Cycle(ns) => write!(f, "constraint cycle among: {}", ns.join(", ")),
+        }
+    }
+}
+
+impl std::error::Error for ParamError {}
+
+/// An ordered collection of parameters plus injected constants (e.g. `reff`,
+/// `pi`). Insertion order is preserved, matching lmfit's `Parameters`.
+#[derive(Debug, Clone, Default)]
+pub struct Parameters {
+    order: Vec<String>,
+    map: HashMap<String, Param>,
+    /// Extra symbols available to expressions but not themselves parameters
+    /// (the asteval symbol-table injections, e.g. per-path `reff`).
+    consts: HashMap<String, f64>,
+}
+
+impl Parameters {
+    /// An empty set.
+    pub fn new() -> Self {
+        Parameters::default()
+    }
+
+    /// Add (or replace) a free variable.
+    pub fn add_var(&mut self, name: &str, value: f64) {
+        self.insert(Param::var(name, value));
+    }
+
+    /// Add (or replace) a free variable with bounds.
+    pub fn add_var_bounded(&mut self, name: &str, value: f64, min: f64, max: f64) {
+        let mut p = Param::var(name, value);
+        p.min = min;
+        p.max = max;
+        self.insert(p);
+    }
+
+    /// Add (or replace) a fixed parameter (`vary = false`, no expression).
+    pub fn add_fixed(&mut self, name: &str, value: f64) {
+        let mut p = Param::var(name, value);
+        p.vary = false;
+        self.insert(p);
+    }
+
+    /// Add (or replace) a constraint parameter with an expression.
+    pub fn add_expr(&mut self, name: &str, expr: &str) {
+        let mut p = Param::var(name, f64::NAN);
+        p.vary = false;
+        p.expr = Some(expr.to_string());
+        self.insert(p);
+    }
+
+    /// Inject a constant symbol available to expressions (not a parameter).
+    pub fn set_const(&mut self, name: &str, value: f64) {
+        self.consts.insert(name.to_string(), value);
+    }
+
+    fn insert(&mut self, p: Param) {
+        if !self.map.contains_key(&p.name) {
+            self.order.push(p.name.clone());
+        }
+        self.map.insert(p.name.clone(), p);
+    }
+
+    /// Number of free (varying, non-expression) parameters.
+    pub fn n_vary(&self) -> usize {
+        self.order
+            .iter()
+            .filter(|n| {
+                let p = &self.map[*n];
+                p.vary && p.expr.is_none()
+            })
+            .count()
+    }
+
+    /// Names of the free variables, in insertion order.
+    pub fn var_names(&self) -> Vec<String> {
+        self.order
+            .iter()
+            .filter(|n| {
+                let p = &self.map[*n];
+                p.vary && p.expr.is_none()
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Current value of a parameter.
+    pub fn value(&self, name: &str) -> Option<f64> {
+        self.map.get(name).map(|p| p.value)
+    }
+
+    /// Immutable access to a parameter.
+    pub fn get(&self, name: &str) -> Option<&Param> {
+        self.map.get(name)
+    }
+
+    /// Set the values of the free variables (in `var_names` order). Used by the
+    /// minimiser to push a trial point before re-resolving constraints.
+    pub fn set_var_values(&mut self, vals: &[f64]) {
+        let names = self.var_names();
+        for (n, &v) in names.iter().zip(vals) {
+            if let Some(p) = self.map.get_mut(n) {
+                p.value = v.clamp(p.min, p.max);
+            }
+        }
+    }
+
+    /// Resolve all constraint expressions in dependency order, writing each
+    /// expression parameter's `value`. Free/fixed parameters are clamped to
+    /// their bounds (matching lmfit applying bounds to varying parameters).
+    pub fn update_constraints(&mut self) -> Result<(), ParamError> {
+        // clamp free vars to bounds first (expr params ignore bounds, like lmfit)
+        for n in self.order.clone() {
+            let p = self.map.get_mut(&n).unwrap();
+            if p.expr.is_none() && p.vary {
+                p.value = p.value.clamp(p.min, p.max);
+            }
+        }
+
+        // parse expressions and build the dependency edges among parameters
+        let mut asts: HashMap<String, Expr> = HashMap::new();
+        for n in &self.order {
+            if let Some(src) = self.map[n].expr.clone() {
+                let ast = parse(&src).map_err(|e| ParamError::Expr(n.clone(), e))?;
+                asts.insert(n.clone(), ast);
+            }
+        }
+
+        let order = self.topo_order(&asts)?;
+
+        // build the symbol table: all non-expr params + consts, then fill exprs
+        let mut sym: HashMap<String, f64> = self.consts.clone();
+        for n in &self.order {
+            let p = &self.map[n];
+            if p.expr.is_none() {
+                sym.insert(n.clone(), p.value);
+            }
+        }
+        for n in &order {
+            let val = asts[n]
+                .eval(&sym)
+                .map_err(|e| ParamError::Expr(n.clone(), e))?;
+            sym.insert(n.clone(), val);
+            self.map.get_mut(n).unwrap().value = val;
+        }
+        Ok(())
+    }
+
+    /// Topologically order the expression parameters so each is evaluated after
+    /// every expression parameter it depends on. Non-expression dependencies are
+    /// already-known leaves. Returns `Cycle` if no valid order exists.
+    fn topo_order(&self, asts: &HashMap<String, Expr>) -> Result<Vec<String>, ParamError> {
+        // edges: expr param -> the expr params it references
+        let mut deps: HashMap<String, Vec<String>> = HashMap::new();
+        for (n, ast) in asts {
+            let mut vars = Vec::new();
+            ast.vars(&mut vars);
+            let edges: Vec<String> = vars
+                .into_iter()
+                .filter(|v| asts.contains_key(v)) // only expr-param deps matter for ordering
+                .collect();
+            deps.insert(n.clone(), edges);
+        }
+
+        // deterministic Kahn-style: process in insertion order when ties
+        let expr_order: Vec<String> = self
+            .order
+            .iter()
+            .filter(|n| asts.contains_key(*n))
+            .cloned()
+            .collect();
+
+        let mut resolved: Vec<String> = Vec::new();
+        let mut done: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // iterate until all resolved or no progress (cycle)
+        while resolved.len() < expr_order.len() {
+            let mut progressed = false;
+            for n in &expr_order {
+                if done.contains(n) {
+                    continue;
+                }
+                if deps[n].iter().all(|d| done.contains(d)) {
+                    resolved.push(n.clone());
+                    done.insert(n.clone());
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                let unresolved: Vec<String> = expr_order
+                    .iter()
+                    .filter(|n| !done.contains(*n))
+                    .cloned()
+                    .collect();
+                return Err(ParamError::Cycle(unresolved));
+            }
+        }
+        Ok(resolved)
+    }
+}
