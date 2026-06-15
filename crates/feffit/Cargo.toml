@@ -13,3 +13,9 @@ feffdat = { path = "../feffdat" }
 xafsft = { path = "../xafsft" }
 params = { path = "../params" }
 lm = { path = "../lm" }
+
+[dev-dependencies]
+# End-to-end capstone test only: drive FEFF8L (subprocess) to generate the
+# feffNNNN.dat that the fit consumes. feffrun does not depend on feffit, so this
+# is acyclic.
+feffrun = { path = "../feffrun" }
