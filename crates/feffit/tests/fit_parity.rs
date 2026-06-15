@@ -28,6 +28,8 @@ struct Ref {
     /// only carries a scalar `#transform kweight N` (single-k-weight fit).
     kweights: Vec<i32>,
     vars: Vec<(String, f64)>, // (name, init) in declaration order
+    /// `#bound name min max` lines: variables that carry min/max bounds.
+    bounds: HashMap<String, (f64, f64)>,
     stats: HashMap<String, f64>,
     best: Vec<(String, f64, f64)>,    // (name, value, stderr)
     derived: Vec<(String, f64, f64)>, // (name, value, stderr)
@@ -44,6 +46,7 @@ impl Ref {
         let mut transform = HashMap::new();
         let mut kweights: Vec<i32> = Vec::new();
         let mut vars = Vec::new();
+        let mut bounds: HashMap<String, (f64, f64)> = HashMap::new();
         let mut stats = HashMap::new();
         let mut best = Vec::new();
         let mut derived = Vec::new();
@@ -72,6 +75,12 @@ impl Ref {
                 let mut it = rest.split_whitespace();
                 let name = it.next().unwrap().to_string();
                 vars.push((name, it.next().unwrap().parse().unwrap()));
+            } else if let Some(rest) = line.strip_prefix("#bound ") {
+                let mut it = rest.split_whitespace();
+                let name = it.next().unwrap().to_string();
+                let lo: f64 = it.next().unwrap().parse().unwrap();
+                let hi: f64 = it.next().unwrap().parse().unwrap();
+                bounds.insert(name, (lo, hi));
             } else if let Some(rest) = line.strip_prefix("#best ") {
                 let mut it = rest.split_whitespace();
                 let name = it.next().unwrap().to_string();
@@ -113,6 +122,7 @@ impl Ref {
             transform,
             kweights,
             vars,
+            bounds,
             stats,
             best,
             derived,
@@ -342,6 +352,54 @@ fn feffit_multikw_matches_larch() {
     assert_eq!(res.ndata, r.stats["ndata"] as usize, "ndata (3 k-weights)");
     assert_eq!(res.ndata % 3, 0, "ndata divisible by the 3 k-weights");
     assert_two_path_parity(&r, &res);
+}
+
+/// Same two-path Cu fit, but three of the five variables (`amp`, `sig2_1`,
+/// `sig2_2`) carry min/max bounds while `del_e0`/`alpha` stay unbounded. lmfit
+/// optimises in internal (unbounded) coordinates and maps back through the
+/// Minuit transform; the Rust port does the same, so the whole trajectory
+/// (hence `nfev`) and the gradient-scaled uncertainties must match larch. The
+/// bounds are inactive (interior solution), isolating the bound machinery.
+#[test]
+fn feffit_bounds_matches_larch() {
+    let r = Ref::load_named("ref_feffit_bounds.txt");
+
+    let (p1, s1) = wired_path("feff0001.dat", "sig2_1");
+    let (p2, s2) = wired_path("feff0002.dat", "sig2_2");
+    let dataset = DataSet::new(
+        r.blocks["data_k"].clone(),
+        r.blocks["data_chi"].clone(),
+        vec![p1, p2],
+        r.transform(),
+    );
+    let mut fds = vec![FitDataSet {
+        dataset,
+        specs: vec![s1, s2],
+        epsilon_k: Some(r.epsilon_k),
+    }];
+
+    let mut params = Parameters::new();
+    for (name, init) in &r.vars {
+        match r.bounds.get(name) {
+            Some(&(lo, hi)) => params.add_var_bounded(name, *init, lo, hi),
+            None => params.add_var(name, *init),
+        }
+    }
+    params.add_expr("alpha_x10", "alpha*10");
+
+    let res = feffit(&mut params, &mut fds).expect("feffit");
+
+    assert_two_path_parity(&r, &res);
+
+    // every bounded best-fit value must lie within its bounds
+    for (name, &(lo, hi)) in &r.bounds {
+        let b = res.best.iter().find(|b| &b.name == name).unwrap();
+        assert!(
+            b.value >= lo && b.value <= hi,
+            "bounded var {name} = {} outside [{lo}, {hi}]",
+            b.value
+        );
+    }
 }
 
 /// End-to-end fit whose σ² is `sigma2_eins(temp, theta)` — verifies the

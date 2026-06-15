@@ -6,7 +6,7 @@ without re-deriving scope).
 
 ## Repo / push state
 
-- Branch `main` has **10 commits, none pushed** — there is **no git remote
+- Branch `main` has **14 commits, none pushed** — there is **no git remote
   configured** (`git remote -v` is empty). The push the user requested
   (`push 후 다음 계속`, choice: "Push main to origin") is **blocked on a remote
   URL**, which must be added by the user:
@@ -28,35 +28,13 @@ without re-deriving scope).
 | `feffit` end-to-end fit + statistics + uncertainty propagation | vs larch `feffit()` on a 2-path Cu fit |
 | Debye-Waller σ² models (`sigma2_eins`, `sigma2_debye`) + `rmass`/atomic masses | vs larch (eins) and its pure-Python `sigms.f` port (debye) |
 | **List-valued k-weights** (`kweight=[1,2,3]`) | vs larch `feffit()` (ndata 3×, n_idp unchanged) |
+| **Parameter bounds** (min/max, lmfit Minuit internal↔external transform) | vs larch `feffit()` with `amp`/`sig2_1`/`sig2_2` bounded (interior): `nfev` exact (31), values + grad-scaled stderr match |
 
 ## Candidate next milestones (not yet ported)
 
 Pick one — they are independent. Effort/value notes below.
 
-### 1. Parameter bounds (min/max)  — *recommended, highest value*
-
-Real fits bound variables (e.g. `s02 ∈ [0,1]`, `sigma2 ≥ 0`). The port
-currently only supports **unbounded** variables (the references use unbounded
-vars so lmfit's internal↔external transform is the identity and the fit reduces
-to a plain `leastsq`).
-
-- **What:** port lmfit's bounded-parameter transform. lmfit maps a bounded
-  external value to an unbounded internal coordinate and minimises over the
-  internal coords; at the solution the covariance is scaled by
-  `d(external)/d(internal)`.
-  - lmfit two-sided (min and max finite): `ext = min + (max-min)*(sin(int)+1)/2`.
-  - one-sided (`min` only): `ext = min - 1 + sqrt(int² + 1)`; (`max` only):
-    `ext = max + 1 - sqrt(int² + 1)`.
-- **Where:** `crates/params` (add bounds to a variable), `crates/lm` (the fit
-  runs on internal coords; `feffit` seeds `x0` as internal, maps back to
-  external before evaluating constraints), `crates/feffit/src/fit.rs`
-  (covariance/stderr rescaling by the transform Jacobian at the solution).
-- **Verify:** a bounded fit vs lmfit/larch (`Parameters.add(..., min=, max=)`),
-  best-fit values + stderr.
-- **Effort:** medium; self-contained in params + lm + fit. No new numerics
-  (just the algebraic transform + its derivative).
-
-### 2. `refine_bkg` (background refinement)  — *large*
+### 1. `refine_bkg` (background refinement)  — *large*
 
 larch refines a cubic B-spline background as extra fit variables
 (`feffit.py` `prepare_fit` lines ~421-435, residual lines ~526-535).
@@ -72,7 +50,7 @@ larch refines a cubic B-spline background as extra fit variables
   and n_idp accounting (bkg vars are excluded from some bookkeeping).
 - **Effort:** large.
 
-### 3. GNXAS g(r) model  — *niche*
+### 2. GNXAS g(r) model  — *niche*
 
 A separate modeling paradigm: χ from an asymmetric radial distribution `g(r)`
 parametrised by `(N, R, σ, β)` rather than a FEFF path sum.
@@ -82,7 +60,7 @@ parametrised by `(N, R, σ, β)` rather than a FEFF path sum.
 - **Effort:** medium; mostly self-contained but a different code path, and used
   by fewer people than FEFF-path fitting.
 
-### 4. Fit outputs + multi-dataset verification  — *smaller completion*
+### 3. Fit outputs + multi-dataset verification  — *smaller completion*
 
 - **`save_outputs`:** forward-FT the fitted model and data into
   `chir`/`chir_mag`/`chir_re`/`chir_im` (and `chiq*`) arrays for plotting/use of

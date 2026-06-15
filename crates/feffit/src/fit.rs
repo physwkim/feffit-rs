@@ -350,7 +350,12 @@ pub fn feffit(
     // validate constraints/expressions once at the start point (so the inner
     // residual loop can treat resolution as infallible)
     params.update_constraints()?;
-    let x0: Vec<f64> = var_names.iter().map(|n| params.value(n).unwrap()).collect();
+    // The minimiser optimises in internal (unbounded) coordinates; for an
+    // unbounded variable this equals its value, for a bounded one it is the
+    // Minuit-style transform (lmfit `setup_bounds`). The residual closure maps
+    // back to external values before evaluating, so lmdif stays a plain
+    // unconstrained least-squares (matching lmfit/larch with bounds).
+    let x0 = params.internal_x0();
     apply_params(params, datasets, &compiled)?;
 
     let cfg = LmConfig {
@@ -369,7 +374,7 @@ pub fn feffit(
         let datasets = &mut *datasets;
         let compiled = &compiled;
         let fcn = |vars: &[f64]| -> Vec<f64> {
-            params.set_var_values(vars);
+            params.set_var_internal(vars);
             apply_params(params, datasets, compiled)
                 .expect("constraint/expression resolution failed mid-fit");
             let mut out = Vec::new();
@@ -381,8 +386,8 @@ pub fn feffit(
         lmdif(fcn, &x0, &cfg)
     };
 
-    // pin params + paths at the best-fit point
-    params.set_var_values(&result.x);
+    // pin params + paths at the best-fit point (result.x is internal; map back)
+    params.set_var_internal(&result.x);
     apply_params(params, datasets, &compiled)?;
 
     // ---- statistics (larch feffit(): rescaled to n_idp) ----
@@ -411,8 +416,18 @@ pub fn feffit(
     // redchi * nfree / (n_idp - nvarys) = chisqr / (n_idp - nvarys), since
     // larch runs lmfit with scale_covar=False then rescales to n_idp.
     let err_scale = chisqr / (n_idp - nvarys as f64);
-    let cov_unscaled = result.covar();
-    let covar: Option<Vec<Vec<f64>>> = cov_unscaled.as_ref().map(|c| {
+    // lmdif optimises in internal (unbounded) coordinates, so its covariance is
+    // in internal space. Transform it to external (bounded) space by the MINUIT
+    // gradient scaling `cov_ext[i][j] = cov_int[i][j] * g[i] * g[j]` (lmfit
+    // `_int2ext_cov_x`) before the n_idp rescale. For unbounded variables every
+    // `g` is 1, so this is the identity and the unbounded fit is unchanged.
+    let grad = params.var_scale_gradients(&result.x);
+    let cov_ext: Option<Vec<Vec<f64>>> = result.covar().as_ref().map(|c| {
+        (0..nvarys)
+            .map(|i| (0..nvarys).map(|j| c[i][j] * grad[i] * grad[j]).collect())
+            .collect()
+    });
+    let covar: Option<Vec<Vec<f64>>> = cov_ext.as_ref().map(|c| {
         c.iter()
             .map(|row| row.iter().map(|v| v * err_scale).collect())
             .collect()
@@ -421,13 +436,14 @@ pub fn feffit(
         .iter()
         .enumerate()
         .map(|(i, name)| {
-            let stderr = cov_unscaled
+            let stderr = cov_ext
                 .as_ref()
                 .map(|c| (c[i][i] * err_scale).sqrt())
                 .unwrap_or(f64::NAN);
             Best {
                 name: name.clone(),
-                value: result.x[i],
+                // external best-fit value (params hold it after set_var_internal)
+                value: params.value(name).unwrap(),
                 stderr,
             }
         })

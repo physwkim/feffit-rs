@@ -22,6 +22,10 @@ pub struct Param {
     pub expr: Option<String>,
 }
 
+/// lmfit's snap-to-zero threshold for the internal coordinate (`tiny` in
+/// `setup_bounds`): an internal value with `|v| < TINY` is set to exactly 0.
+const TINY: f64 = 1.0e-15;
+
 impl Param {
     fn var(name: &str, value: f64) -> Param {
         Param {
@@ -31,6 +35,62 @@ impl Param {
             min: f64::NEG_INFINITY,
             max: f64::INFINITY,
             expr: None,
+        }
+    }
+
+    /// External (user) value → internal (unbounded) coordinate the minimiser
+    /// optimises over (lmfit `Parameter.setup_bounds`). The value is first
+    /// clamped to `[min, max]` (lmfit clamps on assignment). The four branches
+    /// — both/upper-only/lower-only/no bound — match lmfit exactly.
+    fn to_internal(&self) -> f64 {
+        let (min, max) = (self.min, self.max);
+        let v = self.value.clamp(min, max);
+        let internal = if min == f64::NEG_INFINITY && max == f64::INFINITY {
+            v
+        } else if max == f64::INFINITY {
+            ((v - min + 1.0).powi(2) - 1.0).sqrt()
+        } else if min == f64::NEG_INFINITY {
+            ((max - v + 1.0).powi(2) - 1.0).sqrt()
+        } else {
+            (2.0 * (v - min) / (max - min) - 1.0).asin()
+        };
+        if internal.abs() < TINY {
+            0.0
+        } else {
+            internal
+        }
+    }
+
+    /// Internal coordinate → external (bounded) value (lmfit
+    /// `Parameter.from_internal`; named `to_external` here as the inverse of
+    /// [`Param::to_internal`], since a `from_*` method taking `&self` reads as
+    /// a constructor).
+    fn to_external(&self, val: f64) -> f64 {
+        let (min, max) = (self.min, self.max);
+        if min == f64::NEG_INFINITY && max == f64::INFINITY {
+            val
+        } else if max == f64::INFINITY {
+            min - 1.0 + (val * val + 1.0).sqrt()
+        } else if min == f64::NEG_INFINITY {
+            max + 1.0 - (val * val + 1.0).sqrt()
+        } else {
+            min + (val.sin() + 1.0) * (max - min) / 2.0
+        }
+    }
+
+    /// d(external)/d(internal) at internal value `val` — the MINUIT gradient
+    /// scaling lmfit applies to transform the covariance to external space
+    /// (lmfit `Parameter.scale_gradient`). `1.0` for an unbounded variable.
+    fn scale_gradient(&self, val: f64) -> f64 {
+        let (min, max) = (self.min, self.max);
+        if min == f64::NEG_INFINITY && max == f64::INFINITY {
+            1.0
+        } else if max == f64::INFINITY {
+            val / (val * val + 1.0).sqrt()
+        } else if min == f64::NEG_INFINITY {
+            -val / (val * val + 1.0).sqrt()
+        } else {
+            val.cos() * (max - min) / 2.0
         }
     }
 }
@@ -176,6 +236,45 @@ impl Parameters {
                 p.value = v.clamp(p.min, p.max);
             }
         }
+    }
+
+    /// Internal (unbounded) coordinates of the free variables, in `var_names`
+    /// order — the vector the minimiser starts from. For an unbounded variable
+    /// this is just its value; for a bounded one it is the Minuit-style
+    /// transform of the value (lmfit `setup_bounds`). Pair with
+    /// [`Parameters::set_var_internal`] so the minimiser optimises in
+    /// unbounded space while the residual sees bounded values.
+    pub fn internal_x0(&self) -> Vec<f64> {
+        self.var_names()
+            .iter()
+            .map(|n| self.map[n].to_internal())
+            .collect()
+    }
+
+    /// Set the free variables from internal (unbounded) coordinates (the
+    /// minimiser's working vector): each external value is `to_external` of
+    /// the corresponding internal coordinate. No clamping is needed — the
+    /// transform keeps a bounded value within `[min, max]` by construction.
+    pub fn set_var_internal(&mut self, internal: &[f64]) {
+        let names = self.var_names();
+        for (n, &v) in names.iter().zip(internal) {
+            if let Some(p) = self.map.get_mut(n) {
+                p.value = p.to_external(v);
+            }
+        }
+    }
+
+    /// d(external)/d(internal) for each free variable at the given internal
+    /// coordinates (`var_names` order) — the MINUIT gradient scaling that
+    /// transforms the covariance from the minimiser's internal space to
+    /// external (bounded) space: `cov_ext[i][j] = cov_int[i][j] * g[i] * g[j]`.
+    /// Every entry is `1.0` when no variable is bounded.
+    pub fn var_scale_gradients(&self, internal: &[f64]) -> Vec<f64> {
+        self.var_names()
+            .iter()
+            .zip(internal)
+            .map(|(n, &v)| self.map[n].scale_gradient(v))
+            .collect()
     }
 
     /// Resolve all constraint expressions in dependency order, writing each
