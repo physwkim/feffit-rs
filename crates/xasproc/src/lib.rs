@@ -8,5 +8,7 @@
 
 pub mod e0;
 pub mod mathutils;
+pub mod preedge;
 
 pub use e0::{find_e0, find_energy_step};
+pub use preedge::{pre_edge, PreEdge, PreEdgeParams};
