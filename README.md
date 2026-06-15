@@ -34,6 +34,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 | `feffit` end-to-end fit (`fit::feffit`: params → path exprs → residual → LM → statistics) | done | vs **larch** `feffit()` on a 2-path Cu fit: `nfev`/`nvarys`/`ndata` exact; best-fit values ≈ 1e-12–1e-7, uncertainties + chi²/reduced/R-factor/AIC/BIC ≈ 1e-6 |
 | Uncertainty propagation onto constraint + path parameters (forward-mode AD, `stderr = sqrt(gᵀ C g)`) | done | AD gradients vs central finite differences (≈ 1e-10); propagated stderrs vs **larch** `eval_stderr`/`uncertainties` on the Cu fit (≈ 1e-4 rel, lmdif ULP drift) |
 | Debye-Waller σ² models (`sigma2_eins`, `sigma2_debye`) + `rmass`/atomic masses, callable in path expressions | done | `rmass`/`sigma2_eins`/`sigma2_debye` vs **larch** (eins) and its pure-Python `sigms.f` port (debye, since the Feff6 C lib is x86_64-only) — bit-exact; end-to-end `sigma2_eins` fit + uncertainty vs **larch** (≈ 1e-9) |
+| List-valued k-weights (`kweight=[1,2,3]`: per-k-weight residuals concatenated) | done | vs **larch** `feffit()` on the two-path Cu fit with `kweight=[1,2,3]`: `ndata` = 3× single (n_idp unchanged); best-fit values/uncertainties/statistics match to lmdif ULP drift (values ≈ 1e-7, stderr ≈ 1e-4) |
 | `feff-sys` (FFI to FEFF) | not started | — |
 
 ## Layout
@@ -66,6 +67,7 @@ scripts/ref_chi.py     # numpy-only reference generator (also emits cubic when s
 scripts/ref_xftf.py    # scipy.fftpack/scipy.special reference for xafsft
 scripts/ref_feffit.py  # larch.xafs.feffit residual reference (needs xraylarch)
 scripts/ref_feffit_fit.py  # larch.xafs.feffit end-to-end fit reference
+scripts/ref_feffit_multikw.py # larch feffit reference for a kweight=[1,2,3] fit
 scripts/ref_feffit_sigma2.py  # larch feffit reference for a sigma2_eins fit
 scripts/ref_sigma2.py  # larch rmass / sigma2_eins / sigma2_debye reference
 scripts/gen_atomic_mass.py # emit crates/feffdat/src/mass.rs from xraydb

@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use feffdat::FeffPath;
-use feffit::{feffit, DataSet, FitDataSet, FitSpace, PathSpec, Spec, Transform};
+use feffit::{feffit, DataSet, FeffitResult, FitDataSet, FitSpace, PathSpec, Spec, Transform};
 use params::Parameters;
 use xafsft::Window;
 
@@ -24,6 +24,9 @@ fn data_dir() -> PathBuf {
 
 struct Ref {
     transform: HashMap<String, String>,
+    /// k-weight list from a `#kweights a b c` line; empty when the reference
+    /// only carries a scalar `#transform kweight N` (single-k-weight fit).
+    kweights: Vec<i32>,
     vars: Vec<(String, f64)>, // (name, init) in declaration order
     stats: HashMap<String, f64>,
     best: Vec<(String, f64, f64)>,    // (name, value, stderr)
@@ -36,13 +39,10 @@ struct Ref {
 }
 
 impl Ref {
-    fn load() -> Ref {
-        Ref::load_named("ref_feffit_fit.txt")
-    }
-
     fn load_named(name: &str) -> Ref {
         let text = std::fs::read_to_string(data_dir().join(name)).unwrap();
         let mut transform = HashMap::new();
+        let mut kweights: Vec<i32> = Vec::new();
         let mut vars = Vec::new();
         let mut stats = HashMap::new();
         let mut best = Vec::new();
@@ -61,6 +61,11 @@ impl Ref {
                     it.next().unwrap().to_string(),
                     it.next().unwrap().to_string(),
                 );
+            } else if let Some(rest) = line.strip_prefix("#kweights ") {
+                kweights = rest
+                    .split_whitespace()
+                    .map(|t| t.parse().unwrap())
+                    .collect();
             } else if let Some(rest) = line.strip_prefix("#epsilon_k ") {
                 epsilon_k = rest.trim().parse().unwrap();
             } else if let Some(rest) = line.strip_prefix("#var ") {
@@ -106,6 +111,7 @@ impl Ref {
         }
         Ref {
             transform,
+            kweights,
             vars,
             stats,
             best,
@@ -134,10 +140,15 @@ impl Ref {
             "q" => FitSpace::Q,
             other => panic!("unknown fitspace {other}"),
         };
+        let kweight = if self.kweights.is_empty() {
+            vec![self.ti("kweight")]
+        } else {
+            self.kweights.clone()
+        };
         Transform::new(
             self.tf("kmin"),
             self.tf("kmax"),
-            self.ti("kweight"),
+            kweight,
             self.tf("dk"),
             None,
             Window::from_name(self.ts("window")).unwrap(),
@@ -179,9 +190,12 @@ fn ref_pathparam(r: &Ref, di: usize, pi: usize, name: &str) -> (f64, f64) {
         .unwrap_or_else(|| panic!("path param {di}/{pi}/{name} not in reference"))
 }
 
-#[test]
-fn feffit_matches_larch() {
-    let r = Ref::load();
+/// Build the identical two-path Cu fit described by a reference file (same data,
+/// transform, path wiring, starting variables, and the `alpha_x10` derived
+/// parameter) and run the Rust `feffit`. Shared by the single- and
+/// multi-k-weight parity tests, which differ only in the reference's `kweight`.
+fn build_and_fit(ref_name: &str) -> (Ref, FeffitResult) {
+    let r = Ref::load_named(ref_name);
 
     let (p1, s1) = wired_path("feff0001.dat", "sig2_1");
     let (p2, s2) = wired_path("feff0002.dat", "sig2_2");
@@ -202,12 +216,18 @@ fn feffit_matches_larch() {
     for (name, init) in &r.vars {
         params.add_var(name, *init);
     }
-    // global constraint parameter, mirroring `DERIVED` in ref_feffit_fit.py —
+    // global constraint parameter, mirroring `DERIVED` in the reference script —
     // unused by any path, present to exercise derived-parameter uncertainty.
     params.add_expr("alpha_x10", "alpha*10");
 
     let res = feffit(&mut params, &mut fds).expect("feffit");
+    (r, res)
+}
 
+/// Assert the Rust fit matches the larch reference: structural counts exact,
+/// statistics / best-fit values / propagated uncertainties to the lmdif
+/// ULP-drift tolerances.
+fn assert_two_path_parity(r: &Ref, res: &FeffitResult) {
     // ---- structural counts: exact ----
     assert_eq!(res.nvarys, r.stats["nvarys"] as usize, "nvarys");
     assert_eq!(res.nfree, r.stats["nfree"] as usize, "nfree");
@@ -300,6 +320,27 @@ fn feffit_matches_larch() {
             assert_eq!(gs, 0.0, "path {di}/{pi} {name} constant stderr");
         }
     }
+}
+
+#[test]
+fn feffit_matches_larch() {
+    let (r, res) = build_and_fit("ref_feffit_fit.txt");
+    assert_two_path_parity(&r, &res);
+}
+
+/// Same two-path Cu fit, but with a *list-valued* k-weight (`kweight=[1,2,3]`):
+/// the residual is the per-k-weight residuals concatenated, so `ndata` is three
+/// times the single-k-weight length while `n_idp` is unchanged. Every best-fit
+/// value, uncertainty, and statistic must still match larch's `feffit()`.
+#[test]
+fn feffit_multikw_matches_larch() {
+    let (r, res) = build_and_fit("ref_feffit_multikw.txt");
+    // multi-k-weight invariants: ndata = 3 × the single-k-weight block (larch
+    // reports 312 = 3 × 104), n_idp unchanged (asserted inside the shared parity
+    // against the reference's #n_idp).
+    assert_eq!(res.ndata, r.stats["ndata"] as usize, "ndata (3 k-weights)");
+    assert_eq!(res.ndata % 3, 0, "ndata divisible by the 3 k-weights");
+    assert_two_path_parity(&r, &res);
 }
 
 /// End-to-end fit whose σ² is `sigma2_eins(temp, theta)` — verifies the

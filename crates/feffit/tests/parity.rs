@@ -102,7 +102,7 @@ impl Ref {
         Transform::new(
             self.f("kmin"),
             self.f("kmax"),
-            self.i("kweight"),
+            vec![self.i("kweight")],
             self.f("dk"),
             None,
             Window::from_name(self.s("window")).unwrap(),
@@ -166,7 +166,7 @@ fn run_residual_case(file: &str) {
     // epsilon_r and n_idp (pure arithmetic) should match closely
     check_rel(
         &format!("{file} epsilon_r"),
-        ds.epsilon_r(),
+        ds.epsilon_r()[0],
         r.f("epsilon_r"),
         1e-12,
     );
@@ -207,6 +207,16 @@ fn estimate_noise_matches_larch() {
     ds.prepare_fit(Some(r.f("epsilon_k"))); // sets chi_interp
     let chi = ds.chi_interp().to_vec();
     ds.estimate_noise(&chi, r.f("rmin_noise"), r.f("rmax_noise"));
-    check_rel("est_epsilon_k", ds.epsilon_k(), r.f("est_epsilon_k"), 1e-9);
-    check_rel("est_epsilon_r", ds.epsilon_r(), r.f("est_epsilon_r"), 1e-9);
+    check_rel(
+        "est_epsilon_k",
+        ds.epsilon_k()[0],
+        r.f("est_epsilon_k"),
+        1e-9,
+    );
+    check_rel(
+        "est_epsilon_r",
+        ds.epsilon_r()[0],
+        r.f("est_epsilon_r"),
+        1e-9,
+    );
 }

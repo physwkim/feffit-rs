@@ -2,9 +2,10 @@
 //!
 //! Ties together experimental chi(k) (`data`), a list of Feff paths, and a
 //! [`Transform`], and produces the fit residual that the minimiser drives to
-//! zero. This milestone covers the residual path for fixed (numeric) path
-//! parameters in k/R/q space with a scalar k-weight; the `'w'` (wavelet) space
-//! and list-valued k-weights are not ported.
+//! zero. This covers the residual path for fixed (numeric) path parameters in
+//! k/R/q space, for one or more k-weights (the residual is the per-k-weight
+//! residuals concatenated, matching larch's list-valued `kweight`). The `'w'`
+//! (wavelet) space is not ported.
 
 use std::f64::consts::PI;
 
@@ -43,8 +44,11 @@ pub struct DataSet {
     model_k: Vec<f64>,
     chi_interp: Vec<f64>,
     n_idp: f64,
-    epsilon_k: f64,
-    epsilon_r: f64,
+    /// One uncertainty per k-weight in `transform.kweight` (larch's
+    /// per-k-weight `epsilon_k`/`epsilon_r` lists; a single entry for the
+    /// scalar-k-weight case).
+    epsilon_k: Vec<f64>,
+    epsilon_r: Vec<f64>,
     prepared: bool,
 }
 
@@ -65,8 +69,8 @@ impl DataSet {
             model_k: Vec::new(),
             chi_interp: Vec::new(),
             n_idp: 0.0,
-            epsilon_k: 0.0,
-            epsilon_r: 0.0,
+            epsilon_k: Vec::new(),
+            epsilon_r: Vec::new(),
             prepared: false,
         }
     }
@@ -75,13 +79,13 @@ impl DataSet {
     pub fn n_idp(&self) -> f64 {
         self.n_idp
     }
-    /// Uncertainty in chi(k).
-    pub fn epsilon_k(&self) -> f64 {
-        self.epsilon_k
+    /// Uncertainty in chi(k), one entry per k-weight in `transform.kweight`.
+    pub fn epsilon_k(&self) -> &[f64] {
+        &self.epsilon_k
     }
-    /// Uncertainty in chi(R).
-    pub fn epsilon_r(&self) -> f64 {
-        self.epsilon_r
+    /// Uncertainty in chi(R), one entry per k-weight in `transform.kweight`.
+    pub fn epsilon_r(&self) -> &[f64] {
+        &self.epsilon_r
     }
     /// The model k-grid (`trans.k_[:ikmax]`).
     pub fn model_k(&self) -> &[f64] {
@@ -129,41 +133,67 @@ impl DataSet {
         self.prepared = true;
     }
 
-    /// Set epsilon_k / epsilon_r from an explicit scalar (port of `set_epsilon_k`,
-    /// scalar-kweight branch).
+    /// Set epsilon_k / epsilon_r from an explicit scalar (port of
+    /// `set_epsilon_k`). The same `eps_k` is used for every k-weight; `eps_r`
+    /// differs per k-weight via the Parseval scale (which depends on `2*kw+1`),
+    /// matching larch's list-valued branch (a single-element list for a scalar
+    /// k-weight).
     pub fn set_epsilon_k(&mut self, eps_k: f64) {
-        let trans = &self.transform;
-        let w = 2 * trans.kweight + 1;
-        let denom = trans.kstep * (trans.kmax.powi(w) - trans.kmin.powi(w));
-        let scale = 2.0 * (PI * w as f64 / denom).sqrt();
-        self.epsilon_k = eps_k;
-        self.epsilon_r = eps_k / scale;
+        let kstep = self.transform.kstep;
+        let kmin = self.transform.kmin;
+        let kmax = self.transform.kmax;
+        let kweights = self.transform.kweight.clone();
+
+        let mut ek = Vec::with_capacity(kweights.len());
+        let mut er = Vec::with_capacity(kweights.len());
+        for &kw in &kweights {
+            let w = 2 * kw + 1;
+            let denom = kstep * (kmax.powi(w) - kmin.powi(w));
+            let scale = 2.0 * (PI * w as f64 / denom).sqrt();
+            ek.push(eps_k);
+            er.push(eps_k / scale);
+        }
+        self.epsilon_k = ek;
+        self.epsilon_r = er;
     }
 
-    /// Estimate epsilon_k / epsilon_r from high-R noise (port of `estimate_noise`,
-    /// scalar-kweight branch).
+    /// Estimate epsilon_k / epsilon_r from high-R noise (port of
+    /// `estimate_noise`). One `eps_r` is estimated per k-weight (the high-R
+    /// region of `fftf(chi, kw)`), and converted to `eps_k` by the Parseval
+    /// scale, matching larch's `all_kweights` branch.
     pub fn estimate_noise(&mut self, chi: &[f64], rmin: f64, rmax: f64) {
-        let trans = &self.transform;
-        let rstep = trans.rstep();
-        let chir = trans.fftf(chi, trans.kweight);
+        let rstep = self.transform.rstep();
+        let nfft = self.transform.nfft;
+        let kstep = self.transform.kstep;
+        let kmin = self.transform.kmin;
+        let kmax = self.transform.kmax;
+        let kweights = self.transform.kweight.clone();
 
         let irmin = itrunc(0.01 + rmin / rstep);
-        let irmax = itrunc((trans.nfft as f64 / 2.0).min(1.01 + rmax / rstep));
-        let highr = realimag(&chir[irmin..irmax]);
+        let irmax = itrunc((nfft as f64 / 2.0).min(1.01 + rmax / rstep));
 
-        // kwin_ave: mean window value scaled into the (kmax-kmin) range
-        let kwin_sum: f64 = trans.kwin().iter().sum();
-        let kwin_ave = kwin_sum * trans.kstep / (trans.kmax - trans.kmin);
+        // kwin_ave: mean window value scaled into the (kmax-kmin) range. The
+        // window is k-weight-independent, so this is shared across k-weights.
+        let kwin_sum: f64 = self.transform.kwin().iter().sum();
+        let kwin_ave = kwin_sum * kstep / (kmax - kmin);
 
-        let ss: f64 = highr.iter().map(|v| v * v).sum();
-        let eps_r = (ss / highr.len() as f64).sqrt() / kwin_ave;
+        let mut ek = Vec::with_capacity(kweights.len());
+        let mut er = Vec::with_capacity(kweights.len());
+        for &kw in &kweights {
+            let chir = self.transform.fftf(chi, kw);
+            let highr = realimag(&chir[irmin..irmax]);
+            let ss: f64 = highr.iter().map(|v| v * v).sum();
+            let eps_r = (ss / highr.len() as f64).sqrt() / kwin_ave;
 
-        // Parseval scaling r -> k (note: a different convention than set_epsilon_k)
-        let w = 2 * trans.kweight + 1;
-        let denom = trans.kstep * (trans.kmax.powi(w) - trans.kmin.powi(w));
-        let scale = (2.0 * PI * w as f64 / denom).sqrt();
-        self.epsilon_k = scale * eps_r;
-        self.epsilon_r = eps_r;
+            // Parseval scaling r -> k (note: a different convention than set_epsilon_k)
+            let w = 2 * kw + 1;
+            let denom = kstep * (kmax.powi(w) - kmin.powi(w));
+            let scale = (2.0 * PI * w as f64 / denom).sqrt();
+            ek.push(scale * eps_r);
+            er.push(eps_r);
+        }
+        self.epsilon_k = ek;
+        self.epsilon_r = er;
     }
 
     /// Sum the path chi(k) on the model k-grid (`ff2chi` over the paths),
@@ -204,36 +234,47 @@ impl DataSet {
         let rstep = trans.rstep();
         let nfft_half = trans.nfft as f64 / 2.0;
 
+        // For >1 k-weight the residual is the per-k-weight blocks concatenated,
+        // in `transform.kweight` order, exactly larch's `all_kweights` branch.
+        let mut out = Vec::new();
         match trans.fitspace {
             FitSpace::K => {
                 let iqmin = itrunc(0.0f64.max(0.01 + trans.kmin / trans.kstep));
                 let iqmax = itrunc(nfft_half.min(0.01 + trans.kmax / trans.kstep));
                 let k = trans.k_grid();
-                (iqmin..iqmax)
-                    .map(|i| (diff[i] / self.epsilon_k) * k[i].powi(trans.kweight))
-                    .collect()
+                for (i, &kw) in trans.kweight.iter().enumerate() {
+                    let eps = self.epsilon_k[i];
+                    for j in iqmin..iqmax {
+                        out.push((diff[j] / eps) * k[j].powi(kw));
+                    }
+                }
             }
             FitSpace::R => {
-                let chir = trans.fftf(&diff, trans.kweight);
                 let irmin = itrunc(0.0f64.max(0.01 + trans.rmin / rstep));
                 let irmax = itrunc(nfft_half.min(0.01 + trans.rmax / rstep));
-                let scaled: Vec<num_complex::Complex64> = chir[irmin..irmax]
-                    .iter()
-                    .map(|c| c / self.epsilon_r)
-                    .collect();
-                realimag(&scaled)
+                for (i, &kw) in trans.kweight.iter().enumerate() {
+                    let chir = trans.fftf(&diff, kw);
+                    let eps = self.epsilon_r[i];
+                    for c in &chir[irmin..irmax] {
+                        out.push(c.re / eps);
+                        out.push(c.im / eps);
+                    }
+                }
             }
             FitSpace::Q => {
-                let chir = trans.fftf(&diff, trans.kweight);
-                let chiq = trans.fftr(&chir);
                 let iqmin = itrunc(0.0f64.max(0.01 + trans.kmin / trans.kstep));
                 let iqmax = itrunc(nfft_half.min(0.01 + trans.kmax / trans.kstep));
-                // larch: realimag(chiq[iqmin:iqmax] / eps_r)[::2] -> the real parts
-                chiq[iqmin..iqmax]
-                    .iter()
-                    .map(|c| c.re / self.epsilon_r)
-                    .collect()
+                for (i, &kw) in trans.kweight.iter().enumerate() {
+                    let chir = trans.fftf(&diff, kw);
+                    let chiq = trans.fftr(&chir);
+                    let eps = self.epsilon_r[i];
+                    // larch: realimag(chiq[iqmin:iqmax] / eps_r)[::2] -> the real parts
+                    for c in &chiq[iqmin..iqmax] {
+                        out.push(c.re / eps);
+                    }
+                }
             }
         }
+        out
     }
 }

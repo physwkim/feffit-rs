@@ -6,9 +6,9 @@
 //!
 //! This milestone provides the **residual core**: a [`Transform`] (the k/R FT
 //! configuration with cached windows) and a [`DataSet`] that produces the fit
-//! residual for fixed numeric path parameters in k/R/q space with a scalar
-//! k-weight. Verified against larch's `FeffitDataSet._residual` to FFT
-//! round-off.
+//! residual for fixed numeric path parameters in k/R/q space, for one or more
+//! k-weights (a list-valued `kweight` concatenates the per-k-weight residuals).
+//! Verified against larch's `FeffitDataSet._residual` to FFT round-off.
 //!
 //! It also provides the **end-to-end fit** ([`fit::feffit`]): the global
 //! parameter/constraint system ([`params`]) drives per-path parameter
@@ -23,8 +23,8 @@
 //! available in path expressions, bound to each path's geometry through a
 //! [`params::FuncCtx`].
 //!
-//! Not yet ported: list-valued k-weights, the `'w'` (Cauchy-wavelet) fit space,
-//! background refinement (`refine_bkg`), and the GNXAS g(r) model.
+//! Not yet ported: the `'w'` (Cauchy-wavelet) fit space, background refinement
+//! (`refine_bkg`), and the GNXAS g(r) model.
 
 pub mod dataset;
 pub mod fit;

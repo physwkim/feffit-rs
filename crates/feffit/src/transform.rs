@@ -30,7 +30,12 @@ pub enum FitSpace {
 pub struct Transform {
     pub kmin: f64,
     pub kmax: f64,
-    pub kweight: i32,
+    /// The k-weight(s) the fit is evaluated at. larch's `kweight` is either a
+    /// scalar or a list; this port stores it uniformly as a non-empty list (a
+    /// single-element list is the scalar case). When more than one is given the
+    /// residual is the per-k-weight residuals concatenated, exactly larch's
+    /// list-valued `kweight` (`FeffitDataSet._residual`).
+    pub kweight: Vec<i32>,
     pub dk: f64,
     pub dk2: Option<f64>,
     pub window: Window,
@@ -58,7 +63,7 @@ impl Transform {
     pub fn new(
         kmin: f64,
         kmax: f64,
-        kweight: i32,
+        kweight: Vec<i32>,
         dk: f64,
         dk2: Option<f64>,
         window: Window,
@@ -72,6 +77,10 @@ impl Transform {
         rbkg: f64,
         fitspace: FitSpace,
     ) -> Self {
+        assert!(
+            !kweight.is_empty(),
+            "Transform requires at least one k-weight"
+        );
         let rstep = PI / (kstep * nfft as f64);
         let k_: Vec<f64> = (0..nfft).map(|i| kstep * i as f64).collect();
         let r_: Vec<f64> = (0..nfft).map(|i| rstep * i as f64).collect();
@@ -111,7 +120,7 @@ impl Transform {
         Transform::new(
             0.0,
             20.0,
-            2,
+            vec![2],
             4.0,
             None,
             Window::Kaiser,
