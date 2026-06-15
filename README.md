@@ -29,6 +29,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 | Cubic-spline interp (larch default, `interp='cubic'`) | done | vs scipy `UnivariateSpline(s=0)` reference (max\|Δχ\| ≈ 5e-14, incl. extrapolation) |
 | `xafsft` (Fourier transforms: `xftf`/`xftr`/windows) | done | vs scipy.fftpack + scipy.special references (kwin ≈ 2e-16, χ(R) ≈ 3e-14, FFT round-off) |
 | `feffit` residual core (`Transform`, `DataSet._residual` in k/R/q) | done | vs **larch** `FeffitDataSet._residual` (model χ ≈ 7e-16, residual ≈ 1e-13–3e-11) |
+| `'w'` Cauchy-wavelet fit space (`TransformGroup.cwt` + `'w'` residual) | done | vs **larch** `FeffitDataSet._residual` in `'w'` space (bit-exact: residual max\|Δ\|/peak ≈ 2e-15, pure rustfft vs numpy.fft round-off) |
 | `params` (lmfit-style parameters + constraint expressions) | done | vs **asteval** (expr eval, bit-exact) and **lmfit** `update_constraints` (max\|Δ\| < 1e-12) |
 | `lm` Levenberg-Marquardt minimiser (MINPACK `lmdif` port) | done | vs **scipy** `optimize.leastsq`: `info`/`nfev` exact for converged cases; x/cov ≈ 1e-9–1e-7 (ULP drift vs scipy's FORTRAN MINPACK) |
 | `feffit` end-to-end fit (`fit::feffit`: params → path exprs → residual → LM → statistics) | done | vs **larch** `feffit()` on a 2-path Cu fit: `nfev`/`nvarys`/`ndata` exact; best-fit values ≈ 1e-12–1e-7, uncertainties + chi²/reduced/R-factor/AIC/BIC ≈ 1e-6 |

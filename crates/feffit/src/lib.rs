@@ -23,8 +23,8 @@
 //! available in path expressions, bound to each path's geometry through a
 //! [`params::FuncCtx`].
 //!
-//! Not yet ported: the `'w'` (Cauchy-wavelet) fit space, background refinement
-//! (`refine_bkg`), and the GNXAS g(r) model.
+//! Not yet ported: background refinement (`refine_bkg`) and the GNXAS g(r)
+//! model.
 
 pub mod dataset;
 pub mod fit;

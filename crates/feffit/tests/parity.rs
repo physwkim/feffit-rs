@@ -97,6 +97,7 @@ impl Ref {
             "r" => FitSpace::R,
             "k" => FitSpace::K,
             "q" => FitSpace::Q,
+            "w" => FitSpace::W,
             other => panic!("unknown fitspace {other}"),
         };
         Transform::new(
@@ -188,6 +189,36 @@ fn residual_k_matches_larch() {
 #[test]
 fn residual_q_matches_larch() {
     run_residual_case("ref_feffit_q.txt");
+}
+
+#[test]
+fn residual_w_matches_larch() {
+    // Cauchy-wavelet residual: realimag(cwt(diff/eps_k)).ravel() over the
+    // [rmin,rmax)x[kmin,kmax) mask. It has a large dynamic range (peak ~36 here,
+    // since eps_k=1e-3 scales diff up ~1000x), so compare the max abs error to
+    // the peak magnitude rather than an absolute floor.
+    let r = Ref::load("ref_feffit_w.txt");
+    let mut ds = r.dataset();
+    ds.prepare_fit(Some(r.f("epsilon_k")));
+    let resid = ds.residual(false);
+
+    check_rel("ref_feffit_w.txt n_idp", ds.n_idp(), r.f("n_idp"), 1e-12);
+
+    let want = r.blk("residual");
+    assert_eq!(resid.len(), want.len(), "w residual length");
+    let peak = want.iter().fold(0.0f64, |m, &v| m.max(v.abs()));
+    let maxd = max_abs_diff(&resid, want);
+    println!(
+        "w residual: max|Δ|={maxd:.3e} peak={peak:.3e} rel={:.3e} (n={})",
+        maxd / peak,
+        resid.len()
+    );
+    // rustfft vs numpy.fft round-off across the cwt's two FFT stages.
+    assert!(
+        maxd < 1e-9 * peak,
+        "w residual max|Δ| {maxd:.3e} exceeds {:.0e}",
+        1e-9 * peak
+    );
 }
 
 #[test]

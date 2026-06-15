@@ -138,6 +138,7 @@ impl Ref {
             "r" => FitSpace::R,
             "k" => FitSpace::K,
             "q" => FitSpace::Q,
+            "w" => FitSpace::W,
             other => panic!("unknown fitspace {other}"),
         };
         let kweight = if self.kweights.is_empty() {

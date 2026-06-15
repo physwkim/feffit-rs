@@ -9,12 +9,9 @@
 use std::f64::consts::PI;
 
 use num_complex::Complex64;
-use xafsft::{ftwindow, xftf_fast, xftr_fast, Window};
+use xafsft::{fft_padded, ftwindow, ifft_padded, xftf_fast, xftr_fast, Window};
 
 /// Which space the fit residual is evaluated in (larch `fitspace`).
-///
-/// larch also supports `'w'` (Cauchy wavelet); that is intentionally not ported
-/// here — see the crate docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FitSpace {
     /// fit in k-space (`'k'`).
@@ -23,6 +20,8 @@ pub enum FitSpace {
     R,
     /// fit in back-transformed q-space (`'q'`).
     Q,
+    /// fit in the Cauchy-wavelet transform (`'w'`).
+    W,
 }
 
 /// FT parameters plus cached k/R windows (`TransformGroup`).
@@ -172,5 +171,80 @@ impl Transform {
         let m = chir.len();
         let cx: Vec<Complex64> = (0..m).map(|i| chir[i] * self.rwin[i]).collect();
         xftr_fast(&cx, self.nfft, self.kstep)
+    }
+
+    /// The Cauchy-wavelet transform of `chi`, restricted to the fit's
+    /// (R, k) window. Port of `TransformGroup.cwt`.
+    ///
+    /// Returns the complex wavelet on the masked region as a flat row-major
+    /// (R outer, k inner) buffer of length `nrows * ncols`, paired with `ncols`
+    /// so the caller can recover the 2-D shape. Only the rows/cols inside the
+    /// `[rmin, rmax) × [kmin, kmax)` mask are computed (larch zeroes the rest
+    /// with `_cauchymask` and then slices to exactly this region).
+    pub fn cwt(&self, chi: &[f64], kweight: i32) -> (Vec<Complex64>, usize) {
+        let nkpts = chi.len();
+        let nfft = self.nfft;
+        let kstep = self.kstep;
+        let rstep = self.rstep;
+
+        // apply k-weighting + window (larch: chi*kwin*k**kweight when kweight!=0)
+        let weighted: Vec<f64> = if kweight != 0 {
+            (0..nkpts)
+                .map(|i| chi[i] * self.kwin[i] * self.k_[i].powi(kweight))
+                .collect()
+        } else {
+            chi.to_vec()
+        };
+
+        // chix: length nfft/2, zero-padded, then FFT to length 2*nfft, keep [:nfft]
+        let half = nfft / 2;
+        let m = nkpts.min(half);
+        let chix: Vec<Complex64> = (0..half)
+            .map(|i| {
+                if i < m {
+                    Complex64::new(weighted[i], 0.0)
+                } else {
+                    Complex64::new(0.0, 0.0)
+                }
+            })
+            .collect();
+        let ffchi_full = fft_padded(&chix, 2 * nfft);
+        let ffchi = &ffchi_full[..nfft];
+
+        // nrpts is the FULL R-grid count: it enters the Cauchy filter (the wavelet
+        // order) and the normalisation, independent of which rows we keep.
+        let nrpts = (self.rmax / rstep).round() as usize;
+        let omega: Vec<f64> = (0..nfft)
+            .map(|j| PI * j as f64 / (kstep * nfft as f64))
+            .collect();
+        // cauchy_sum = log(2π) - log(nrpts!) = log(2π) - Σ_{j=1..nrpts} log(j)
+        let log_fact: f64 = (1..=nrpts).map(|j| (j as f64).ln()).sum();
+        let cauchy_sum = (2.0 * PI).ln() - log_fact;
+
+        // mask / slice bounds (larch make_cwt_arrays); int() truncates toward 0
+        let nfft_half = nfft as f64 / 2.0;
+        let ikmin = (0.0f64.max(0.01 + self.kmin / kstep)) as usize;
+        let ikmax = ((nfft_half.min(0.01 + self.kmax / kstep)) as usize).min(nkpts);
+        let irmin = (0.0f64.max(0.01 + self.rmin / rstep)) as usize;
+        let irmax = (nfft_half.min(0.01 + self.rmax / rstep)) as usize;
+        let ncols = ikmax.saturating_sub(ikmin);
+
+        let mut out = Vec::with_capacity(irmax.saturating_sub(irmin) * ncols);
+        for i in irmin..irmax {
+            // r[0] is forced to 1e-19 in larch to avoid a divide-by-zero in alpha
+            let r_i = if i == 0 { 1.0e-19 } else { rstep * i as f64 };
+            let alpha = nrpts as f64 / (2.0 * r_i);
+            let prod: Vec<Complex64> = (0..nfft)
+                .map(|j| {
+                    let aom = alpha * omega[j];
+                    // omega[0]=0 -> ln(0)=-inf -> exp=0, matching numpy
+                    let filt = cauchy_sum + nrpts as f64 * aom.ln() - aom;
+                    ffchi[j] * filt.exp()
+                })
+                .collect();
+            let row = ifft_padded(&prod, 2 * nfft);
+            out.extend_from_slice(&row[ikmin..ikmax]);
+        }
+        (out, ncols)
     }
 }

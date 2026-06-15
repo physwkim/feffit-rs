@@ -3,9 +3,9 @@
 //! Ties together experimental chi(k) (`data`), a list of Feff paths, and a
 //! [`Transform`], and produces the fit residual that the minimiser drives to
 //! zero. This covers the residual path for fixed (numeric) path parameters in
-//! k/R/q space, for one or more k-weights (the residual is the per-k-weight
-//! residuals concatenated, matching larch's list-valued `kweight`). The `'w'`
-//! (wavelet) space is not ported.
+//! k/R/q and `'w'` (Cauchy-wavelet) space, for one or more k-weights (the
+//! residual is the per-k-weight residuals concatenated, matching larch's
+//! list-valued `kweight`).
 
 use std::f64::consts::PI;
 
@@ -271,6 +271,24 @@ impl DataSet {
                     // larch: realimag(chiq[iqmin:iqmax] / eps_r)[::2] -> the real parts
                     for c in &chiq[iqmin..iqmax] {
                         out.push(c.re / eps);
+                    }
+                }
+            }
+            FitSpace::W => {
+                // larch applies eps before the wavelet (`cwt(diff/eps_k, kw)`),
+                // then `realimag(cwt).ravel()`. For a 2-D array larch's
+                // `realimag` emits, per R row, all real parts (over k) followed
+                // by all imag parts — NOT the interleaved order it uses in 1-D.
+                // (larch's `'w'` branch only supports a scalar `epsilon_k`; this
+                // per-k-weight indexing matches it for one k-weight and stays
+                // consistent with k/R/q for more.)
+                for (i, &kw) in trans.kweight.iter().enumerate() {
+                    let eps = self.epsilon_k[i];
+                    let scaled: Vec<f64> = diff.iter().map(|d| d / eps).collect();
+                    let (wav, ncols) = trans.cwt(&scaled, kw);
+                    for row in wav.chunks(ncols) {
+                        out.extend(row.iter().map(|c| c.re));
+                        out.extend(row.iter().map(|c| c.im));
                     }
                 }
             }

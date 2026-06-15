@@ -75,8 +75,21 @@ def common_transform(fitspace):
     )
 
 
-def run_case(fitspace, k, chi):
-    tpars = common_transform(fitspace)
+def wavelet_transform():
+    # The 'w' residual is realimag(cwt).ravel() over the [rmin,rmax)x[kmin,kmax)
+    # mask, so its length grows as (n_rrows * n_kcols * 2). Deliberately compact
+    # k/R ranges keep the reference fixture small while exercising the full cwt
+    # code path (FFTs, Cauchy filter, mask slice, realimag ordering).
+    return dict(
+        kmin=3.0, kmax=6.0, kweight=2, dk=4.0, window="kaiser",
+        rmin=1.2, rmax=2.0, dr=0.0, rwindow="hanning",
+        nfft=2048, kstep=KSTEP, fitspace="w",
+    )
+
+
+def run_case(fitspace, k, chi, tpars=None):
+    if tpars is None:
+        tpars = common_transform(fitspace)
     trans = feffit_transform(**tpars)
     data = Group(k=k, chi=chi)
     paths = make_paths(MODEL_PARS)
@@ -126,6 +139,7 @@ def main():
     k, chi = synth_data()
     for fitspace in ("r", "k", "q"):
         run_case(fitspace, k, chi)
+    run_case("w", k, chi, wavelet_transform())
     run_estimate_noise(k, chi)
 
 

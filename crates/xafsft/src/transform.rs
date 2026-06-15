@@ -43,6 +43,33 @@ pub fn xftr_fast(chir: &[Complex64], nfft: usize, kstep: f64) -> Vec<Complex64> 
     buf[..nfft / 2].iter().map(|c| c * scale).collect()
 }
 
+/// Forward DFT with numpy `fft(a, n)` semantics: zero-pad (or truncate) `input`
+/// to length `n`, then the unnormalized forward transform (`exp(-2πi)`). Returns
+/// all `n` bins; the caller slices what it needs. Used by the Cauchy-wavelet
+/// transform, which works on raw (un-XAFS-scaled) FFTs of size `2*nfft`.
+pub fn fft_padded(input: &[Complex64], n: usize) -> Vec<Complex64> {
+    let mut buf = vec![Complex64::new(0.0, 0.0); n];
+    let m = input.len().min(n);
+    buf[..m].copy_from_slice(&input[..m]);
+    FftPlanner::new().plan_fft_forward(n).process(&mut buf);
+    buf
+}
+
+/// Inverse DFT with numpy `ifft(a, n)` semantics: zero-pad (or truncate) `input`
+/// to length `n`, the inverse transform (`exp(+2πi)`), normalized by `1/n`
+/// (rustfft's inverse is unnormalized). Returns all `n` points.
+pub fn ifft_padded(input: &[Complex64], n: usize) -> Vec<Complex64> {
+    let mut buf = vec![Complex64::new(0.0, 0.0); n];
+    let m = input.len().min(n);
+    buf[..m].copy_from_slice(&input[..m]);
+    FftPlanner::new().plan_fft_inverse(n).process(&mut buf);
+    let inv = 1.0 / n as f64;
+    for c in &mut buf {
+        *c *= inv;
+    }
+    buf
+}
+
 /// `numpy.interp` (linear, endpoint-clamped); `xp` ascending.
 fn interp(xq: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
