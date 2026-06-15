@@ -77,26 +77,26 @@ pub struct PreEdge {
 }
 
 /// Result of the inner `preedge` (no flattening / derivatives).
-struct PreedgeCore {
-    energy: Vec<f64>,
-    e0: f64,
-    ie0: usize,
-    edge_step: f64,
-    norm: Vec<f64>,
-    pre_edge: Vec<f64>,
-    post_edge: Vec<f64>,
-    norm_coefs: Vec<f64>,
-    precoefs: [f64; 2],
-    nvict: i32,
-    nnorm: usize,
-    norm1: f64,
-    norm2: f64,
-    pre1: f64,
-    pre2: f64,
+pub(crate) struct PreedgeCore {
+    pub(crate) energy: Vec<f64>,
+    pub(crate) e0: f64,
+    pub(crate) ie0: usize,
+    pub(crate) edge_step: f64,
+    pub(crate) norm: Vec<f64>,
+    pub(crate) pre_edge: Vec<f64>,
+    pub(crate) post_edge: Vec<f64>,
+    pub(crate) norm_coefs: Vec<f64>,
+    pub(crate) precoefs: [f64; 2],
+    pub(crate) nvict: i32,
+    pub(crate) nnorm: usize,
+    pub(crate) norm1: f64,
+    pub(crate) norm2: f64,
+    pub(crate) pre1: f64,
+    pub(crate) pre2: f64,
 }
 
 /// `larch.xafs.pre_edge.preedge`: the pure-numeric pre/post-edge fit.
-fn preedge_core(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) -> PreedgeCore {
+pub(crate) fn preedge_core(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) -> PreedgeCore {
     let (energy, mu) = remove_nans2(energy_in, mu_in);
     let energy = remove_dups(&energy, TINY_ENERGY);
     let n = energy.len();
