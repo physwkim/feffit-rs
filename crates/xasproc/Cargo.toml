@@ -13,3 +13,4 @@ xafsft = { path = "../xafsft" }
 lm = { path = "../lm" }
 num-complex = "0.4"
 rusty-fitpack = "0.1.2"
+nalgebra = "0.35"
