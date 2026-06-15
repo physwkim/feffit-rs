@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/feffdat"]
+members = ["crates/feffdat", "crates/xafsft"]
 
 [workspace.package]
 edition = "2021"
@@ -10,3 +10,4 @@ repository = "https://github.com/pls-controls/feffit-rs"
 
 [workspace.dependencies]
 num-complex = "0.4"
+rustfft = "6"
