@@ -24,6 +24,8 @@ struct Reference {
     scalars: HashMap<String, String>,
     k: Vec<f64>,
     chi_lin: Vec<f64>,
+    /// Present only when the reference was generated with scipy (cubic column).
+    chi_cubic: Option<Vec<f64>>,
 }
 
 fn load_ref(name: &str) -> Reference {
@@ -32,6 +34,7 @@ fn load_ref(name: &str) -> Reference {
     let mut scalars = HashMap::new();
     let mut k = Vec::new();
     let mut chi_lin = Vec::new();
+    let mut chi_cubic = Vec::new();
     let mut in_data = false;
     for line in text.lines() {
         if line == "#data" {
@@ -51,13 +54,22 @@ fn load_ref(name: &str) -> Reference {
             let mut it = line.split_whitespace();
             k.push(it.next().unwrap().parse().unwrap());
             chi_lin.push(it.next().unwrap().parse().unwrap());
+            if let Some(tok) = it.next() {
+                chi_cubic.push(tok.parse().unwrap());
+            }
         }
     }
+    let chi_cubic = if chi_cubic.len() == k.len() {
+        Some(chi_cubic)
+    } else {
+        None
+    };
     Reference {
         params,
         scalars,
         k,
         chi_lin,
+        chi_cubic,
     }
 }
 
@@ -215,15 +227,35 @@ fn ff2chi_sum_linear() {
     assert!(diff < 1e-9, "ff2chi sum diff {diff:.3e} exceeds 1e-9");
 }
 
-/// Smoke test only: cubic path runs and produces finite values.
-/// Numerical parity with scipy `UnivariateSpline(s=0)` is NOT verified here.
-#[test]
-fn cubic_path_is_finite() {
-    let mut path = FeffPath::from_path(data_dir().join("feff0001.dat")).unwrap();
+fn check_cubic_against_ref(dat: &str, ref_name: &str, tol: f64) {
+    let r = load_ref(ref_name);
+    let ref_cubic = r
+        .chi_cubic
+        .as_ref()
+        .expect("reference has no chi_cubic column (regenerate with scipy installed)");
+    let f = FeffDatFile::from_path(data_dir().join(dat)).unwrap();
+
+    let mut path = FeffPath::new(f).with_params(params_from_ref(&r));
     path.calc_chi(&KGrid::default_step(), Interp::Cubic);
-    assert_eq!(path.chi.len(), 401);
+
+    let diff = max_abs_diff(&path.chi, ref_cubic);
+    println!("{ref_name}: max|chi - chi_cubic(scipy)| = {diff:.3e}");
     assert!(
-        path.chi.iter().all(|c| c.is_finite()),
-        "cubic chi has non-finite values"
+        diff < tol,
+        "{ref_name}: cubic chi diff {diff:.3e} exceeds {tol:.0e}"
     );
+}
+
+/// EXAFS equation + not-a-knot cubic spline vs scipy `UnivariateSpline(s=0)`,
+/// default parameters (q stays within the tabulated k range).
+#[test]
+fn chi_cubic_default_params() {
+    check_cubic_against_ref("feff0001.dat", "ref_cu_default.txt", 1e-9);
+}
+
+/// Cubic parity with an e0 shift large enough to push low-k `q` negative, so
+/// the spline is also exercised in its extrapolation region.
+#[test]
+fn chi_cubic_shifted_params() {
+    check_cubic_against_ref("feff0001.dat", "ref_cu_shift.txt", 1e-9);
 }

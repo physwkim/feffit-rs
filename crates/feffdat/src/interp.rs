@@ -6,17 +6,17 @@
 //!   * `interp='cubic'`  -> `scipy.interpolate.UnivariateSpline(k, y, s=0)`  [default]
 //!
 //! [`interp_linear`] reproduces `numpy.interp` exactly. [`CubicSpline`] is a
-//! not-a-knot cubic interpolant — the closest standard match to FITPACK's
-//! `s=0` spline — but exact numerical parity with scipy is NOT YET VERIFIED
-//! (scipy is unavailable in this environment); treat the cubic path as
-//! provisional until a scipy/larch reference is generated.
+//! not-a-knot cubic interpolant; FITPACK's `s=0` cubic interpolation *is* the
+//! not-a-knot spline, and the resulting chi(k) matches scipy
+//! `UnivariateSpline(s=0)` to ~5e-14 (in-range and in the extrapolation
+//! region) — see `tests/parity.rs::chi_cubic_*`.
 
 /// Selects the resampling scheme, mirroring larch's `interp=` argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interp {
     /// `numpy.interp` — linear with endpoint clamping.
     Linear,
-    /// not-a-knot cubic spline (provisional scipy `UnivariateSpline(s=0)` match).
+    /// not-a-knot cubic spline (matches scipy `UnivariateSpline(s=0)`).
     Cubic,
 }
 

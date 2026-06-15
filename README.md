@@ -26,7 +26,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 |-----------|-------|--------------|
 | `feffdat` parser (`FeffDatFile`) | done | values transcribed by hand from `feff0001.dat` |
 | EXAFS equation + linear interp (`path2chi`/`ff2chi`, `interp='lin'`) | done | bit-exact vs numpy reference (max\|Δχ\| ≈ 1e-16) |
-| Cubic-spline interp (larch default, `interp='cubic'`) | implemented | **NOT verified** — scipy unavailable; not-a-knot spline is a provisional match to `UnivariateSpline(s=0)` |
+| Cubic-spline interp (larch default, `interp='cubic'`) | done | vs scipy `UnivariateSpline(s=0)` reference (max\|Δχ\| ≈ 5e-14, incl. extrapolation) |
 | `xafsft` (Fourier transforms) | not started | — |
 | `feff-sys` (FFI to FEFF) | not started | — |
 | `feffit` (lmfit-equivalent fit) | not started | — |
@@ -58,8 +58,9 @@ python3 scripts/ref_chi.py crates/feffdat/tests/data/feff0001.dat \
         crates/feffdat/tests/data/ref_cu_default.txt
 ```
 
-If scipy is installed, `ref_chi.py` additionally emits a `chi_cubic` column,
-which will let the cubic-spline path be verified to parity (currently pending).
+When scipy is installed, `ref_chi.py` additionally emits a `chi_cubic` column
+(used by the `chi_cubic_*` parity tests). A `.venv` with `numpy`+`scipy` is the
+supported way to regenerate it.
 
 ## Provenance
 

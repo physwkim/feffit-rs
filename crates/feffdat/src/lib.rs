@@ -4,10 +4,9 @@
 //! Feff6/Feff8l emit) and evaluates the EXAFS equation to produce chi(k) for a
 //! single path or a sum of paths.
 //!
-//! Status: parser + EXAFS equation + linear interpolation are validated against
-//! a numpy reference. The cubic-spline interpolation (larch's default) is
-//! implemented but its numerical parity with scipy `UnivariateSpline(s=0)` is
-//! not yet verified.
+//! Status: parser + EXAFS equation + both interpolation modes are validated
+//! against a numpy/scipy reference — linear (`numpy.interp`) to ~1e-16 and
+//! cubic (larch's default, scipy `UnivariateSpline(s=0)`) to ~5e-14.
 
 pub mod constants;
 pub mod interp;
