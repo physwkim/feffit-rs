@@ -6,15 +6,11 @@ without re-deriving scope).
 
 ## Repo / push state
 
-- Branch `main` has **17 commits, none pushed** — there is **no git remote
-  configured** (`git remote -v` is empty). The push the user requested
-  (`push 후 다음 계속`, choice: "Push main to origin") is **blocked on a remote
-  URL**, which must be added by the user:
-  ```sh
-  ! git remote add origin <your-repo-url>
-  git push -u origin main
-  ```
-  Do **not** fabricate a remote URL.
+- Branch `main` (**17 commits**) is **pushed and tracking
+  `origin/main`** — remote `origin` is
+  `https://github.com/physwkim/feffit-rs.git` (added by the user on
+  2026-06-15). `git status` shows `main...origin/main` fully synced. Future
+  pushes still require explicit user confirmation per the global rules.
 
 ## Done + larch-verified (see README status table)
 
