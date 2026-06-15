@@ -6,7 +6,7 @@ without re-deriving scope).
 
 ## Repo / push state
 
-- Branch `main` has **14 commits, none pushed** — there is **no git remote
+- Branch `main` has **15 commits, none pushed** — there is **no git remote
   configured** (`git remote -v` is empty). The push the user requested
   (`push 후 다음 계속`, choice: "Push main to origin") is **blocked on a remote
   URL**, which must be added by the user:
@@ -29,6 +29,7 @@ without re-deriving scope).
 | Debye-Waller σ² models (`sigma2_eins`, `sigma2_debye`) + `rmass`/atomic masses | vs larch (eins) and its pure-Python `sigms.f` port (debye) |
 | **List-valued k-weights** (`kweight=[1,2,3]`) | vs larch `feffit()` (ndata 3×, n_idp unchanged) |
 | **Parameter bounds** (min/max, lmfit Minuit internal↔external transform) | vs larch `feffit()` with `amp`/`sig2_1`/`sig2_2` bounded (interior): `nfev` exact (31), values + grad-scaled stderr match |
+| **Multi-dataset simultaneous fit** (`feffit(&mut [FitDataSet])`) | vs larch `feffit(params, [ds0, ds1])`: 2 datasets, 1 path each, shared globals; `ndata`=208, `n_idp`≈2×13.223, `nfev` exact |
 
 ## Candidate next milestones (not yet ported)
 
@@ -60,15 +61,15 @@ parametrised by `(N, R, σ, β)` rather than a FEFF path sum.
 - **Effort:** medium; mostly self-contained but a different code path, and used
   by fewer people than FEFF-path fitting.
 
-### 3. Fit outputs + multi-dataset verification  — *smaller completion*
+### 3. Fit outputs (`save_outputs`)  — *smaller completion*
 
 - **`save_outputs`:** forward-FT the fitted model and data into
   `chir`/`chir_mag`/`chir_re`/`chir_im` (and `chiq*`) arrays for plotting/use of
   the fit result. Self-contained (just `xftf`/`xftr` on the model/data χ(k)).
-- **Multi-dataset:** `feffit(&mut [FitDataSet])` already accepts multiple
-  datasets (n_idp sums, residual concatenates), but it is only tested with **one**
-  dataset. Add a 2-dataset simultaneous-fit parity test vs larch.
 - **Effort:** small.
+- *(Multi-dataset simultaneous fitting is now done + larch-verified — see the
+  table above; `feffit(&mut [FitDataSet])` aggregates `n_idp`/residual across
+  datasets.)*
 
 ## Blocked
 

@@ -402,6 +402,65 @@ fn feffit_bounds_matches_larch() {
     }
 }
 
+/// Two-dataset *simultaneous* fit (one path each, shared transform): the five
+/// global variables are shared, but `amp`/`del_e0`/`alpha` couple both datasets
+/// while `sig2_1`/`sig2_2` feed one path each. Exercises the multi-dataset
+/// aggregation in `feffit` — residual concatenation across datasets, `n_idp`
+/// summed (`ndata` = 208 = 2×104, `n_idp` ≈ 2×13.223), and shared-variable
+/// coupling — which the single-dataset tests never reached. Parity vs larch's
+/// `feffit(params, [ds0, ds1])`.
+#[test]
+fn feffit_multidataset_matches_larch() {
+    let r = Ref::load_named("ref_feffit_multidataset.txt");
+
+    // dataset 0: feff0001 with σ² = sig2_1; dataset 1: feff0002 with σ² = sig2_2.
+    let (p0, s0) = wired_path("feff0001.dat", "sig2_1");
+    let (p1, s1) = wired_path("feff0002.dat", "sig2_2");
+    let ds0 = DataSet::new(
+        r.blocks["data_k_0"].clone(),
+        r.blocks["data_chi_0"].clone(),
+        vec![p0],
+        r.transform(),
+    );
+    let ds1 = DataSet::new(
+        r.blocks["data_k_1"].clone(),
+        r.blocks["data_chi_1"].clone(),
+        vec![p1],
+        r.transform(),
+    );
+    let mut fds = vec![
+        FitDataSet {
+            dataset: ds0,
+            specs: vec![s0],
+            epsilon_k: Some(r.epsilon_k),
+        },
+        FitDataSet {
+            dataset: ds1,
+            specs: vec![s1],
+            epsilon_k: Some(r.epsilon_k),
+        },
+    ];
+
+    let mut params = Parameters::new();
+    for (name, init) in &r.vars {
+        params.add_var(name, *init);
+    }
+    params.add_expr("alpha_x10", "alpha*10");
+
+    let res = feffit(&mut params, &mut fds).expect("feffit");
+
+    // multi-dataset invariants: ndata is the sum over datasets (2×104), and each
+    // path parameter carries its dataset index (8 per path × 2 datasets = 16).
+    assert_eq!(res.ndata, r.stats["ndata"] as usize, "ndata (2 datasets)");
+    assert_eq!(res.ndata % 2, 0, "ndata divisible by the 2 datasets");
+    assert_eq!(res.path_params.len(), 16, "8 path params × 2 datasets");
+    assert!(
+        res.path_params.iter().any(|p| p.dataset == 1),
+        "second dataset's path parameters present"
+    );
+    assert_two_path_parity(&r, &res);
+}
+
 /// End-to-end fit whose σ² is `sigma2_eins(temp, theta)` — verifies the
 /// path-bound function context on the value path AND the numerical uncertainty
 /// propagation through the opaque function, both against larch (`sigma2_eins`

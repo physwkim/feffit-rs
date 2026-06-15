@@ -37,6 +37,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 | Debye-Waller σ² models (`sigma2_eins`, `sigma2_debye`) + `rmass`/atomic masses, callable in path expressions | done | `rmass`/`sigma2_eins`/`sigma2_debye` vs **larch** (eins) and its pure-Python `sigms.f` port (debye, since the Feff6 C lib is x86_64-only) — bit-exact; end-to-end `sigma2_eins` fit + uncertainty vs **larch** (≈ 1e-9) |
 | List-valued k-weights (`kweight=[1,2,3]`: per-k-weight residuals concatenated) | done | vs **larch** `feffit()` on the two-path Cu fit with `kweight=[1,2,3]`: `ndata` = 3× single (n_idp unchanged); best-fit values/uncertainties/statistics match to lmdif ULP drift (values ≈ 1e-7, stderr ≈ 1e-4) |
 | Parameter bounds (min/max, lmfit Minuit internal↔external transform) | done | vs **larch** `feffit()` on the two-path Cu fit with `amp`/`sig2_1`/`sig2_2` bounded (interior solution): the fit runs on internal coords so `nfev` is exact (31), best-fit values match to lmdif ULP drift, and the gradient-scaled (`cov_ext = g⊗g·cov_int`) uncertainties match (≈ 1e-4 rel) |
+| Multi-dataset simultaneous fit (`feffit(&mut [FitDataSet])`: residual concatenated, `n_idp` summed, shared globals couple datasets) | done | vs **larch** `feffit(params, [ds0, ds1])` on a two-dataset Cu fit (one path each, shared `amp`/`del_e0`/`alpha`, per-dataset σ²): `ndata` = 208 = 2×104, `n_idp` ≈ 2×13.223, `nfev` exact (31); best-fit values/uncertainties match to lmdif ULP drift |
 | `feff-sys` (FFI to FEFF) | not started | — |
 
 ## Layout
@@ -71,6 +72,7 @@ scripts/ref_feffit.py  # larch.xafs.feffit residual reference (needs xraylarch)
 scripts/ref_feffit_fit.py  # larch.xafs.feffit end-to-end fit reference
 scripts/ref_feffit_multikw.py # larch feffit reference for a kweight=[1,2,3] fit
 scripts/ref_feffit_bounds.py  # larch feffit reference for a bounded-variable fit
+scripts/ref_feffit_multidataset.py # larch feffit reference for a 2-dataset simultaneous fit
 scripts/ref_feffit_sigma2.py  # larch feffit reference for a sigma2_eins fit
 scripts/ref_sigma2.py  # larch rmass / sigma2_eins / sigma2_debye reference
 scripts/gen_atomic_mass.py # emit crates/feffdat/src/mass.rs from xraydb
