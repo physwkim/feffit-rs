@@ -16,15 +16,9 @@ use num_complex::Complex64;
 use rusty_fitpack::{splev, splrep};
 use xafsft::{ftwindow, xftf_fast, Window};
 
-use crate::mathutils::{index_nearest, index_of, remove_dups};
+use crate::mathutils::{index_nearest, index_of, remove_dups, ETOK};
 use crate::preedge::{pre_edge, PreEdgeParams};
 
-/// `larch.xafs.xafsutils.KTOE` — `1e20 * hbar^2 / (2 m_e e)`, taken at the
-/// exact runtime value (the source comment 3.8099819442818976 is stale from an
-/// older CODATA set; the live `scipy.constants` value is the one below).
-const KTOE: f64 = 3.809_982_116_154_859_7;
-/// `ETOK = 1/KTOE`, the eV→k^2 conversion factor.
-const ETOK: f64 = 1.0 / KTOE;
 /// smallest tolerated energy step, in eV (`larch` `TINY_ENERGY`).
 const TINY_ENERGY: f64 = 0.00050;
 /// `xftf_fast`'s default `kstep`. larch's residual calls `xftf_fast(...,

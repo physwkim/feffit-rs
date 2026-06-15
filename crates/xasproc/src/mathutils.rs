@@ -8,6 +8,29 @@
 //! [`interp_linear`] (numpy `np.interp`, edge-clamped), and [`smooth`]
 //! (Lorentzian/Gaussian convolution smoothing).
 
+/// `larch.xafs.xafsutils.KTOE` — `1e20 * hbar^2 / (2 m_e e)`, taken at the
+/// exact live `scipy.constants` value (the larch source comment
+/// `3.8099819442818976` is stale from an older CODATA set). Single source of
+/// truth for the eV↔k conversion across the XAS ports.
+pub const KTOE: f64 = 3.809_982_116_154_859_7;
+/// `ETOK = 1/KTOE`, the eV→k^2 conversion factor.
+pub const ETOK: f64 = 1.0 / KTOE;
+
+/// `larch.xafs.xafsutils.etok`: photo-electron energy (eV) → wavenumber
+/// (`sqrt(E·ETOK)`); returns 0 for negative energy, matching larch's guard.
+pub fn etok(energy: f64) -> f64 {
+    if energy < 0.0 {
+        0.0
+    } else {
+        (energy * ETOK).sqrt()
+    }
+}
+
+/// `larch.xafs.xafsutils.ktoe`: wavenumber → photo-electron energy (`k²·KTOE`).
+pub fn ktoe(k: f64) -> f64 {
+    k * k * KTOE
+}
+
 /// `larch.math.index_of`: index of `array` *at or below* `value`; `0` if
 /// `value < min(array)`. Works on unsorted arrays (max index satisfying `<=`).
 pub fn index_of(array: &[f64], value: f64) -> usize {
