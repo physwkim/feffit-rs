@@ -145,6 +145,19 @@ impl Parameters {
         self.map.get(name)
     }
 
+    /// The full symbol table an expression sees: every parameter's current
+    /// value by name, plus the injected constants. Call after
+    /// [`Parameters::update_constraints`] so expression parameters are current.
+    /// Used by feffit to evaluate per-path parameter expressions against the
+    /// global parameters (augmented with path-local symbols like `reff`).
+    pub fn symbols(&self) -> HashMap<String, f64> {
+        let mut m = self.consts.clone();
+        for n in &self.order {
+            m.insert(n.clone(), self.map[n].value);
+        }
+        m
+    }
+
     /// Set the values of the free variables (in `var_names` order). Used by the
     /// minimiser to push a trial point before re-resolving constraints.
     pub fn set_var_values(&mut self, vals: &[f64]) {

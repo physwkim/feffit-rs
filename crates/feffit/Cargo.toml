@@ -11,3 +11,5 @@ description = "EXAFS path-sum fitting (feffit) core — a pure-Rust port of larc
 num-complex.workspace = true
 feffdat = { path = "../feffdat" }
 xafsft = { path = "../xafsft" }
+params = { path = "../params" }
+lm = { path = "../lm" }

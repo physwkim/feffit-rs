@@ -31,7 +31,7 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 | `feffit` residual core (`Transform`, `DataSet._residual` in k/R/q) | done | vs **larch** `FeffitDataSet._residual` (model χ ≈ 7e-16, residual ≈ 1e-13–3e-11) |
 | `params` (lmfit-style parameters + constraint expressions) | done | vs **asteval** (expr eval, bit-exact) and **lmfit** `update_constraints` (max\|Δ\| < 1e-12) |
 | `lm` Levenberg-Marquardt minimiser (MINPACK `lmdif` port) | done | vs **scipy** `optimize.leastsq`: `info`/`nfev` exact for converged cases; x/cov ≈ 1e-9–1e-7 (ULP drift vs scipy's FORTRAN MINPACK) |
-| `feffit` end-to-end fit (minimiser + statistics) | not started | — |
+| `feffit` end-to-end fit (`fit::feffit`: params → path exprs → residual → LM → statistics) | done | vs **larch** `feffit()` on a 2-path Cu fit: `nfev`/`nvarys`/`ndata` exact; best-fit values ≈ 1e-12–1e-7, uncertainties + chi²/reduced/R-factor/AIC/BIC ≈ 1e-6 |
 | `feff-sys` (FFI to FEFF) | not started | — |
 
 ## Layout
@@ -51,6 +51,7 @@ crates/xafsft/         # XAFS Fourier transforms (xftf/xftr) + FT windows
 crates/feffit/         # path-sum fitting core
   src/transform.rs     # TransformGroup: k/R windows, fftf/fftr
   src/dataset.rs       # FeffitDataSet: prepare_fit, residual, epsilon estimation
+  src/fit.rs           # feffit(): params + path exprs + LM + statistics
 crates/params/         # lmfit-style parameters with constraint expressions
   src/expr.rs          # asteval-subset expression parser/evaluator
   src/parameters.rs    # Parameters: vary/fixed/expr, dependency-ordered resolve
@@ -58,7 +59,8 @@ crates/lm/             # Levenberg-Marquardt least squares (MINPACK lmdif port)
   src/lmdif.rs         # enorm/fdjac2/qrfac/qrsolv/lmpar/lmdif + covariance
 scripts/ref_chi.py     # numpy-only reference generator (also emits cubic when scipy present)
 scripts/ref_xftf.py    # scipy.fftpack/scipy.special reference for xafsft
-scripts/ref_feffit.py  # larch.xafs.feffit reference for feffit (needs xraylarch)
+scripts/ref_feffit.py  # larch.xafs.feffit residual reference (needs xraylarch)
+scripts/ref_feffit_fit.py  # larch.xafs.feffit end-to-end fit reference
 scripts/ref_lmdif.py   # scipy.optimize.leastsq reference for the lm minimiser
 ```
 

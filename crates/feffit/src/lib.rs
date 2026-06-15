@@ -10,12 +10,20 @@
 //! k-weight. Verified against larch's `FeffitDataSet._residual` to FFT
 //! round-off.
 //!
+//! It also provides the **end-to-end fit** ([`fit::feffit`]): the global
+//! parameter/constraint system ([`params`]) drives per-path parameter
+//! expressions through the residual core and the MINPACK Levenberg-Marquardt
+//! minimiser ([`lm`]), then computes the fit statistics. Verified against
+//! larch's `feffit()` on a two-path Cu fit.
+//!
 //! Not yet ported: list-valued k-weights, the `'w'` (Cauchy-wavelet) fit space,
-//! background refinement (`refine_bkg`), the parameter/constraint expression
-//! system, and the Levenberg-Marquardt minimiser.
+//! background refinement (`refine_bkg`), uncertainty propagation onto path
+//! parameters, and the `sigma2_debye`/`sigma2_eins` constraint helpers.
 
 pub mod dataset;
+pub mod fit;
 pub mod transform;
 
 pub use dataset::DataSet;
+pub use fit::{feffit, Best, FeffitResult, FitDataSet, FitError, PathSpec, Spec};
 pub use transform::{FitSpace, Transform};
