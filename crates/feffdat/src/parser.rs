@@ -29,6 +29,9 @@ pub struct GeomAtom {
     pub label: String,
     pub iz: i64,
     pub ipot: i64,
+    /// Atomic mass (amu), looked up from `iz` at parse time — larch sets this
+    /// with `xraydb.atomic_mass(iz)`. `0.0` if `iz` is out of the table range.
+    pub mass: f64,
     pub x: f64,
     pub y: f64,
     pub z: f64,
@@ -96,6 +99,17 @@ impl FeffDatFile {
     /// Largest wavenumber present in the tabulated grid.
     pub fn k_max(&self) -> f64 {
         self.k.last().copied().unwrap_or(0.0)
+    }
+
+    /// Reduced mass of the path (amu), the `rmass` FEFFDAT symbol. Matches
+    /// larch's `FeffDatFile.rmass`: `1 / Σ 1/max(1, amass)` over path atoms.
+    pub fn rmass(&self) -> f64 {
+        let s: f64 = self.geom.iter().map(|a| 1.0 / a.mass.max(1.0)).sum();
+        if s > 0.0 {
+            1.0 / s
+        } else {
+            0.0
+        }
     }
 
     /// Parse the textual contents of a `feffNNNN.dat` file.
@@ -300,6 +314,7 @@ fn parse_path_line(f: &mut FeffDatFile, line: &str, pcounter: usize) {
             label,
             iz,
             ipot,
+            mass: crate::mass::atomic_mass(iz).unwrap_or(0.0),
             x,
             y,
             z,

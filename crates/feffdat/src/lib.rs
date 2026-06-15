@@ -10,10 +10,14 @@
 
 pub mod constants;
 pub mod interp;
+pub mod mass;
 pub mod parser;
 pub mod path;
+pub mod sigma2;
 
 pub use constants::{etok, ktoe, ETOK, KTOE, SMALL_ENERGY};
 pub use interp::{interp_linear, CubicSpline, Interp};
+pub use mass::atomic_mass;
 pub use parser::{FeffDatFile, GeomAtom, Potential};
 pub use path::{ff2chi, path2chi, FeffPath, KGrid, PathParams};
+pub use sigma2::{sigma2_debye, sigma2_eins, EINS_FACTOR};
