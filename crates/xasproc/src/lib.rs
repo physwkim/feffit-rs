@@ -16,8 +16,9 @@ pub mod mback;
 pub mod pca;
 pub mod preedge;
 pub mod rebin;
+pub mod special;
 
-pub use autobk::{Autobk, AutobkParams, autobk};
+pub use autobk::{Autobk, AutobkDelta, AutobkParams, autobk, autobk_delta_chi};
 pub use deconvolve::{ConvParams, DeconvForm, DeconvParams, xas_convolve, xas_deconvolve};
 pub use diffkk::{DiffKK, diffkk};
 pub use e0::{find_e0, find_energy_step};

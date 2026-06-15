@@ -11,13 +11,14 @@
 
 use std::f64::consts::PI;
 
-use lm::{lmdif, LmConfig};
+use lm::{LmConfig, lmdif};
 use num_complex::Complex64;
 use rusty_fitpack::{splev, splrep};
-use xafsft::{ftwindow, xftf_fast, Window};
+use xafsft::{Window, ftwindow, xftf_fast};
 
-use crate::mathutils::{index_nearest, index_of, remove_dups, ETOK};
-use crate::preedge::{pre_edge, PreEdgeParams};
+use crate::mathutils::{ETOK, index_nearest, index_of, remove_dups};
+use crate::preedge::{PreEdgeParams, pre_edge};
+use crate::special::{erf, t_ppf};
 
 /// smallest tolerated energy step, in eV (`larch` `TINY_ENERGY`).
 const TINY_ENERGY: f64 = 0.00050;
@@ -115,6 +116,125 @@ pub struct Autobk {
     pub kmin: f64,
     /// maximum k of the fit window.
     pub kmax: f64,
+    /// spline knot vector from `splrep` (FITPACK), shared by background and
+    /// uncertainty evaluation.
+    pub knots: Vec<f64>,
+    /// spline order (3, cubic).
+    pub order: usize,
+    /// ungridded k over the fit range `kraw[..iemax-iek0+1]` — the abscissa the
+    /// background spline is evaluated on (larch `autobk_details.kraw` sliced).
+    pub kraw_fit: Vec<f64>,
+    /// `mu[iek0..=iemax]` over the fit range.
+    pub mu_fit: Vec<f64>,
+    /// `sum(resid^2)` at the solution.
+    pub chisqr: f64,
+    /// reduced chi-square `chisqr / (2*irbkg + 2*nclamp - nspl)`.
+    pub redchi: f64,
+    /// unscaled covariance `(JᵀJ)⁻¹` of the `nspl` knot coefficients
+    /// (`scipy.optimize.leastsq`'s `cov_x`); `None` if the fit was singular.
+    pub covar: Option<Vec<Vec<f64>>>,
+    /// per-coefficient standard error `sqrt(redchi*covar[i,i])` (`nspl`).
+    pub coefs_std: Vec<f64>,
+}
+
+/// Output of [`autobk_delta_chi`]: `err_sigma`-level uncertainty bands for
+/// `chi(k)` and the background `bkg(E)`.
+#[derive(Debug, Clone)]
+pub struct AutobkDelta {
+    /// uncertainty in `chi(k)` on the output k grid ([`Autobk::k`]), carried in
+    /// the same raw `(mu - bkg)` units larch's `group.delta_chi` uses (i.e. not
+    /// divided by `edge_step` — a larch quirk reproduced for parity).
+    pub delta_chi: Vec<f64>,
+    /// uncertainty in the background over the full energy grid, zero outside
+    /// `[iek0, iek0 + (iemax - iek0 + 1))`.
+    pub delta_bkg: Vec<f64>,
+}
+
+/// Port of `larch.xafs.autobk.autobk_delta_chi`: propagate the fitted spline
+/// coefficient covariance into `err_sigma`-level uncertainty bands for `chi(k)`
+/// and `bkg(E)` via a hand-rolled central-difference Jacobian.
+///
+/// Returns `None` when the fit produced no covariance, or when the resulting
+/// band contains NaN — mirroring larch, which leaves `delta_chi`/`delta_bkg`
+/// unset in those cases.
+pub fn autobk_delta_chi(out: &Autobk, err_sigma: f64) -> Option<AutobkDelta> {
+    let covar = out.covar.as_ref()?;
+    let nspl = out.nspl;
+    let nchi = out.k.len();
+    let nmue = out.iemax - out.iek0 + 1;
+    let ncoefs = out.coefs.len();
+
+    // central-difference Jacobian of (bkg, chi) w.r.t. each knot coefficient,
+    // stepping by ±0.5*coefs_std[i] (larch `step = 0.5`).
+    let step = 0.5;
+    let mut jac_chi = vec![vec![0.0; nchi]; nspl];
+    let mut jac_bkg = vec![vec![0.0; nmue]; nspl];
+    for i in 0..nspl {
+        let denom = 2.0 * step * out.coefs_std[i];
+        let mut bkg_pair: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        let mut chi_pair: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        for k in 0..2 {
+            // tcoefs[:nspl] = coefs[:nspl] with index i perturbed; padded to
+            // ncoefs (splev ignores coefs beyond len(knots)-order-1 = nspl).
+            let mut tcoefs = vec![out.coefs[nspl - 1]; ncoefs];
+            tcoefs[..nspl].copy_from_slice(&out.coefs[..nspl]);
+            tcoefs[i] = out.coefs[i] + (2.0 * k as f64 - 1.0) * step * out.coefs_std[i];
+            let (b, c) = spline_eval(
+                &out.kraw_fit,
+                &out.mu_fit,
+                &out.knots,
+                &tcoefs,
+                out.order,
+                &out.k,
+            );
+            bkg_pair[k] = b;
+            chi_pair[k] = c;
+        }
+        for m in 0..nchi {
+            jac_chi[i][m] = (chi_pair[1][m] - chi_pair[0][m]) / denom;
+        }
+        for m in 0..nmue {
+            jac_bkg[i][m] = (bkg_pair[1][m] - bkg_pair[0][m]) / denom;
+        }
+    }
+
+    // df = Σ_ij jac_i · jac_j · covar[i,j]  (elementwise over the grid)
+    let mut dfchi = vec![0.0; nchi];
+    let mut dfbkg = vec![0.0; nmue];
+    for i in 0..nspl {
+        for j in 0..nspl {
+            let cij = covar[i][j];
+            for m in 0..nchi {
+                dfchi[m] += jac_chi[i][m] * jac_chi[j][m] * cij;
+            }
+            for m in 0..nmue {
+                dfbkg[m] += jac_bkg[i][m] * jac_bkg[j][m] * cij;
+            }
+        }
+    }
+
+    let prob = 0.5 * (1.0 + erf(err_sigma / 2.0_f64.sqrt()));
+    let tppf_chi = t_ppf(prob, (nchi - nspl) as f64);
+    let tppf_bkg = t_ppf(prob, (nmue - nspl) as f64);
+    let dchi: Vec<f64> = dfchi
+        .iter()
+        .map(|&v| tppf_chi * (v * out.redchi).sqrt())
+        .collect();
+    let dbkg: Vec<f64> = dfbkg
+        .iter()
+        .map(|&v| tppf_bkg * (v * out.redchi).sqrt())
+        .collect();
+
+    if dchi.iter().any(|v| v.is_nan()) {
+        return None;
+    }
+
+    let mut delta_bkg = vec![0.0; out.bkg.len()];
+    delta_bkg[out.iek0..out.iek0 + dbkg.len()].copy_from_slice(&dbkg);
+    Some(AutobkDelta {
+        delta_chi: dchi,
+        delta_bkg,
+    })
 }
 
 /// `larch.xafs.autobk.spline_eval`: evaluate `bkg = splev(kraw)` and
@@ -337,7 +457,24 @@ pub fn autobk(energy_in: &[f64], mu_in: &[f64], p: &AutobkParams) -> Autobk {
         factor: 100.0,
     };
     let result = lmdif(fcn, &vcoefs, &cfg);
+    // unscaled covariance (scipy leastsq `cov_x`) before consuming `result`
+    let covar = result.covar();
     let best = result.x;
+
+    // chisqr / redchi exactly as larch: chisqr = sum(resid(best)^2),
+    // redchi = chisqr / (2*irbkg + 2*nclamp - nspl)
+    let final_resid = resid(
+        &best, ncoefs, &kraw_fit, &mu_fit, &knots, order, &kout, &ftwin, nfft, irbkg, p.nclamp,
+        p.clamp_lo, p.clamp_hi,
+    );
+    let chisqr: f64 = final_resid.iter().map(|r| r * r).sum();
+    let redchi = chisqr / (2 * irbkg + 2 * p.nclamp - nspl) as f64;
+    let coefs_std: Vec<f64> = (0..nspl)
+        .map(|i| match &covar {
+            Some(c) => (redchi * c[i][i]).sqrt(),
+            None => f64::NAN,
+        })
+        .collect();
 
     // assemble final coefficients (larch final_coefs[:nspl]=best; [nspl:]=best[-1])
     let mut final_coefs = coefs.clone();
@@ -381,5 +518,13 @@ pub fn autobk(energy_in: &[f64], mu_in: &[f64], p: &AutobkParams) -> Autobk {
         iemax,
         kmin,
         kmax,
+        knots,
+        order,
+        kraw_fit,
+        mu_fit,
+        chisqr,
+        redchi,
+        covar,
+        coefs_std,
     }
 }
