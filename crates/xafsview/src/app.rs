@@ -488,7 +488,7 @@ impl XafsViewApp {
             }
             GraphType::KChi => {
                 self.plot.set_graph_x_label("k (Å⁻¹)");
-                self.plot.set_graph_y_label("k^w·χ(k)", siplot::YAxis::Left);
+                self.plot.set_graph_y_label("kʷ·χ(k)", siplot::YAxis::Left);
                 if let (Some(k), Some(chi)) = (&g.k, &g.chi) {
                     let y: Vec<f64> = k
                         .iter()
@@ -496,7 +496,7 @@ impl XafsViewApp {
                         .map(|(&kk, &c)| c * kk.powi(kweight))
                         .collect();
                     let h = self.plot.add_curve(k, &y, BLUE);
-                    self.plot.set_item_legend(h, "k^w·χ(k)");
+                    self.plot.set_item_legend(h, "kʷ·χ(k)");
                 }
             }
             GraphType::ChiR => {

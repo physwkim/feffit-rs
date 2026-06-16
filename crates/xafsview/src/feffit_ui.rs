@@ -181,7 +181,7 @@ impl FtSettings {
 /// Which space and part of `chi` to draw for data vs model.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PlotSpace {
-    /// `k^w·χ(k)`.
+    /// `kʷ·χ(k)`.
     K,
     /// `χ(R)` (R-space).
     R,
@@ -205,13 +205,13 @@ pub struct FeffitPlot {
     pub model_chi: Vec<f64>,
     pub data: XafsOutput,
     pub model: XafsOutput,
-    /// k-weight the fit used (for the `k^w·χ(k)` plot).
+    /// k-weight the fit used (for the `kʷ·χ(k)` plot).
     pub kweight: i32,
 }
 
 impl FeffitPlot {
     /// Build the `(x, data_y, model_y, x-label, y-label)` series for a given
-    /// plot space and part. For k-space the part is ignored (`k^w·χ(k)`); for
+    /// plot space and part. For k-space the part is ignored (`kʷ·χ(k)`); for
     /// R/Q the part selects magnitude / real / imag / phase.
     pub fn series(
         &self,
@@ -229,7 +229,7 @@ impl FeffitPlot {
                     weight(&self.data_k, &self.data_chi),
                     weight(&self.data_k, &self.model_chi),
                     "k (Å⁻¹)",
-                    "k^w·χ(k)",
+                    "kʷ·χ(k)",
                 )
             }
             PlotSpace::R => {

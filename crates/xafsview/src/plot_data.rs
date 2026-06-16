@@ -45,7 +45,7 @@ impl PlotItem {
             PlotItem::Norm => "normalized μ(E)",
             PlotItem::Flat => "flattened μ(E)",
             PlotItem::Deriv => "dμ/dE",
-            PlotItem::Chik => "k^w·χ(k)",
+            PlotItem::Chik => "kʷ·χ(k)",
             PlotItem::ChiR => "|χ(R)|",
         }
     }
