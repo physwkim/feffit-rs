@@ -1,7 +1,7 @@
 //! `feffit` — a pure-Rust port of `xraylarch`'s `larch/xafs/feffit.py`.
 //!
 //! This crate fits a sum of Feff paths to experimental EXAFS chi(k). It builds
-//! on [`feffdat`] (the per-path EXAFS equation) and [`xafsft`] (the Fourier
+//! on [`feffdat`] (the per-path EXAFS equation) and [`xafsft`](mod@xafsft) (the Fourier
 //! transforms and FT windows).
 //!
 //! This milestone provides the **residual core**: a [`Transform`] (the k/R FT

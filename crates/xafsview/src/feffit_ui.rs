@@ -1,5 +1,5 @@
 //! The FEFFIT tab: load Feff path files, define global fit variables and
-//! per-path parameter expressions, run the [`feffit`] fit against the current
+//! per-path parameter expressions, run the [`feffit`](fn@feffit::feffit) fit against the current
 //! group's `chi(k)`, and display the statistics and a data-vs-model curve.
 //!
 //! Following the rest of the GUI, [`FeffitUi::controls`] only *collects* the
