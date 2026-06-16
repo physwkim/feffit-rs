@@ -654,14 +654,6 @@ impl XafsViewApp {
                  (pre-edge / normalize, AUTOBK, FEFFIT, LCF / PCA, FEFF8L / FEFF10), \
                  with larch-parity math.",
             );
-            ui.add_space(6.0);
-            ui.label(
-                "Original XAFSView (v1.6) by 성낙언 (POSTECH) front-ends the UWXAFS suite. \
-                 Compatible UWXAFS versions: Atoms 2.50, Autobk 2.941, Feffit 2.984; \
-                 FEFF 6 / 7 / 8. FEFF works with all versions.",
-            );
-            ui.add_space(6.0);
-            ui.label("Original author contact: sungne@postech.ac.kr");
         });
     }
 
