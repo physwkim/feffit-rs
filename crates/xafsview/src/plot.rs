@@ -29,6 +29,11 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
         y_min: DATA_MARGIN,
         y_max: DATA_MARGIN,
     });
+    // Hover crosshair + x/y coordinate readout following the pointer over the
+    // data area (siplot draws both when the crosshair is on). On by default so
+    // every plot reads out the value under the cursor without the user first
+    // toggling the toolbar's crosshair button.
+    plot.set_graph_cursor(true);
     plot
 }
 
