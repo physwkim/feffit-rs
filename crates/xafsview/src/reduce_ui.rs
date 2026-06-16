@@ -259,7 +259,13 @@ impl ReductionUi {
                         }
                     });
 
-                ui.separator();
+                // A `ui.separator()` here is a vertical divider, and inside
+                // `horizontal_top` (whose initial height is the full available
+                // height, unlike `ui.horizontal`'s one-row height) it grabs the
+                // whole panel height — inflating this group so the Autobk action
+                // buttons below it are pushed past the scroll fold. Plain spacing
+                // keeps the columns at their natural (content) height.
+                ui.add_space(16.0);
                 // column 2: k-range, FT window, spline clamps
                 egui::Grid::new("autobk_col2")
                     .num_columns(2)
@@ -321,7 +327,7 @@ impl ReductionUi {
                         ui.end_row();
                     });
 
-                ui.separator();
+                ui.add_space(16.0);
                 // column 3: file-loading mode + graph type
                 egui::Grid::new("autobk_col3")
                     .num_columns(2)
