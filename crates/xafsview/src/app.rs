@@ -36,17 +36,20 @@ enum Tab {
     Feff,
     /// Working-directory configuration (this phase).
     Folders,
+    /// Program/version information (mirrors XAFSView's About tab).
+    About,
 }
 
 impl Tab {
     /// All tabs in strip order.
-    const ALL: [Tab; 6] = [
+    const ALL: [Tab; 7] = [
         Tab::Autobk,
         Tab::Feffit,
         Tab::FeffitTxt,
         Tab::Atoms,
         Tab::Feff,
         Tab::Folders,
+        Tab::About,
     ];
 
     /// The label shown on the tab button.
@@ -58,6 +61,7 @@ impl Tab {
             Tab::Atoms => "Atoms",
             Tab::Feff => "Feff",
             Tab::Folders => "Folders",
+            Tab::About => "About",
         }
     }
 }
@@ -556,6 +560,32 @@ impl XafsViewApp {
         });
     }
 
+    /// The About tab: program/version information, mirroring XAFSView's About.
+    fn about_tab(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add_space(8.0);
+            ui.heading("XAFSView");
+            ui.label(format!(
+                "feffit-rs port · version {}",
+                env!("CARGO_PKG_VERSION")
+            ));
+            ui.separator();
+            ui.label(
+                "A Rust reimplementation of the XAFSView GUI on the feffit-rs engines \
+                 (pre-edge / normalize, AUTOBK, FEFFIT, LCF / PCA, FEFF8L / FEFF10), \
+                 with larch-parity math.",
+            );
+            ui.add_space(6.0);
+            ui.label(
+                "Original XAFSView (v1.6) by 성낙언 (POSTECH) front-ends the UWXAFS suite. \
+                 Compatible UWXAFS versions: Atoms 2.50, Autobk 2.941, Feffit 2.984; \
+                 FEFF 6 / 7 / 8. FEFF works with all versions.",
+            );
+            ui.add_space(6.0);
+            ui.label("Original author contact: sungne@postech.ac.kr");
+        });
+    }
+
     /// Open a dialog and add the chosen Feff path file(s) to the fit.
     fn add_feff_path(&mut self) {
         let mut dlg = rfd::FileDialog::new();
@@ -872,15 +902,17 @@ impl eframe::App for XafsViewApp {
             self.menu_bar(ui);
         });
 
-        egui::Panel::left("tabs")
-            .resizable(false)
-            .exact_size(120.0)
-            .show_inside(ui, |ui| {
-                ui.add_space(4.0);
+        // Horizontal tab strip directly under the menu bar, mirroring XAFSView's
+        // top tab row (Autobk … About) rather than a vertical side list.
+        egui::Panel::top("tabs").show_inside(ui, |ui| {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
                 for tab in Tab::ALL {
                     ui.selectable_value(&mut self.tab, tab, tab.label());
                 }
             });
+            ui.add_space(2.0);
+        });
 
         // On a tab switch, repopulate the shared plot for the newly active tab
         // so it shows that tab's curves rather than the previous tab's.
@@ -893,7 +925,9 @@ impl eframe::App for XafsViewApp {
             self.last_tab = self.tab;
         }
 
-        egui::Panel::bottom("status").show_inside(ui, |ui| {
+        // The common error/status strip at the top of the body (below the tabs),
+        // matching XAFSView's shared text line shown on every tab.
+        egui::Panel::top("status").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -918,6 +952,7 @@ impl eframe::App for XafsViewApp {
                 &mut self.feff_inp,
                 self.session.folders.work_dir.as_deref(),
             ),
+            Tab::About => self.about_tab(ui),
         });
 
         // The Edit-μ(E) window floats above the panels and is driven from the
