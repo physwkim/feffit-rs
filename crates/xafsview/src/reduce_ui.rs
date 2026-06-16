@@ -1,9 +1,15 @@
-//! Autobk-tab reduction controls: edge/background/FT parameters and the graph
-//! selector. [`ReductionUi`] holds the editable values and renders the control
-//! panel; the app turns its [`pre_params`](ReductionUi::pre_params) /
+//! Autobk-tab reduction controls: edge/background/FT parameters laid out as the
+//! original XAFSView "Autobk parameters" 3-column grid, plus the file-loading
+//! mode and graph selector. [`ReductionUi`] holds the editable values and
+//! renders the parameter grid; the app turns its
+//! [`pre_params`](ReductionUi::pre_params) /
 //! [`autobk_params`](ReductionUi::autobk_params) / [`ft_params`](ReductionUi::ft_params)
 //! into engine calls via `xasdata::reduce`, and reads [`graph`](ReductionUi::graph)
-//! to decide what to plot.
+//! to decide what to plot. The Title / Data File / Theory rows and the
+//! Open / Start / Exit / Edit button cluster live in the app (they need session
+//! and file-dialog access).
+
+use std::path::PathBuf;
 
 use eframe::egui;
 use xasdata::{AutobkParams, FtParams, PreEdgeParams, Window};
@@ -33,10 +39,10 @@ impl GraphType {
         GraphType::ChiR,
     ];
 
-    /// Short button label.
+    /// Short menu label.
     pub fn label(self) -> &'static str {
         match self {
-            GraphType::MuBkg => "μ + bkg",
+            GraphType::MuBkg => "XMU + BKG",
             GraphType::Norm => "norm",
             GraphType::Deriv => "deriv",
             GraphType::KChi => "kʷ·χ(k)",
@@ -45,15 +51,50 @@ impl GraphType {
     }
 }
 
-/// What the controls are asking the app to do this frame.
-pub enum ReductionAction {
-    /// Re-run normalize → autobk → xftf for the current group.
-    Run,
-    /// Re-draw the current group with the (possibly changed) graph type.
-    Replot,
+/// How the "Open New file" button interprets the chosen file (the original
+/// "Loading file type" ring: Calc. XMU / Load XMU / chi.dat).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LoadingType {
+    /// Raw beamline columns → build μ(E) via the column chooser.
+    CalcXmu,
+    /// An already-built μ(E) file → load via the same column chooser (it adapts
+    /// to a 2-column energy/μ file).
+    LoadXmu,
+    /// A FEFF `chi.dat` (k, χ) → load χ(k) directly as the working data.
+    ChiDat,
 }
 
-/// Editable reduction parameters plus the active graph type.
+impl LoadingType {
+    /// All modes in display order.
+    pub const ALL: [LoadingType; 3] = [
+        LoadingType::CalcXmu,
+        LoadingType::LoadXmu,
+        LoadingType::ChiDat,
+    ];
+
+    /// Menu label, matching the original ring text.
+    pub fn label(self) -> &'static str {
+        match self {
+            LoadingType::CalcXmu => "Calc. XMU",
+            LoadingType::LoadXmu => "Load XMU",
+            LoadingType::ChiDat => "chi.dat",
+        }
+    }
+}
+
+/// A loaded theoretical χ(k) standard (a FEFF `chi.dat`) used to constrain the
+/// background fit via autobk's `k_std`/`chi_std` — the original "Theory" field.
+pub struct TheoryStd {
+    /// Source path (shown in the Theory row).
+    pub path: PathBuf,
+    /// k grid of the standard.
+    pub k: Vec<f64>,
+    /// χ values of the standard.
+    pub chi: Vec<f64>,
+}
+
+/// Editable reduction parameters plus the active graph type, loading mode, and
+/// the optional theory standard.
 pub struct ReductionUi {
     /// Let `pre_edge`/`autobk` find E0 automatically.
     pub e0_auto: bool,
@@ -71,10 +112,27 @@ pub struct ReductionUi {
     pub dk: f64,
     /// FT window function.
     pub window: Window,
+    /// Low-energy spline clamp weight.
+    pub clamp_lo: f64,
     /// High-energy spline clamp weight.
     pub clamp_hi: f64,
     /// Active graph type.
     pub graph: GraphType,
+    /// Let `pre_edge` auto-determine the pre-edge / normalization ranges; when
+    /// off, the `pre1`/`pre2`/`norm1`/`norm2` values below are used.
+    pub pre_norm_auto: bool,
+    /// Pre-edge fit lower bound (eV, relative to E0) — original "Pre1".
+    pub pre1: f64,
+    /// Pre-edge fit upper bound (eV, relative to E0) — original "Pre2".
+    pub pre2: f64,
+    /// Normalization fit lower bound (eV, relative to E0) — original "Nor1".
+    pub norm1: f64,
+    /// Normalization fit upper bound (eV, relative to E0) — original "Nor2".
+    pub norm2: f64,
+    /// How "Open New file" interprets the chosen file.
+    pub loading: LoadingType,
+    /// Optional theoretical χ(k) standard constraining the background fit.
+    pub theory: Option<TheoryStd>,
 }
 
 impl Default for ReductionUi {
@@ -88,8 +146,16 @@ impl Default for ReductionUi {
             kmax: 14.0,
             dk: 1.0,
             window: Window::Hanning,
+            clamp_lo: 0.0,
             clamp_hi: 1.0,
             graph: GraphType::MuBkg,
+            pre_norm_auto: true,
+            pre1: -200.0,
+            pre2: -30.0,
+            norm1: 100.0,
+            norm2: 300.0,
+            loading: LoadingType::CalcXmu,
+            theory: None,
         }
     }
 }
@@ -101,10 +167,17 @@ impl ReductionUi {
         if !self.e0_auto {
             p.e0 = Some(self.e0);
         }
+        if !self.pre_norm_auto {
+            p.pre1 = Some(self.pre1);
+            p.pre2 = Some(self.pre2);
+            p.norm1 = Some(self.norm1);
+            p.norm2 = Some(self.norm2);
+        }
         p
     }
 
-    /// AUTOBK parameters for this selection.
+    /// AUTOBK parameters for this selection, including the theory standard (the
+    /// `k_std`/`chi_std` background constraint) when one is loaded.
     pub fn autobk_params(&self) -> AutobkParams {
         AutobkParams {
             rbkg: self.rbkg,
@@ -114,7 +187,10 @@ impl ReductionUi {
             kweight: self.kweight,
             dk: self.dk,
             win: self.window,
+            clamp_lo: self.clamp_lo,
             clamp_hi: self.clamp_hi,
+            k_std: self.theory.as_ref().map(|t| t.k.clone()),
+            chi_std: self.theory.as_ref().map(|t| t.chi.clone()),
             ..AutobkParams::default()
         }
     }
@@ -131,60 +207,151 @@ impl ReductionUi {
         }
     }
 
-    /// Render the control panel. Returns [`ReductionAction::Run`] when the run
-    /// button is pressed and [`ReductionAction::Replot`] when only the graph
-    /// type changed.
-    pub fn controls(&mut self, ui: &mut egui::Ui) -> Option<ReductionAction> {
-        let mut action = None;
+    /// Render the "Autobk parameters" grid plus the loading-mode and graph-type
+    /// selectors, mirroring the original 3-column layout. Returns `true` when
+    /// only the graph type changed (a cheap replot, no refit needed).
+    pub fn controls(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut replot = false;
+        ui.group(|ui| {
+            ui.strong("Autobk parameters");
+            ui.horizontal_top(|ui| {
+                // column 1: edge energy + pre-edge / normalization ranges
+                egui::Grid::new("autobk_col1")
+                    .num_columns(2)
+                    .spacing([6.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Eo");
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.e0_auto, "auto");
+                            ui.add_enabled(
+                                !self.e0_auto,
+                                egui::DragValue::new(&mut self.e0).speed(0.1).suffix(" eV"),
+                            );
+                        });
+                        ui.end_row();
 
-        ui.heading("Reduction");
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.e0_auto, "auto E₀");
-            ui.add_enabled(
-                !self.e0_auto,
-                egui::DragValue::new(&mut self.e0).speed(0.1).suffix(" eV"),
-            );
-        });
-        ui.add(egui::Slider::new(&mut self.rbkg, 0.2..=2.5).text("Rbkg (Å)"));
-        ui.horizontal(|ui| {
-            ui.label("k-weight");
-            ui.add(egui::DragValue::new(&mut self.kweight).range(0..=3));
-        });
-        ui.add(egui::Slider::new(&mut self.kmin, 0.0..=6.0).text("k min"));
-        ui.add(egui::Slider::new(&mut self.kmax, 5.0..=20.0).text("k max"));
-        ui.add(egui::Slider::new(&mut self.dk, 0.0..=3.0).text("dk"));
-        egui::ComboBox::from_label("window")
-            .selected_text(window_name(self.window))
-            .show_ui(ui, |ui| {
-                for w in [
-                    Window::Hanning,
-                    Window::Kaiser,
-                    Window::Parzen,
-                    Window::Welch,
-                    Window::Sine,
-                    Window::Gaussian,
-                ] {
-                    ui.selectable_value(&mut self.window, w, window_name(w));
-                }
+                        ui.label("Rbkg");
+                        ui.add(
+                            egui::DragValue::new(&mut self.rbkg)
+                                .speed(0.01)
+                                .range(0.2..=2.5)
+                                .suffix(" Å"),
+                        );
+                        ui.end_row();
+
+                        ui.label("ranges");
+                        ui.checkbox(&mut self.pre_norm_auto, "auto pre/norm");
+                        ui.end_row();
+
+                        let manual = !self.pre_norm_auto;
+                        for (label, value) in [
+                            ("Pre1", &mut self.pre1),
+                            ("Pre2", &mut self.pre2),
+                            ("Nor1", &mut self.norm1),
+                            ("Nor2", &mut self.norm2),
+                        ] {
+                            ui.label(label);
+                            ui.add_enabled(
+                                manual,
+                                egui::DragValue::new(value).speed(1.0).suffix(" eV"),
+                            );
+                            ui.end_row();
+                        }
+                    });
+
+                ui.separator();
+                // column 2: k-range, FT window, spline clamps
+                egui::Grid::new("autobk_col2")
+                    .num_columns(2)
+                    .spacing([6.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("kmin");
+                        ui.add(
+                            egui::DragValue::new(&mut self.kmin)
+                                .speed(0.1)
+                                .range(0.0..=6.0),
+                        );
+                        ui.end_row();
+                        ui.label("kmax");
+                        ui.add(
+                            egui::DragValue::new(&mut self.kmax)
+                                .speed(0.1)
+                                .range(5.0..=20.0),
+                        );
+                        ui.end_row();
+                        ui.label("dk");
+                        ui.add(
+                            egui::DragValue::new(&mut self.dk)
+                                .speed(0.1)
+                                .range(0.0..=3.0),
+                        );
+                        ui.end_row();
+                        ui.label("kweight");
+                        ui.add(egui::DragValue::new(&mut self.kweight).range(0..=3));
+                        ui.end_row();
+                        ui.label("Window");
+                        egui::ComboBox::from_id_salt("autobk_window")
+                            .selected_text(window_name(self.window))
+                            .show_ui(ui, |ui| {
+                                for w in [
+                                    Window::Hanning,
+                                    Window::Kaiser,
+                                    Window::Parzen,
+                                    Window::Welch,
+                                    Window::Sine,
+                                    Window::Gaussian,
+                                ] {
+                                    ui.selectable_value(&mut self.window, w, window_name(w));
+                                }
+                            });
+                        ui.end_row();
+                        ui.label("clamp lo");
+                        ui.add(
+                            egui::DragValue::new(&mut self.clamp_lo)
+                                .speed(0.5)
+                                .range(0.0..=50.0),
+                        );
+                        ui.end_row();
+                        ui.label("clamp hi");
+                        ui.add(
+                            egui::DragValue::new(&mut self.clamp_hi)
+                                .speed(0.5)
+                                .range(0.0..=50.0),
+                        );
+                        ui.end_row();
+                    });
+
+                ui.separator();
+                // column 3: file-loading mode + graph type
+                egui::Grid::new("autobk_col3")
+                    .num_columns(2)
+                    .spacing([6.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Loading");
+                        egui::ComboBox::from_id_salt("autobk_loading")
+                            .selected_text(self.loading.label())
+                            .show_ui(ui, |ui| {
+                                for l in LoadingType::ALL {
+                                    ui.selectable_value(&mut self.loading, l, l.label());
+                                }
+                            });
+                        ui.end_row();
+                        ui.label("Graph");
+                        egui::ComboBox::from_id_salt("autobk_graph")
+                            .selected_text(self.graph.label())
+                            .show_ui(ui, |ui| {
+                                for g in GraphType::ALL {
+                                    if ui.selectable_value(&mut self.graph, g, g.label()).clicked()
+                                    {
+                                        replot = true;
+                                    }
+                                }
+                            });
+                        ui.end_row();
+                    });
             });
-        ui.add(egui::Slider::new(&mut self.clamp_hi, 0.0..=50.0).text("clamp hi"));
-
-        ui.add_space(4.0);
-        if ui.button("Run reduction").clicked() {
-            action = Some(ReductionAction::Run);
-        }
-
-        ui.separator();
-        ui.label("Graph:");
-        ui.horizontal_wrapped(|ui| {
-            for g in GraphType::ALL {
-                if ui.selectable_value(&mut self.graph, g, g.label()).clicked() {
-                    action.get_or_insert(ReductionAction::Replot);
-                }
-            }
         });
-
-        action
+        replot
     }
 }
 

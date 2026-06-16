@@ -16,7 +16,7 @@ use crate::feffit_ui::{FeffitAction, FeffitUi};
 use crate::import::{ImportAction, ImportState};
 use crate::mback_ui::MbackWindow;
 use crate::plot_data::PlotDataWindow;
-use crate::reduce_ui::{GraphType, ReductionAction, ReductionUi};
+use crate::reduce_ui::{GraphType, LoadingType, ReductionUi, TheoryStd};
 use crate::wavelet::{WaveletAction, WaveletWindow, morlet_cwt};
 use crate::xanes_ui::XanesWindow;
 
@@ -206,6 +206,65 @@ impl XafsViewApp {
                 self.import = Some(ImportState::new(cf));
             }
             Err(e) => self.status = format!("Open failed: {e}"),
+        }
+    }
+
+    /// "Open New file": route the chosen file by the Loading-file-type ring.
+    /// `chi.dat` loads χ(k) directly; the μ(E) modes go through the column
+    /// chooser (which adapts to a raw multi-column file or a 2-column μ file).
+    fn open_new_file(&mut self) {
+        match self.reduction.loading {
+            LoadingType::ChiDat => self.open_chi_dat(),
+            LoadingType::CalcXmu | LoadingType::LoadXmu => self.open_file(),
+        }
+    }
+
+    /// Load a FEFF `chi.dat` directly as a χ(k)-only group (no μ(E)).
+    fn open_chi_dat(&mut self) {
+        let mut dlg = rfd::FileDialog::new();
+        if let Some(dir) = &self.session.folders.data_dir {
+            dlg = dlg.set_directory(dir);
+        }
+        let Some(path) = dlg.pick_file() else {
+            return;
+        };
+        match xasdata::read_chi_dat(&path) {
+            Ok((k, chi)) => {
+                let label = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| format!("chi{}", self.session.groups.len() + 1));
+                let n = k.len();
+                let mut g = XasGroup::from_chi(label, k, chi);
+                g.filename = Some(path.clone());
+                self.session.add_group(g);
+                self.reduction.graph = GraphType::KChi;
+                self.plot_data.mark_dirty();
+                self.replot_graph();
+                self.status = format!("Loaded χ(k): {n} points from {}", path.display());
+            }
+            Err(e) => self.status = format!("chi.dat open failed: {e}"),
+        }
+    }
+
+    /// Load a FEFF `chi.dat` as the **Theory** standard — the `k_std`/`chi_std`
+    /// constraint applied by AUTOBK so the background does not absorb real
+    /// first-shell amplitude.
+    fn open_theory_file(&mut self) {
+        let mut dlg = rfd::FileDialog::new();
+        if let Some(dir) = &self.session.folders.data_dir {
+            dlg = dlg.set_directory(dir);
+        }
+        let Some(path) = dlg.pick_file() else {
+            return;
+        };
+        match xasdata::read_chi_dat(&path) {
+            Ok((k, chi)) => {
+                let n = k.len();
+                self.reduction.theory = Some(TheoryStd { path, k, chi });
+                self.status = format!("Loaded theory χ(k) standard: {n} points");
+            }
+            Err(e) => self.status = format!("Theory open failed: {e}"),
         }
     }
 
@@ -690,42 +749,127 @@ impl XafsViewApp {
     /// The Autobk tab: import + reduction controls on the left, plot on the right.
     fn autobk_tab(&mut self, ui: &mut egui::Ui) {
         let mut open_clicked = false;
+        let mut start_clicked = false;
+        let mut exit_clicked = false;
         let mut edit_clicked = false;
+        let mut theory_pick = false;
+        let mut theory_clear = false;
         let mut import_action = None;
-        let mut reduction_action = None;
-        let has_group = self
+        let mut replot = false;
+
+        // μ(E)-dependent actions (Autobk Start, Edit μ(E)) need a real spectrum,
+        // not a directly-loaded χ(k) group.
+        let has_mu = self
             .session
             .current_group()
             .is_some_and(|g| !g.mu.is_empty());
+        let data_file = self
+            .session
+            .current_group()
+            .and_then(|g| g.filename.as_ref())
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().into_owned());
+        let theory_name = self
+            .reduction
+            .theory
+            .as_ref()
+            .and_then(|t| t.path.file_name())
+            .map(|s| s.to_string_lossy().into_owned());
 
         egui::Panel::left("autobk_controls")
             .resizable(true)
-            .default_size(340.0)
+            .default_size(360.0)
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.heading("Autobk");
+
+                    // info rows: Title (group label) / Data File / Theory standard
+                    egui::Grid::new("autobk_info")
+                        .num_columns(2)
+                        .spacing([6.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Title");
+                            match self.session.current_group_mut() {
+                                Some(g) => {
+                                    ui.text_edit_singleline(&mut g.label);
+                                }
+                                None => {
+                                    ui.weak("— no data —");
+                                }
+                            }
+                            ui.end_row();
+
+                            ui.label("Data File");
+                            match &data_file {
+                                Some(name) => {
+                                    ui.monospace(name.as_str());
+                                }
+                                None => {
+                                    ui.weak("—");
+                                }
+                            }
+                            ui.end_row();
+
+                            ui.label("Theory");
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button("Load…")
+                                    .on_hover_text(
+                                        "FEFF chi.dat standard for the background constraint",
+                                    )
+                                    .clicked()
+                                {
+                                    theory_pick = true;
+                                }
+                                match &theory_name {
+                                    Some(name) => {
+                                        ui.monospace(name.as_str());
+                                        if ui.small_button("✕").clicked() {
+                                            theory_clear = true;
+                                        }
+                                    }
+                                    None => {
+                                        ui.weak("(none)");
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                        });
+
+                    // column chooser, shown while a raw / μ file is open
+                    if let Some(import) = self.import.as_mut() {
+                        ui.separator();
+                        import_action = import.ui(ui);
+                    }
+
+                    // the "Autobk parameters" grid (+ loading mode + graph type)
+                    ui.separator();
+                    replot = self.reduction.controls(ui);
+
+                    // button cluster: Open New file / Autobk Start / Exit / Edit μ(E)
+                    ui.separator();
                     ui.horizontal(|ui| {
-                        if ui.button("Open data file…").clicked() {
+                        if ui.button("Open New file").clicked() {
                             open_clicked = true;
                         }
                         if ui
-                            .add_enabled(has_group, egui::Button::new("Edit μ(E)…"))
+                            .add_enabled(has_mu, egui::Button::new("Autobk Start"))
+                            .clicked()
+                        {
+                            start_clicked = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Exit").clicked() {
+                            exit_clicked = true;
+                        }
+                        if ui
+                            .add_enabled(has_mu, egui::Button::new("Edit μ(E)"))
                             .clicked()
                         {
                             edit_clicked = true;
                         }
                     });
-                    ui.separator();
-                    match self.import.as_mut() {
-                        Some(import) => import_action = import.ui(ui),
-                        None => {
-                            ui.weak("Open a beamline column file to build μ(E).");
-                        }
-                    }
-                    if has_group {
-                        ui.separator();
-                        reduction_action = self.reduction.controls(ui);
-                    }
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -733,18 +877,28 @@ impl XafsViewApp {
         });
 
         if open_clicked {
-            self.open_file();
+            self.open_new_file();
         }
-        if edit_clicked {
-            self.open_edit_xmu();
+        if theory_pick {
+            self.open_theory_file();
+        }
+        if theory_clear {
+            self.reduction.theory = None;
         }
         if let Some(ImportAction::CalcXmu) = import_action {
             self.calc_xmu();
         }
-        match reduction_action {
-            Some(ReductionAction::Run) => self.run_reduction(),
-            Some(ReductionAction::Replot) => self.replot_graph(),
-            None => {}
+        if start_clicked {
+            self.run_reduction();
+        }
+        if edit_clicked {
+            self.open_edit_xmu();
+        }
+        if exit_clicked {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if replot {
+            self.replot_graph();
         }
     }
 
