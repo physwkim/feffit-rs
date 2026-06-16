@@ -12,9 +12,10 @@ use eframe::egui_wgpu::RenderState;
 use siplot::{DataMargins, Plot1D, PlotId};
 
 /// Fraction of the data range left blank on each side of the data extent, so
-/// samples at the extremes are not hidden by the axis frame. Matches
-/// matplotlib's default `axes.margins` (0.05).
-const DATA_MARGIN: f64 = 0.05;
+/// samples at the extremes are lifted just off the axis frame without wasting
+/// visible area (matplotlib's `axes.margins` default of 0.05 leaves too much
+/// blank space for the spiky XANES/EXAFS curves seen here).
+const DATA_MARGIN: f64 = 0.02;
 
 /// Build a [`Plot1D`] with the house data margins applied. All GUI plots are
 /// constructed through this so none can forget the margin — siplot defaults
