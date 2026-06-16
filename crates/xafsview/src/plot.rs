@@ -75,11 +75,14 @@ pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
         return;
     }
 
-    // Float the legend in the data area's top-right corner. A foreground `Area`
-    // paints above the canvas and keeps the legend rows interactive (click to
-    // select, eye icon to toggle visibility); `constrain_to` keeps it inside the
-    // axes if it would otherwise overflow. The id is keyed by plot id so several
-    // plots (Autobk / Feffit / Plot Data) get distinct overlays.
+    // Float the legend over the canvas — by default in the data area's top-right
+    // corner, draggable from anywhere on it (no handle): a movable foreground
+    // `Area` holds the legend, and egui's hit test routes a *drag* to the movable
+    // Area while a *click* still reaches the rows beneath. siplot's rows sense
+    // click only, so `hit_test` reports click→row, drag→Area (egui hit_test.rs:
+    // "the top Button and the ScrollArea behind it"); the user grabs the labels
+    // themselves to move it. egui remembers the dragged spot (keyed by plot id)
+    // and `constrain_to` keeps it within the axes.
     const PAD: f32 = 6.0;
     let legend_id = egui::Id::new(plot.backend().plot().id).with("legend_overlay");
     let win = ui.visuals().window_fill;
@@ -87,15 +90,24 @@ pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     egui::Area::new(legend_id)
         .order(egui::Order::Foreground)
+        .movable(true)
         .constrain_to(area)
-        .fixed_pos(area.right_top() + egui::vec2(-PAD, PAD))
+        .default_pos(area.right_top() + egui::vec2(-PAD, PAD))
         .pivot(egui::Align2::RIGHT_TOP)
         .show(&ctx, |ui| {
             egui::Frame::popup(ui.style()).fill(bg).show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.set_max_width((area.width() * 0.45).clamp(90.0, 200.0));
+                    // Disable drag-to-scroll: the ScrollArea sits above the Area
+                    // and would otherwise sense the drag and scroll instead of
+                    // letting the movable Area move. Scrollbar + wheel still scroll
+                    // an overflowing legend (only the `drag` source is turned off).
                     egui::ScrollArea::vertical()
                         .max_height((area.height() - 2.0 * PAD).max(40.0))
+                        .scroll_source(egui::scroll_area::ScrollSource {
+                            drag: false,
+                            ..Default::default()
+                        })
                         .show(ui, |ui| {
                             plot.show_legend(ui);
                         });
