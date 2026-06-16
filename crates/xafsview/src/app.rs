@@ -576,18 +576,31 @@ impl XafsViewApp {
     /// The Feffit tab: fit controls on the left, data-vs-model plot on the right.
     fn feffit_tab(&mut self, ui: &mut egui::Ui) {
         let mut feffit_action = None;
+        // The original Feffit form's bottom "Exit" button is tab chrome, not part
+        // of the reusable control set the batch window also renders, so it lives
+        // in this wrapper rather than in `FeffitUi::controls`. Hide Log / Load
+        // result / Send to plot data don't map to the engine and are omitted per
+        // the functional-only field rule.
+        let mut exit = false;
         egui::Panel::left("feffit_controls")
             .resizable(true)
             .default_size(380.0)
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     feffit_action = self.feffit.controls(ui);
+                    ui.separator();
+                    if ui.button("Exit").clicked() {
+                        exit = true;
+                    }
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });
 
+        if exit {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         match feffit_action {
             Some(FeffitAction::AddPath) => self.add_feff_path(),
             Some(FeffitAction::Run) => self.run_feffit(),
