@@ -141,7 +141,7 @@ impl LcfWindow {
                     });
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     if self.dirty {
-                        self.rebuild_plot();
+                        self.rebuild_plot(groups);
                         self.dirty = false;
                     }
                     crate::plot::show(&mut self.plot, ui);
@@ -163,15 +163,21 @@ impl LcfWindow {
             .and_then(|i| groups.get(i))
             .map(|g| g.label.clone())
             .unwrap_or_else(|| "— pick target —".to_owned());
+        let mut target_changed = false;
         egui::ComboBox::from_label("Target")
             .selected_text(target_label)
             .show_ui(ui, |ui| {
                 for (i, g) in groups.iter().enumerate() {
                     if g.norm.is_some() {
-                        ui.selectable_value(&mut self.target, Some(i), &g.label);
+                        target_changed |= ui
+                            .selectable_value(&mut self.target, Some(i), &g.label)
+                            .clicked();
                     }
                 }
             });
+        if target_changed {
+            self.dirty = true;
+        }
         // Seed the fit range from the target's energy span the first time.
         if !self.seeded
             && let Some((e, _)) = self
@@ -185,7 +191,9 @@ impl LcfWindow {
             self.seeded = true;
         }
 
-        array_toggle(ui, &mut self.use_flat);
+        if array_toggle(ui, &mut self.use_flat) {
+            self.dirty = true;
+        }
         ui.horizontal(|ui| {
             ui.label("E range");
             ui.add(egui::DragValue::new(&mut self.emin).speed(1.0));
@@ -194,7 +202,9 @@ impl LcfWindow {
 
         ui.separator();
         ui.strong("Standards");
-        group_checkboxes(ui, groups, &mut self.components);
+        if group_checkboxes(ui, groups, &mut self.components) {
+            self.dirty = true;
+        }
 
         ui.separator();
         let ncomp = self.selected_components(groups).len();
@@ -265,19 +275,42 @@ impl LcfWindow {
         self.dirty = true;
     }
 
-    fn rebuild_plot(&mut self) {
+    fn rebuild_plot(&mut self, groups: &[XasGroup]) {
         self.plot.clear();
-        let Some(r) = &self.result else { return };
         self.plot.set_graph_x_label("Energy (eV)");
         self.plot
             .set_graph_y_label(if self.use_flat { "flat" } else { "norm" }, YAxis::Left);
-        self.plot
-            .add_curve_with_legend(&r.grid, &r.target, BLUE, "data");
-        self.plot
-            .add_curve_with_legend(&r.grid, &r.yfit, RED, "fit");
-        let resid: Vec<f64> = r.target.iter().zip(&r.yfit).map(|(d, f)| d - f).collect();
-        self.plot
-            .add_curve_with_legend(&r.grid, &resid, GREEN, "residual");
+
+        // After a fit: the data on the common grid, the fitted combination, and
+        // the residual.
+        if let Some(r) = &self.result {
+            self.plot
+                .add_curve_with_legend(&r.grid, &r.target, BLUE, "data");
+            self.plot
+                .add_curve_with_legend(&r.grid, &r.yfit, RED, "fit");
+            let resid: Vec<f64> = r.target.iter().zip(&r.yfit).map(|(d, f)| d - f).collect();
+            self.plot
+                .add_curve_with_legend(&r.grid, &resid, GREEN, "residual");
+            return;
+        }
+
+        // No fit yet: show the picked target and the selected standards on their
+        // native grids so the data is visible while the fit is being set up (the
+        // plot is never blank, even with a single loaded group).
+        if let Some((e, a)) = self
+            .target
+            .and_then(|i| groups.get(i))
+            .and_then(|g| array_xy(g, self.use_flat))
+        {
+            self.plot.add_curve_with_legend(e, a, BLUE, "target");
+        }
+        for (n, ci) in self.selected_components(groups).into_iter().enumerate() {
+            if let Some((e, a)) = groups.get(ci).and_then(|g| array_xy(g, self.use_flat)) {
+                let c = PALETTE[(n + 1) % PALETTE.len()];
+                self.plot
+                    .add_curve_with_legend(e, a, c, groups[ci].label.clone());
+            }
+        }
     }
 
     fn results(&mut self, ui: &mut egui::Ui) {
@@ -385,7 +418,7 @@ impl PcaWindow {
                     });
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     if self.dirty {
-                        self.rebuild_plot();
+                        self.rebuild_plot(groups);
                         self.dirty = false;
                     }
                     crate::plot::show(&mut self.plot, ui);
@@ -411,7 +444,9 @@ impl PcaWindow {
             self.seeded = true;
         }
 
-        array_toggle(ui, &mut self.use_flat);
+        if array_toggle(ui, &mut self.use_flat) {
+            self.dirty = true;
+        }
         ui.horizontal(|ui| {
             ui.label("E range");
             ui.add(egui::DragValue::new(&mut self.emin).speed(1.0));
@@ -420,7 +455,9 @@ impl PcaWindow {
 
         ui.separator();
         ui.strong("Training set");
-        group_checkboxes(ui, groups, &mut self.training);
+        if group_checkboxes(ui, groups, &mut self.training) {
+            self.dirty = true;
+        }
 
         ui.separator();
         let ntrain = self.training.iter().filter(|b| **b).count();
@@ -506,10 +543,31 @@ impl PcaWindow {
         self.dirty = true;
     }
 
-    fn rebuild_plot(&mut self) {
+    fn rebuild_plot(&mut self, groups: &[XasGroup]) {
         self.plot.clear();
-        let Some(t) = &self.trained else { return };
         self.plot.set_graph_x_label("Energy (eV)");
+        let Some(t) = &self.trained else {
+            // Not trained yet: show the selected training spectra on their native
+            // grids so the input set is visible (there is no decomposition to draw
+            // until Train is pressed).
+            self.plot
+                .set_graph_y_label(if self.use_flat { "flat" } else { "norm" }, YAxis::Left);
+            let train_idx: Vec<usize> = self
+                .training
+                .iter()
+                .enumerate()
+                .filter(|(_, on)| **on)
+                .map(|(i, _)| i)
+                .collect();
+            for (n, i) in train_idx.into_iter().enumerate() {
+                if let Some((e, a)) = groups.get(i).and_then(|g| array_xy(g, self.use_flat)) {
+                    let c = PALETTE[n % PALETTE.len()];
+                    self.plot
+                        .add_curve_with_legend(e, a, c, groups[i].label.clone());
+                }
+            }
+            return;
+        };
         if let Some(r) = &self.reco {
             // Unknown vs reconstruction.
             self.plot.set_graph_y_label("PCA fit", YAxis::Left);
