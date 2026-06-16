@@ -3,7 +3,7 @@
 //!
 //! larch's `_calc_chi` supports two modes:
 //!   * `interp='lin'`    -> `numpy.interp` (linear, endpoint-clamped)
-//!   * `interp='cubic'`  -> `scipy.interpolate.UnivariateSpline(k, y, s=0)`  [default]
+//!   * `interp='cubic'`  -> `scipy.interpolate.UnivariateSpline(k, y, s=0)`  \[default\]
 //!
 //! [`interp_linear`] reproduces `numpy.interp` exactly. [`CubicSpline`] is a
 //! not-a-knot cubic interpolant; FITPACK's `s=0` cubic interpolation *is* the

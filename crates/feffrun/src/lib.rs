@@ -12,7 +12,7 @@
 //! ```
 //!
 //! The pipeline writes `feffNNNN.dat` into a working directory; parse them with
-//! [`feffdat::FeffDatFile`] (a dependency of the consumer, not of this crate).
+//! `feffdat::FeffDatFile` (a dependency of the consumer, not of this crate).
 //!
 //! Subprocess rather than FFI is deliberate: the boundary stays at the
 //! well-defined `feffNNNN.dat` file interface that `feffdat` already parses
