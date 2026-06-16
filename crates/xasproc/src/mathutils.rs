@@ -5,8 +5,11 @@
 //! Ported here: [`index_of`], [`index_nearest`], [`gradient`] (numpy
 //! `np.gradient`, unit spacing), [`remove_dups`], [`remove_nans2`],
 //! [`find_energy_step`], [`polyfit`] (numpy `Polynomial.fit` ordering),
-//! [`interp_linear`] (numpy `np.interp`, edge-clamped), and [`smooth`]
-//! (Lorentzian/Gaussian convolution smoothing).
+//! [`interp_linear`] (numpy `np.interp`, edge-clamped), [`interp_cubic`]
+//! (`larch.math.utils.interp` cubic), and [`smooth`] (Lorentzian/Gaussian
+//! convolution smoothing).
+
+use rusty_fitpack::{splev, splrep};
 
 /// `larch.xafs.xafsutils.KTOE` — `1e20 * hbar^2 / (2 m_e e)`, taken at the
 /// exact live `scipy.constants` value (the larch source comment
@@ -285,6 +288,73 @@ pub fn interp_linear(xnew: &[f64], x: &[f64], y: &[f64]) -> Vec<f64> {
             y[lo] + t * (y[lo + 1] - y[lo])
         })
         .collect()
+}
+
+/// `larch.math.utils.interp(x, y, xnew, kind='cubic')`: a FITPACK `splrep(s=0)`
+/// cubic spline inside the data range, with larch's endpoint extrapolation
+/// using an interpolating spline through the first/last 5 points (only when both
+/// `x` and `xnew` are ascending; otherwise out-of-range values are left as NaN).
+///
+/// Argument order matches larch's `interp`: `(x, y, xnew)`.
+pub fn interp_cubic(x: &[f64], y: &[f64], xnew: &[f64]) -> Vec<f64> {
+    let order = 3;
+    let (t, c, k) = splrep(
+        x.to_vec(),
+        y.to_vec(),
+        None,
+        None,
+        None,
+        Some(order),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    // in-range values; out-of-range filled below
+    let mut out = splev(t, c, k, xnew.to_vec(), 0);
+    let (x0, xl) = (x[0], x[x.len() - 1]);
+    let below: Vec<usize> = (0..xnew.len()).filter(|&i| xnew[i] < x0).collect();
+    let above: Vec<usize> = (0..xnew.len()).filter(|&i| xnew[i] > xl).collect();
+    if below.is_empty() && above.is_empty() {
+        return out;
+    }
+    let ascending = |a: &[f64]| a.windows(2).all(|w| w[1] >= w[0]);
+    if !ascending(x) || !ascending(xnew) {
+        for &i in below.iter().chain(&above) {
+            out[i] = f64::NAN;
+        }
+        return out;
+    }
+    let ncoef = 5.min(x.len());
+    for (span, sel_lo) in [(below, 0usize), (above, x.len() - ncoef)] {
+        if span.is_empty() {
+            continue;
+        }
+        let sx = x[sel_lo..sel_lo + ncoef].to_vec();
+        let sy = y[sel_lo..sel_lo + ncoef].to_vec();
+        let (t2, c2, k2) = splrep(
+            sx,
+            sy,
+            None,
+            None,
+            None,
+            Some(order),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let xs: Vec<f64> = span.iter().map(|&i| xnew[i]).collect();
+        let vals = splev(t2, c2, k2, xs, 0);
+        for (&i, v) in span.iter().zip(vals) {
+            out[i] = v;
+        }
+    }
+    out
 }
 
 /// Full discrete convolution `a * v` (numpy `np.convolve(a, v)`), length
