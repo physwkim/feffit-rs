@@ -55,35 +55,53 @@ pub fn toolbar(plot: &mut Plot1D, ui: &mut egui::Ui) {
     });
 }
 
-/// Render `plot` as one unit: its toolbar on top, the plot canvas filling the
-/// width, and a legend list down the right edge mapping each curve's
-/// color/symbol to the name set with `set_item_legend`. Every plot-bearing
-/// tab/window draws through this (instead of `toolbar` + `plot.show` by hand)
-/// so they all get the same toolbar *and* a visible legend — siplot draws no
-/// in-axes legend, so without this call the curve names never appear.
+/// Render `plot` as one unit: its toolbar on top, then the plot canvas filling
+/// the full width with the legend *overlaid* in the top-right corner of the data
+/// area (matplotlib-style), mapping each curve's color/symbol to the name set
+/// with `set_item_legend`. Every plot-bearing tab/window draws through this
+/// (instead of `toolbar` + `plot.show` by hand) so they all get the same toolbar
+/// *and* a visible legend — siplot draws no in-axes legend, so without this call
+/// the curve names never appear. The legend floats over the canvas (an egui
+/// `Area`) instead of taking a separate column, so it no longer steals width.
 pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
-    // The plot and legend sit side by side, but each side must lay its own
-    // contents out *top-down*: `horizontal_top` makes its children left-to-right
-    // and both `allocate_ui` and `ScrollArea` inherit that layout, which would
-    // make `show_legend` flow its rows sideways — every row but the first then
-    // overflows the narrow strip and is clipped (only one legend entry shows).
-    // Forcing each panel to `top_down` keeps the legend a vertical list.
-    let top_down = egui::Layout::top_down(egui::Align::Min);
     toolbar(plot, ui);
-    ui.horizontal_top(|ui| {
-        let avail = ui.available_size();
-        // A narrow legend strip on the right; the plot canvas fills the rest.
-        let legend_w = (avail.x * 0.22).clamp(90.0, 180.0).min(avail.x);
-        let plot_w = (avail.x - legend_w).max(0.0);
-        ui.allocate_ui_with_layout(egui::vec2(plot_w, avail.y), top_down, |ui| {
-            plot.show(ui);
-        });
-        ui.allocate_ui_with_layout(egui::vec2(legend_w, avail.y), top_down, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                plot.show_legend(ui);
+    // The canvas fills the whole width; `PlotResponse::transform` carries the
+    // data-area rectangle (screen points) that we anchor the legend overlay to.
+    let area = plot.show(ui).transform.area;
+
+    // An empty plot has nothing to label — skip the overlay so no stray box
+    // floats over a blank canvas.
+    if plot.get_items().is_empty() {
+        return;
+    }
+
+    // Float the legend in the data area's top-right corner. A foreground `Area`
+    // paints above the canvas and keeps the legend rows interactive (click to
+    // select, eye icon to toggle visibility); `constrain_to` keeps it inside the
+    // axes if it would otherwise overflow. The id is keyed by plot id so several
+    // plots (Autobk / Feffit / Plot Data) get distinct overlays.
+    const PAD: f32 = 6.0;
+    let legend_id = egui::Id::new(plot.backend().plot().id).with("legend_overlay");
+    let win = ui.visuals().window_fill;
+    let bg = egui::Color32::from_rgba_unmultiplied(win.r(), win.g(), win.b(), 220);
+    let ctx = ui.ctx().clone();
+    egui::Area::new(legend_id)
+        .order(egui::Order::Foreground)
+        .constrain_to(area)
+        .fixed_pos(area.right_top() + egui::vec2(-PAD, PAD))
+        .pivot(egui::Align2::RIGHT_TOP)
+        .show(&ctx, |ui| {
+            egui::Frame::popup(ui.style()).fill(bg).show(ui, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_max_width((area.width() * 0.45).clamp(90.0, 200.0));
+                    egui::ScrollArea::vertical()
+                        .max_height((area.height() - 2.0 * PAD).max(40.0))
+                        .show(ui, |ui| {
+                            plot.show_legend(ui);
+                        });
+                });
             });
         });
-    });
 }
 
 /// A "Symbol" menu that toggles data-point markers (shape + size) on every curve
