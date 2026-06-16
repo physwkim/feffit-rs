@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/feffdat", "crates/xafsft", "crates/feffit", "crates/params", "crates/lm", "crates/feffrun", "crates/xasproc"]
+members = ["crates/feffdat", "crates/xafsft", "crates/feffit", "crates/params", "crates/lm", "crates/feffrun", "crates/xasproc", "crates/xasdata"]
 
 [workspace.package]
 edition = "2024"
