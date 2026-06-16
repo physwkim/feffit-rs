@@ -288,6 +288,9 @@ pub struct FeffitUi {
     ft: FtSettings,
     space: PlotSpace,
     part: PlotPart,
+    /// Which path's parameter specs the path panel is showing (the original's
+    /// "Path index" selector); clamped to the path list.
+    selected_path: usize,
     result: Option<FeffitResult>,
     plot: Option<FeffitPlot>,
 }
@@ -306,6 +309,7 @@ impl Default for FeffitUi {
             ft: FtSettings::default(),
             space: PlotSpace::R,
             part: PlotPart::Mag,
+            selected_path: 0,
             result: None,
             plot: None,
         }
@@ -324,6 +328,7 @@ impl FeffitUi {
             ft: self.ft.clone(),
             space: self.space,
             part: self.part,
+            selected_path: 0,
             result: None,
             plot: None,
         }
@@ -466,122 +471,183 @@ impl FeffitUi {
     pub fn controls(&mut self, ui: &mut egui::Ui) -> Option<FeffitAction> {
         let mut action = None;
 
-        ui.heading("FEFFIT");
+        ui.heading("Feffit");
 
-        // --- Paths --------------------------------------------------------
-        ui.horizontal(|ui| {
-            ui.strong("Paths");
-            if ui.button("Add feff path…").clicked() {
-                action = Some(FeffitAction::AddPath);
-            }
-        });
-        let mut remove_path = None;
-        for (i, p) in self.paths.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut p.enabled, "");
-                ui.label(&p.label);
-                ui.weak(format!("reff={:.3} nleg={}", p.reff, p.nleg));
-                if ui.small_button("✕").clicked() {
-                    remove_path = Some(i);
-                }
-            });
-            egui::CollapsingHeader::new("path parameters")
-                .id_salt(("path_specs", i))
+        // --- Head param. (k/R Fourier-transform window) -------------------
+        // Original XAFSView "Head param." block: kmin/rmin, kmax/rmax, dk/dr,
+        // kweight/fit-space, k-window/R-window — two transform columns per row.
+        ui.group(|ui| {
+            ui.strong("Head param.");
+            egui::Grid::new("feffit_head")
+                .num_columns(4)
+                .spacing([6.0, 4.0])
                 .show(ui, |ui| {
-                    for (j, name) in PATH_PNAMES.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([56.0, 18.0], egui::Label::new(*name));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut p.specs[j]).desired_width(140.0),
-                            );
-                        });
+                    ui.label("kmin");
+                    ui.add(
+                        egui::DragValue::new(&mut self.ft.kmin)
+                            .speed(0.1)
+                            .range(0.0..=8.0),
+                    );
+                    ui.label("rmin");
+                    ui.add(
+                        egui::DragValue::new(&mut self.ft.rmin)
+                            .speed(0.05)
+                            .range(0.0..=4.0),
+                    );
+                    ui.end_row();
+                    ui.label("kmax");
+                    ui.add(
+                        egui::DragValue::new(&mut self.ft.kmax)
+                            .speed(0.1)
+                            .range(6.0..=20.0),
+                    );
+                    ui.label("rmax");
+                    ui.add(
+                        egui::DragValue::new(&mut self.ft.rmax)
+                            .speed(0.05)
+                            .range(1.0..=8.0),
+                    );
+                    ui.end_row();
+                    ui.label("dk");
+                    ui.add(
+                        egui::DragValue::new(&mut self.ft.dk)
+                            .speed(0.1)
+                            .range(0.0..=4.0),
+                    );
+                    ui.label("dr");
+                    ui.add(
+                        egui::DragValue::new(&mut self.ft.dr)
+                            .speed(0.05)
+                            .range(0.0..=2.0),
+                    );
+                    ui.end_row();
+                    ui.label("kweight");
+                    ui.add(egui::DragValue::new(&mut self.ft.kweight).range(0..=4));
+                    ui.label("fit space");
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.ft.fitspace, FitSpace::K, "k");
+                        ui.selectable_value(&mut self.ft.fitspace, FitSpace::R, "R");
+                        ui.selectable_value(&mut self.ft.fitspace, FitSpace::Q, "q");
+                    });
+                    ui.end_row();
+                    ui.label("k window");
+                    window_combo(ui, "feffit_kwin", &mut self.ft.kwindow);
+                    ui.label("R window");
+                    window_combo(ui, "feffit_rwin", &mut self.ft.rwindow);
+                    ui.end_row();
+                });
+        });
+
+        // --- Paths (a "Path index" selector + the chosen path's specs) ----
+        // The original shows one path's parameter block at a time, indexed by a
+        // "Path index" spinner; `selected_path` drives that selection.
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.strong("Paths");
+                if ui.button("Add feff path…").clicked() {
+                    action = Some(FeffitAction::AddPath);
+                }
+            });
+            if self.paths.is_empty() {
+                ui.weak("Add a feffNNNN.dat path file to fit.");
+            } else {
+                let n = self.paths.len();
+                if self.selected_path >= n {
+                    self.selected_path = n - 1;
+                }
+                let mut remove_path = None;
+                ui.horizontal(|ui| {
+                    ui.label("Path index");
+                    ui.add(egui::DragValue::new(&mut self.selected_path).range(0..=n - 1));
+                    let idx = self.selected_path;
+                    ui.checkbox(&mut self.paths[idx].enabled, "enable");
+                    if ui.small_button("✕").clicked() {
+                        remove_path = Some(idx);
                     }
                 });
-        }
-        if let Some(i) = remove_path {
-            self.paths.remove(i);
-        }
-        if self.paths.is_empty() {
-            ui.weak("Add a feffNNNN.dat path file to fit.");
-        }
-
-        ui.separator();
-        // --- Variables ----------------------------------------------------
-        ui.horizontal(|ui| {
-            ui.strong("Variables");
-            if ui.button("Add").clicked() {
-                self.params.push(ParamRow::var("new", 0.0));
+                let idx = self.selected_path;
+                {
+                    let p = &mut self.paths[idx];
+                    ui.weak(format!(
+                        "{}  (reff={:.3}, nleg={})",
+                        p.label, p.reff, p.nleg
+                    ));
+                    egui::Grid::new("feffit_path_specs")
+                        .num_columns(2)
+                        .spacing([6.0, 4.0])
+                        .show(ui, |ui| {
+                            for (j, name) in PATH_PNAMES.iter().enumerate() {
+                                ui.label(*name);
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut p.specs[j])
+                                        .desired_width(150.0),
+                                );
+                                ui.end_row();
+                            }
+                        });
+                }
+                if let Some(i) = remove_path {
+                    self.paths.remove(i);
+                    if self.selected_path >= self.paths.len() {
+                        self.selected_path = self.paths.len().saturating_sub(1);
+                    }
+                }
             }
         });
-        let mut remove_param = None;
-        for (i, row) in self.params.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut row.name).desired_width(72.0));
-                egui::ComboBox::from_id_salt(("pkind", i))
-                    .selected_text(kind_name(row.kind))
-                    .width(64.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut row.kind, ParamKind::Vary, "vary");
-                        ui.selectable_value(&mut row.kind, ParamKind::Fixed, "fixed");
-                        ui.selectable_value(&mut row.kind, ParamKind::Expr, "expr");
-                    });
-                match row.kind {
-                    ParamKind::Vary | ParamKind::Fixed => {
-                        ui.add(egui::DragValue::new(&mut row.value).speed(0.01));
-                    }
-                    ParamKind::Expr => {
-                        ui.add(egui::TextEdit::singleline(&mut row.expr).desired_width(120.0));
-                    }
-                }
-                if ui.small_button("✕").clicked() {
-                    remove_param = Some(i);
-                }
-            });
-        }
-        if let Some(i) = remove_param {
-            self.params.remove(i);
-        }
 
-        ui.separator();
-        // --- Fit transform ------------------------------------------------
-        egui::CollapsingHeader::new("Fit transform")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.add(egui::Slider::new(&mut self.ft.kmin, 0.0..=8.0).text("k min"));
-                ui.add(egui::Slider::new(&mut self.ft.kmax, 6.0..=20.0).text("k max"));
-                ui.horizontal(|ui| {
-                    ui.label("k-weight");
-                    ui.add(egui::DragValue::new(&mut self.ft.kweight).range(0..=4));
-                });
-                ui.add(egui::Slider::new(&mut self.ft.dk, 0.0..=4.0).text("dk"));
-                window_combo(ui, "k window", "kwin", &mut self.ft.kwindow);
-                ui.add(egui::Slider::new(&mut self.ft.rmin, 0.0..=4.0).text("R min"));
-                ui.add(egui::Slider::new(&mut self.ft.rmax, 1.0..=8.0).text("R max"));
-                ui.add(egui::Slider::new(&mut self.ft.dr, 0.0..=2.0).text("dr"));
-                window_combo(ui, "R window", "rwin", &mut self.ft.rwindow);
-                ui.horizontal(|ui| {
-                    ui.label("fit space");
-                    ui.selectable_value(&mut self.ft.fitspace, FitSpace::K, "k");
-                    ui.selectable_value(&mut self.ft.fitspace, FitSpace::R, "R");
-                    ui.selectable_value(&mut self.ft.fitspace, FitSpace::Q, "q");
-                });
+        // --- Global variables ---------------------------------------------
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.strong("Global variables");
+                if ui.button("Add").clicked() {
+                    self.params.push(ParamRow::var("new", 0.0));
+                }
             });
+            let mut remove_param = None;
+            for (i, row) in self.params.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut row.name).desired_width(72.0));
+                    egui::ComboBox::from_id_salt(("pkind", i))
+                        .selected_text(kind_name(row.kind))
+                        .width(64.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut row.kind, ParamKind::Vary, "vary");
+                            ui.selectable_value(&mut row.kind, ParamKind::Fixed, "fixed");
+                            ui.selectable_value(&mut row.kind, ParamKind::Expr, "expr");
+                        });
+                    match row.kind {
+                        ParamKind::Vary | ParamKind::Fixed => {
+                            ui.add(egui::DragValue::new(&mut row.value).speed(0.01));
+                        }
+                        ParamKind::Expr => {
+                            ui.add(egui::TextEdit::singleline(&mut row.expr).desired_width(120.0));
+                        }
+                    }
+                    if ui.small_button("✕").clicked() {
+                        remove_param = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove_param {
+                self.params.remove(i);
+            }
+        });
 
         ui.separator();
         if ui
-            .add_enabled(self.has_enabled_path(), egui::Button::new("Run fit"))
+            .add_enabled(self.has_enabled_path(), egui::Button::new("Run"))
             .clicked()
         {
             action = Some(FeffitAction::Run);
         }
 
-        // --- Plot space / part -------------------------------------------
+        // --- Graph item (space) / Graph type (component) ------------------
         ui.horizontal(|ui| {
-            ui.label("Plot:");
+            ui.label("Graph item");
             for (s, lbl) in [
-                (PlotSpace::K, "k"),
+                (PlotSpace::Q, "Q"),
                 (PlotSpace::R, "R"),
-                (PlotSpace::Q, "q"),
+                (PlotSpace::K, "K"),
             ] {
                 if ui.selectable_value(&mut self.space, s, lbl).clicked() {
                     action.get_or_insert(FeffitAction::Replot);
@@ -590,11 +656,12 @@ impl FeffitUi {
         });
         if self.space != PlotSpace::K {
             ui.horizontal(|ui| {
+                ui.label("Graph type");
                 for (p, lbl) in [
-                    (PlotPart::Mag, "mag"),
-                    (PlotPart::Re, "re"),
-                    (PlotPart::Im, "im"),
-                    (PlotPart::Pha, "pha"),
+                    (PlotPart::Re, "Re"),
+                    (PlotPart::Im, "Im"),
+                    (PlotPart::Mag, "Am"),
+                    (PlotPart::Pha, "Ph"),
                 ] {
                     if ui.selectable_value(&mut self.part, p, lbl).clicked() {
                         action.get_or_insert(FeffitAction::Replot);
@@ -603,20 +670,25 @@ impl FeffitUi {
             });
         }
 
-        // --- Statistics ---------------------------------------------------
+        // --- Feffit out data (statistics) ---------------------------------
         if let Some(res) = &self.result {
             ui.separator();
-            ui.strong("Statistics");
+            ui.strong("Feffit out data");
             egui::Grid::new("feffit_stats")
                 .num_columns(2)
                 .show(ui, |ui| {
-                    stat_row(ui, "χ²", res.chi_square);
-                    stat_row(ui, "reduced χ²", res.chi2_reduced);
-                    stat_row(ui, "R-factor", res.rfactor);
-                    stat_row(ui, "n_idp", res.n_idp);
-                    ui.label("nvarys / nfree");
-                    ui.monospace(format!("{} / {}", res.nvarys, res.nfree));
+                    ui.label("ind. points");
+                    ui.monospace(format!("{:.1}", res.n_idp));
                     ui.end_row();
+                    ui.label("variable #");
+                    ui.monospace(format!("{}", res.nvarys));
+                    ui.end_row();
+                    ui.label("deg of free");
+                    ui.monospace(format!("{}", res.nfree));
+                    ui.end_row();
+                    stat_row(ui, "red. χ²", res.chi2_reduced);
+                    stat_row(ui, "χ²", res.chi_square);
+                    stat_row(ui, "R-factor", res.rfactor);
                     stat_row(ui, "AIC", res.aic);
                     stat_row(ui, "BIC", res.bic);
                 });
@@ -649,10 +721,11 @@ fn stat_row(ui: &mut egui::Ui, label: &str, value: f64) {
     ui.end_row();
 }
 
-/// Combo box for choosing an FT window.
-fn window_combo(ui: &mut egui::Ui, label: &str, salt: &str, win: &mut Window) {
+/// Combo box for choosing an FT window. Bare (no inline label) so it can sit in
+/// a labelled grid cell of the "Head param." block.
+fn window_combo(ui: &mut egui::Ui, salt: &str, win: &mut Window) {
     egui::ComboBox::from_id_salt(salt)
-        .selected_text(format!("{label}: {}", window_name(*win)))
+        .selected_text(window_name(*win))
         .show_ui(ui, |ui| {
             for w in [
                 Window::Hanning,
