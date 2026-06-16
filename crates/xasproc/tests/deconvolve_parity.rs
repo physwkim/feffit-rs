@@ -66,7 +66,7 @@ fn check(name: &str, got: &[f64], want: &[(usize, f64)], tol: f64) -> f64 {
 #[test]
 fn deconvolve_matches_larch() {
     let (energy, mu) = load_xmu();
-    let pe = pre_edge(&energy, &mu, &PreEdgeParams::defaults());
+    let pe = pre_edge(&energy, &mu, &PreEdgeParams::default());
     let r = load_ref();
 
     // deconvolve uses pre_edge's normalized mu on the cleaned energy grid

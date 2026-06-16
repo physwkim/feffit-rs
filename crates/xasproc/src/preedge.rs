@@ -29,7 +29,7 @@ fn round_half_even(x: f64) -> f64 {
 }
 
 /// Tunable inputs to [`pre_edge`]; `None` reproduces larch's auto-defaults.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PreEdgeParams {
     pub e0: Option<f64>,
     pub step: Option<f64>,
@@ -43,13 +43,26 @@ pub struct PreEdgeParams {
     pub make_flat: bool,
 }
 
-impl PreEdgeParams {
-    /// larch's defaults: `npre=1`, `make_flat=true`, everything else auto.
-    pub fn defaults() -> Self {
+impl Default for PreEdgeParams {
+    /// larch's `pre_edge` defaults: a linear pre-edge (`npre=1`) and a flattened
+    /// post-edge (`make_flat=true`); `E0`/step/ranges/`nnorm` auto-chosen.
+    ///
+    /// `npre`/`make_flat` are deliberately *not* the all-zero/false values a
+    /// `derive(Default)` would give — those produce a constant pre-edge and skip
+    /// flattening (`flat == norm`), silently diverging from larch. This is the
+    /// single canonical constructor so no call site can pick the non-larch one.
+    fn default() -> Self {
         PreEdgeParams {
+            e0: None,
+            step: None,
+            nnorm: None,
+            nvict: 0,
             npre: 1,
+            pre1: None,
+            pre2: None,
+            norm1: None,
+            norm2: None,
             make_flat: true,
-            ..Default::default()
         }
     }
 }

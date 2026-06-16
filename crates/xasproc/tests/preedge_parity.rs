@@ -67,7 +67,7 @@ fn rel(g: f64, w: f64) -> f64 {
 fn pre_edge_matches_larch() {
     let (energy, mu) = load_xmu();
     let r = load_ref();
-    let pe = pre_edge(&energy, &mu, &PreEdgeParams::defaults());
+    let pe = pre_edge(&energy, &mu, &PreEdgeParams::default());
 
     // scalars
     assert_eq!(pe.e0, r.scalars["e0"], "e0");
