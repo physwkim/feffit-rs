@@ -177,6 +177,18 @@ impl ColumnFile {
     }
 }
 
+/// Read a FEFF `chi.dat` (or any ≥2-column k/χ text file): the first numeric
+/// column is `k`, the second is `χ`. Header / comment lines (`#`-prefixed FEFF
+/// headers, including the `# k chi mag phase` column header) are skipped by the
+/// same data-block detection [`ColumnFile`] uses. Errors with [`ReadError::NoData`]
+/// when fewer than two numeric columns are present.
+pub fn read_chi_dat(path: impl AsRef<Path>) -> Result<(Vec<f64>, Vec<f64>), ReadError> {
+    let cf = ColumnFile::from_path(path)?;
+    let k = cf.column(0).ok_or(ReadError::NoData)?.to_vec();
+    let chi = cf.column(1).ok_or(ReadError::NoData)?.to_vec();
+    Ok((k, chi))
+}
+
 /// Best-guess column roles (indices into [`ColumnFile::columns`]).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RoleGuess {
@@ -321,5 +333,27 @@ mod tests {
         let cf = ColumnFile::from_text(text).unwrap();
         assert_eq!(cf.nrows(), 2);
         assert_eq!(cf.ncols(), 2);
+    }
+
+    #[test]
+    fn read_chi_dat_skips_feff_header_and_takes_k_chi() {
+        // FEFF chi.dat shape: '#'-commented header (incl. the dashed rule and
+        // the `# k chi mag phase` column header) then 4 numeric columns.
+        let text = "# Some FEFF header\n# Mu=-0.6 kf=2.1\n\
+                    #  -----------\n#       k          chi          mag           phase\n\
+                        0.0500    2.705808E-01  2.719035E-01  1.472117E+00\n\
+                        0.1000   -2.710386E-01  2.721822E-01  1.479092E+00\n";
+        let cf = ColumnFile::from_text(text).unwrap();
+        assert_eq!(cf.ncols(), 4);
+        assert_eq!(cf.column(0), Some([0.05, 0.10].as_slice()));
+        assert_eq!(cf.column(1), Some([0.2705808, -0.2710386].as_slice()));
+
+        // read_chi_dat round-trips the same content from disk, taking cols 0/1.
+        let path = std::env::temp_dir().join("xasdata_read_chi_dat_test.dat");
+        std::fs::write(&path, text).unwrap();
+        let (k, chi) = read_chi_dat(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(k, vec![0.05, 0.10]);
+        assert_eq!(chi, vec![0.2705808, -0.2710386]);
     }
 }

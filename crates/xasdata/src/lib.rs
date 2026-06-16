@@ -23,7 +23,7 @@ pub mod xmu;
 pub use batch::{average_curves, make_xmu_batch, peak_in_range, reduce_all, resample_matrix};
 pub use clean::{RangeSide, SmoothForm, deglitch_point, deglitch_range, smooth_mu, trim};
 pub use group::{Folders, Session, XasGroup};
-pub use reader::{ColumnFile, ReadError, RoleGuess};
+pub use reader::{ColumnFile, ReadError, RoleGuess, read_chi_dat};
 pub use reduce::{FtParams, autobk_group, normalize, xftf_group};
 pub use xmu::{MuSpec, XmuError, build_mu};
 

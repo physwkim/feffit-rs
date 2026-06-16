@@ -95,6 +95,18 @@ impl XasGroup {
         }
     }
 
+    /// A group holding only `χ(k)` (e.g. a loaded FEFF `chi.dat`), labelled
+    /// `label`. `energy`/`mu` stay empty; the FT and FEFFIT can still run on the
+    /// `k`/`chi` arrays.
+    pub fn from_chi(label: impl Into<String>, k: Vec<f64>, chi: Vec<f64>) -> Self {
+        Self {
+            label: label.into(),
+            k: Some(k),
+            chi: Some(chi),
+            ..Default::default()
+        }
+    }
+
     /// Number of points in the raw spectrum.
     pub fn len(&self) -> usize {
         self.energy.len()
