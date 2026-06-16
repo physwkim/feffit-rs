@@ -14,6 +14,7 @@ mod feffit_batch;
 mod feffit_ui;
 mod import;
 mod mback_ui;
+mod plot;
 mod plot_data;
 mod reduce_ui;
 mod wavelet;

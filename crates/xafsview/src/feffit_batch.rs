@@ -58,7 +58,7 @@ impl FeffitBatch {
     /// Build the window with its own plot (use a distinct `PlotId` from the tabs'
     /// shared plot and the Plot Data window).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = Plot1D::new(render_state, 2);
+        let mut plot = crate::plot::new_plot1d(render_state, 2);
         plot.set_graph_title("Feffit batch");
         Self {
             open: false,

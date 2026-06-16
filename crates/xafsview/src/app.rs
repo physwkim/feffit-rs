@@ -120,7 +120,7 @@ impl XafsViewApp {
             .as_ref()
             .expect("eframe must use the wgpu renderer (NativeOptions.renderer = Wgpu)");
 
-        let mut plot = Plot1D::new(render_state, 0);
+        let mut plot = crate::plot::new_plot1d(render_state, 0);
         plot.set_graph_title("XAFSView");
         plot.set_graph_x_label("Energy (eV)");
         plot.set_graph_y_label("μ(E)", siplot::YAxis::Left);

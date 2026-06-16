@@ -59,7 +59,7 @@ pub struct XanesWindow {
 impl XanesWindow {
     /// Build the window with its own plot (`PlotId` 5).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = Plot1D::new(render_state, 5);
+        let mut plot = crate::plot::new_plot1d(render_state, 5);
         plot.set_graph_title("XANES");
         Self {
             open: false,

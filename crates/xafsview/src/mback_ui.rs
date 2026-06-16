@@ -80,7 +80,7 @@ pub struct MbackWindow {
 impl MbackWindow {
     /// Build the window with its own plot (`PlotId` 6).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = Plot1D::new(render_state, 6);
+        let mut plot = crate::plot::new_plot1d(render_state, 6);
         plot.set_graph_title("MBACK");
         Self {
             open: false,

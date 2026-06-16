@@ -121,7 +121,7 @@ impl PlotDataWindow {
     /// Build the window with its own plot (use a distinct `PlotId` from the
     /// tabs' shared plot).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = Plot1D::new(render_state, 1);
+        let mut plot = crate::plot::new_plot1d(render_state, 1);
         plot.set_graph_title("Plot Data");
         Self {
             open: false,

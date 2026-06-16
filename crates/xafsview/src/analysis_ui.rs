@@ -100,7 +100,7 @@ pub struct LcfWindow {
 impl LcfWindow {
     /// Build the window with its own plot (`PlotId` 3).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = Plot1D::new(render_state, 3);
+        let mut plot = crate::plot::new_plot1d(render_state, 3);
         plot.set_graph_title("LCF");
         Self {
             open: false,
@@ -341,7 +341,7 @@ pub struct PcaWindow {
 impl PcaWindow {
     /// Build the window with its own plot (`PlotId` 4).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = Plot1D::new(render_state, 4);
+        let mut plot = crate::plot::new_plot1d(render_state, 4);
         plot.set_graph_title("PCA");
         Self {
             open: false,
