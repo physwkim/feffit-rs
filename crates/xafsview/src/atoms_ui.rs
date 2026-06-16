@@ -109,35 +109,6 @@ impl AtomsTab {
         });
         ui.separator();
 
-        // Pin the Execute/Exit row + build status at the bottom (그림 1-2-4) so
-        // they are always visible; the cell inputs scroll above. Reload (re-read
-        // atoms.inp from disk) has no file source for the structured builder, so
-        // it is omitted per the functional-only field rule.
-        egui::Panel::bottom("atoms_actions").show_inside(ui, |ui| {
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                    action = Some(AtomsAction::Exit);
-                }
-                if crate::widgets::primary(ui, "Execute", crate::widgets::ROW_BTN, true)
-                    .on_hover_text("Build feff.inp from the cell")
-                    .clicked()
-                {
-                    action = self.build(feff_inp);
-                }
-            });
-            match &self.status {
-                Some(Ok(msg)) => {
-                    ui.colored_label(GREEN, msg);
-                }
-                Some(Err(e)) => {
-                    ui.colored_label(RED, e);
-                }
-                None => {}
-            }
-            ui.add_space(4.0);
-        });
-
         egui::CentralPanel::default().show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -259,6 +230,32 @@ impl AtomsTab {
                             .range(1.0..=12.0),
                     );
                 });
+
+                // Execute / Exit row + build status, directly below the cell
+                // inputs (그림 1-2-4) — no pinned-bottom gap. Reload (re-read
+                // atoms.inp from disk) has no file source for the structured
+                // builder, so it is omitted per the functional-only field rule.
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
+                        action = Some(AtomsAction::Exit);
+                    }
+                    if crate::widgets::primary(ui, "Execute", crate::widgets::ROW_BTN, true)
+                        .on_hover_text("Build feff.inp from the cell")
+                        .clicked()
+                    {
+                        action = self.build(feff_inp);
+                    }
+                });
+                match &self.status {
+                    Some(Ok(msg)) => {
+                        ui.colored_label(GREEN, msg);
+                    }
+                    Some(Err(e)) => {
+                        ui.colored_label(RED, e);
+                    }
+                    None => {}
+                }
             });
         });
         action

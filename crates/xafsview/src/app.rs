@@ -586,18 +586,13 @@ impl XafsViewApp {
             .resizable(true)
             .default_size(380.0)
             .show_inside(ui, |ui| {
-                // Pin Exit at the bottom (always visible); the controls scroll above.
-                egui::Panel::bottom("feffit_actions").show_inside(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    feffit_action = self.feffit.controls(ui);
+                    // Exit sits directly below the controls (그림 1-2-2-2), no gap.
                     ui.add_space(6.0);
                     if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
                         exit = true;
                     }
-                    ui.add_space(4.0);
-                });
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        feffit_action = self.feffit.controls(ui);
-                    });
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -805,30 +800,6 @@ impl XafsViewApp {
             .resizable(true)
             .default_size(360.0)
             .show_inside(ui, |ui| {
-                // Pin the 2×2 button block at the bottom (그림 1-2-1-1) so it is
-                // always visible; the parameter area scrolls above it.
-                egui::Panel::bottom("autobk_actions").show_inside(ui, |ui| {
-                    ui.add_space(6.0);
-                    use crate::widgets::{self, CHUNKY_BTN};
-                    ui.horizontal(|ui| {
-                        if widgets::action(ui, "Open New file", CHUNKY_BTN).clicked() {
-                            open_clicked = true;
-                        }
-                        if widgets::primary(ui, "Autobk Start", CHUNKY_BTN, has_mu).clicked() {
-                            start_clicked = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        if widgets::exit(ui, CHUNKY_BTN).clicked() {
-                            exit_clicked = true;
-                        }
-                        if widgets::action_enabled(ui, "Edit μ(E)", CHUNKY_BTN, has_mu).clicked() {
-                            edit_clicked = true;
-                        }
-                    });
-                    ui.add_space(4.0);
-                });
-
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Autobk");
@@ -895,6 +866,29 @@ impl XafsViewApp {
                         // the "Autobk parameters" grid (+ loading mode + graph type)
                         ui.separator();
                         replot = self.reduction.controls(ui);
+
+                        // The 2×2 action block (그림 1-2-1-1) sits directly below
+                        // the parameters — no pinned-bottom gap.
+                        ui.add_space(8.0);
+                        use crate::widgets::{self, CHUNKY_BTN};
+                        ui.horizontal(|ui| {
+                            if widgets::action(ui, "Open New file", CHUNKY_BTN).clicked() {
+                                open_clicked = true;
+                            }
+                            if widgets::primary(ui, "Autobk Start", CHUNKY_BTN, has_mu).clicked() {
+                                start_clicked = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if widgets::exit(ui, CHUNKY_BTN).clicked() {
+                                exit_clicked = true;
+                            }
+                            if widgets::action_enabled(ui, "Edit μ(E)", CHUNKY_BTN, has_mu)
+                                .clicked()
+                            {
+                                edit_clicked = true;
+                            }
+                        });
                     });
                 });
             });
@@ -1059,14 +1053,6 @@ impl XafsViewApp {
     /// The Folders tab: configure the data/work/feff working directories.
     fn folders_panel(&mut self, ui: &mut egui::Ui) {
         let mut exit_clicked = false;
-        // Pin Exit at the bottom (always visible); the folder rows scroll above.
-        egui::Panel::bottom("folders_actions").show_inside(ui, |ui| {
-            ui.add_space(6.0);
-            if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                exit_clicked = true;
-            }
-            ui.add_space(4.0);
-        });
         egui::CentralPanel::default().show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1094,6 +1080,12 @@ impl XafsViewApp {
                         folder_row(ui, "FEFF folder", &mut self.session.folders.feff_dir);
                         ui.end_row();
                     });
+
+                // Exit sits directly below the folder rows (그림 1-2-6), no gap.
+                ui.add_space(8.0);
+                if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
+                    exit_clicked = true;
+                }
             });
         });
         if exit_clicked {
