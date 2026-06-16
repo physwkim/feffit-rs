@@ -280,7 +280,7 @@ impl FeffitBatch {
             .show(ui, |ui| {
                 ui.strong("group");
                 ui.strong("status");
-                ui.strong("χ²ᵣ");
+                ui.strong("χ²_r");
                 ui.strong("R-factor");
                 ui.strong("nvarys");
                 ui.end_row();

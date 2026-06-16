@@ -455,7 +455,7 @@ impl FeffitUi {
         });
 
         let summary = format!(
-            "Fit: χ²ᵣ = {:.4}, R = {:.5}, n_idp = {:.1}, nvarys = {}, info = {}",
+            "Fit: χ²_r = {:.4}, R = {:.5}, n_idp = {:.1}, nvarys = {}, info = {}",
             res.chi2_reduced, res.rfactor, res.n_idp, res.nvarys, res.info
         );
         self.result = Some(res);
@@ -789,7 +789,7 @@ mod tests {
         let (k, chi) = cu_kchi();
         let mut ui = feffit_ui_with_paths();
         let msg = ui.run(&k, &chi).expect("fit should run");
-        assert!(msg.contains("χ²ᵣ"), "status summarizes the fit: {msg}");
+        assert!(msg.contains("χ²_r"), "status summarizes the fit: {msg}");
 
         let res = ui.result.as_ref().expect("result stored");
         assert!(
