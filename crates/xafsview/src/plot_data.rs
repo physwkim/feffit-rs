@@ -177,7 +177,7 @@ impl PlotDataWindow {
                         self.rebuild(groups);
                         self.dirty = false;
                     }
-                    self.plot.show_toolbar(ui);
+                    crate::plot::toolbar(&mut self.plot, ui);
                     self.plot.show(ui);
                 });
             },

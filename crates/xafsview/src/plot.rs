@@ -8,8 +8,9 @@
 //! off the frame, and routing every plot through one constructor means no site
 //! can forget it.
 
+use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use siplot::{DataMargins, Plot1D, PlotId};
+use siplot::{DataMargins, Plot1D, PlotId, Symbol};
 
 /// Fraction of the data range left blank on each side of the data extent, so
 /// samples at the extremes are lifted just off the axis frame without wasting
@@ -29,4 +30,54 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
         y_max: DATA_MARGIN,
     });
     plot
+}
+
+/// Draw `plot`'s standard toolbar plus the house extras on one row, then leave
+/// the plot itself to a following `plot.show(ui)`. Every plot-bearing tab/window
+/// draws its toolbar through this (instead of `plot.show_toolbar` directly) so
+/// they all expose the same controls — currently siplot's `symbol_tool_button`,
+/// a "Symbol" menu that toggles data-point markers (size + shape) on every
+/// curve, which the bare toolbar omits.
+///
+/// siplot's ready-made `symbol_tool_button` is a `Plot2D` (image) method, so for
+/// the curve `Plot1D` the same control is built here on top of the underlying
+/// `PlotWidget::set_all_symbols` / `set_all_symbol_sizes`.
+pub fn toolbar(plot: &mut Plot1D, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        plot.show_toolbar(ui);
+        symbol_menu(plot, ui);
+    });
+}
+
+/// A "Symbol" menu that toggles data-point markers (shape + size) on every curve
+/// of `plot`, mirroring siplot's `Plot2D::symbol_tool_button` for the curve
+/// widget. The chosen size is remembered in egui temp memory, keyed by plot id.
+fn symbol_menu(plot: &mut Plot1D, ui: &mut egui::Ui) {
+    let size_id = egui::Id::new(plot.backend().plot().id).with("symbol_menu_size");
+    let mut size = ui.data(|d| d.get_temp::<f32>(size_id)).unwrap_or(7.0);
+    ui.menu_button("Symbol", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Size:");
+            if ui
+                .add(egui::DragValue::new(&mut size).range(1.0..=20.0).speed(0.5))
+                .on_hover_text("Marker size for every curve")
+                .changed()
+            {
+                plot.set_all_symbol_sizes(size);
+            }
+        });
+        ui.separator();
+        if ui.button("None (line only)").clicked() {
+            plot.set_all_symbols(None);
+            ui.close();
+        }
+        for symbol in Symbol::ALL {
+            if ui.button(symbol.name()).clicked() {
+                plot.set_all_symbols(Some(symbol));
+                ui.close();
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(size_id, size));
 }

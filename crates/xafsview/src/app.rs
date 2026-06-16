@@ -512,7 +512,7 @@ impl XafsViewApp {
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            self.plot.show_toolbar(ui);
+            crate::plot::toolbar(&mut self.plot, ui);
             self.plot.show(ui);
         });
 
@@ -690,7 +690,7 @@ impl XafsViewApp {
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            self.plot.show_toolbar(ui);
+            crate::plot::toolbar(&mut self.plot, ui);
             self.plot.show(ui);
         });
 
