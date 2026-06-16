@@ -55,6 +55,30 @@ pub fn toolbar(plot: &mut Plot1D, ui: &mut egui::Ui) {
     });
 }
 
+/// Render `plot` as one unit: its toolbar on top, the plot canvas filling the
+/// width, and a legend list down the right edge mapping each curve's
+/// color/symbol to the name set with `set_item_legend`. Every plot-bearing
+/// tab/window draws through this (instead of `toolbar` + `plot.show` by hand)
+/// so they all get the same toolbar *and* a visible legend — siplot draws no
+/// in-axes legend, so without this call the curve names never appear.
+pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
+    toolbar(plot, ui);
+    ui.horizontal_top(|ui| {
+        let avail = ui.available_size();
+        // A narrow legend strip on the right; the plot canvas fills the rest.
+        let legend_w = (avail.x * 0.22).clamp(90.0, 180.0).min(avail.x);
+        let plot_w = (avail.x - legend_w).max(0.0);
+        ui.allocate_ui(egui::vec2(plot_w, avail.y), |ui| {
+            plot.show(ui);
+        });
+        ui.allocate_ui(egui::vec2(legend_w, avail.y), |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                plot.show_legend(ui);
+            });
+        });
+    });
+}
+
 /// A "Symbol" menu that toggles data-point markers (shape + size) on every curve
 /// of `plot`, mirroring siplot's `Plot2D::symbol_tool_button` for the curve
 /// widget. The chosen size is remembered in egui temp memory, keyed by plot id.

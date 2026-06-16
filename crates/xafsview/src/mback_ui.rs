@@ -120,8 +120,7 @@ impl MbackWindow {
                         self.rebuild_plot(groups);
                         self.dirty = false;
                     }
-                    crate::plot::toolbar(&mut self.plot, ui);
-                    self.plot.show(ui);
+                    crate::plot::show(&mut self.plot, ui);
                     ui.separator();
                     self.stats(ui);
                 });

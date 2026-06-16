@@ -150,8 +150,7 @@ impl FeffitBatch {
                         self.rebuild_plot();
                         self.dirty = false;
                     }
-                    crate::plot::toolbar(&mut self.plot, ui);
-                    self.plot.show(ui);
+                    crate::plot::show(&mut self.plot, ui);
                     ui.separator();
                     self.results_table(ui);
                 });

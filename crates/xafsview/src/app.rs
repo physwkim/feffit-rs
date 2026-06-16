@@ -517,8 +517,7 @@ impl XafsViewApp {
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            crate::plot::toolbar(&mut self.plot, ui);
-            self.plot.show(ui);
+            crate::plot::show(&mut self.plot, ui);
         });
 
         match feffit_action {
@@ -695,8 +694,7 @@ impl XafsViewApp {
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            crate::plot::toolbar(&mut self.plot, ui);
-            self.plot.show(ui);
+            crate::plot::show(&mut self.plot, ui);
         });
 
         if open_clicked {
