@@ -16,7 +16,7 @@ use num_complex::Complex64;
 use rusty_fitpack::{splev, splrep};
 use xafsft::{Window, ftwindow, xftf_fast};
 
-use crate::mathutils::{ETOK, index_nearest, index_of, remove_dups};
+use crate::mathutils::{ETOK, index_nearest, index_of, interp_linear, remove_dups};
 use crate::preedge::{PreEdgeParams, pre_edge};
 use crate::special::{erf, t_ppf};
 
@@ -58,6 +58,15 @@ pub struct AutobkParams {
     pub clamp_lo: f64,
     /// high-energy clamp weight. Default 1.
     pub clamp_hi: f64,
+    /// k grid (`Å⁻¹`) of an optional standard `chi(k)` used to constrain the
+    /// background fit. Must accompany [`chi_std`](Self::chi_std). Default `None`.
+    pub k_std: Option<Vec<f64>>,
+    /// values of an optional standard `chi(k)` (a theoretical/FEFF first-shell
+    /// `chi`) the spline is fit against: the residual minimizes the low-`R`
+    /// content of `chi - chi_std` instead of `chi`, so the background does not
+    /// absorb real first-shell amplitude. Interpolated onto the output k grid
+    /// (`np.interp`, edge-clamped). Default `None`.
+    pub chi_std: Option<Vec<f64>>,
 }
 
 impl Default for AutobkParams {
@@ -77,6 +86,8 @@ impl Default for AutobkParams {
             nclamp: 3,
             clamp_lo: 0.0,
             clamp_hi: 1.0,
+            k_std: None,
+            chi_std: None,
         }
     }
 }
@@ -277,6 +288,7 @@ fn resid(
     ncoef: usize,
     kraw: &[f64],
     mu: &[f64],
+    chi_std: Option<&[f64]>,
     knots: &[f64],
     order: usize,
     kout: &[f64],
@@ -291,7 +303,15 @@ fn resid(
     let mut coefs = vec![vcoefs[nspl - 1]; ncoef];
     coefs[..nspl].copy_from_slice(vcoefs);
 
-    let (_bkg, chi) = spline_eval(kraw, mu, knots, &coefs, order, kout);
+    let (_bkg, mut chi) = spline_eval(kraw, mu, knots, &coefs, order, kout);
+    // larch `_resid`: `if chi_std is not None: chi = chi - chi_std`. The standard
+    // is already interpolated onto `kout`, so it constrains both the FT residual
+    // and the clamp terms below.
+    if let Some(std) = chi_std {
+        for (c, s) in chi.iter_mut().zip(std) {
+            *c -= s;
+        }
+    }
 
     let windowed: Vec<Complex64> = chi
         .iter()
@@ -381,6 +401,17 @@ pub fn autobk(energy_in: &[f64], mu_in: &[f64], p: &AutobkParams) -> Autobk {
 
     let iemax = n.min(2 + index_of(&energy, ek0 + kmax * kmax / ETOK)) - 1;
 
+    // interpolate an optional standard chi(k) onto the output grid (larch:
+    // `if chi_std is not None and k_std is not None: chi_std = np.interp(kout, k_std, chi_std)`).
+    // Only `resid` consumes this; the reported chi stays the true (mu-bkg)/edge_step.
+    let chi_std: Option<Vec<f64>> = match (&p.k_std, &p.chi_std) {
+        (Some(ks), Some(cs)) => {
+            assert_eq!(ks.len(), cs.len(), "k_std and chi_std length mismatch");
+            Some(interp_linear(&kout, ks, cs))
+        }
+        _ => None,
+    };
+
     // FT window times k-weighting
     let win = ftwindow(&kout, Some(kmin), Some(kmax), p.dk, Some(p.dk), p.win);
     let ftwin: Vec<f64> = kout
@@ -442,10 +473,11 @@ pub fn autobk(energy_in: &[f64], mu_in: &[f64], p: &AutobkParams) -> Autobk {
     let knots_r = knots.clone();
     let kout_r = kout.clone();
     let ftwin_r = ftwin.clone();
+    let chi_std_r = chi_std.as_deref();
     let fcn = |v: &[f64]| -> Vec<f64> {
         resid(
-            v, ncoefs, &kraw_fit, &mu_fit, &knots_r, order, &kout_r, &ftwin_r, nfft, irbkg,
-            p.nclamp, p.clamp_lo, p.clamp_hi,
+            v, ncoefs, &kraw_fit, &mu_fit, chi_std_r, &knots_r, order, &kout_r, &ftwin_r, nfft,
+            irbkg, p.nclamp, p.clamp_lo, p.clamp_hi,
         )
     };
     let cfg = LmConfig {
@@ -464,8 +496,8 @@ pub fn autobk(energy_in: &[f64], mu_in: &[f64], p: &AutobkParams) -> Autobk {
     // chisqr / redchi exactly as larch: chisqr = sum(resid(best)^2),
     // redchi = chisqr / (2*irbkg + 2*nclamp - nspl)
     let final_resid = resid(
-        &best, ncoefs, &kraw_fit, &mu_fit, &knots, order, &kout, &ftwin, nfft, irbkg, p.nclamp,
-        p.clamp_lo, p.clamp_hi,
+        &best, ncoefs, &kraw_fit, &mu_fit, chi_std_r, &knots, order, &kout, &ftwin, nfft, irbkg,
+        p.nclamp, p.clamp_lo, p.clamp_hi,
     );
     let chisqr: f64 = final_resid.iter().map(|r| r * r).sum();
     let redchi = chisqr / (2 * irbkg + 2 * p.nclamp - nspl) as f64;
