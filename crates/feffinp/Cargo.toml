@@ -1,0 +1,21 @@
+[package]
+name = "feffinp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Crystal cell → FEFF cluster (feff.inp) and feff.inp parsing — the input-side counterpart to feffdat, for XAFSView's Atoms/Feff tabs"
+
+[features]
+# Space-group symmetry expansion (asymmetric unit + space group → full cell)
+# via the pure-Rust `crystallographic-group` crate. OFF by default so the core
+# (lattice/cluster/parse) stays zero-dependency and MSRV-1.89; enabling it pulls
+# crystallographic-group (+ nalgebra/winnow/fraction) and raises the effective
+# MSRV to match the GUI consumer (xafsview, 1.92).
+spacegroup = ["dep:crystallographic-group"]
+
+[dependencies]
+# Pure-Rust 230-space-group symmetry operators (Hall-symbol → general positions).
+# Optional: active only with the `spacegroup` feature.
+crystallographic-group = { version = "0.3.1", optional = true }
