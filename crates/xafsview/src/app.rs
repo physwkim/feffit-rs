@@ -602,6 +602,12 @@ impl XafsViewApp {
             ui.heading("Feffit_txt");
             ui.add_space(8.0);
             ui.weak("Text report of the last FEFFIT fit");
+            // The original Feffit_txt form's "Exit" button (this view is the
+            // functional equivalent of its feffit text output).
+            ui.add_space(12.0);
+            if ui.button("Exit").clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         });
         ui.separator();
         let report = self.feffit.report_text();
