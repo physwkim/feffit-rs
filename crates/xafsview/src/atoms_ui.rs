@@ -47,6 +47,8 @@ struct SiteRow {
 pub enum AtomsAction {
     /// A `feff.inp` was built into the shared buffer; switch to the Feff tab.
     BuiltFeffInp,
+    /// Close the application (the original Atoms form's "Exit").
+    Exit,
 }
 
 /// The **Atoms** tab state: a unit cell plus the absorber/edge/cluster choices.
@@ -229,9 +231,17 @@ impl AtomsTab {
             });
 
             ui.add_space(8.0);
-            if ui.add(egui::Button::new("Build feff.inp")).clicked() {
-                action = self.build(feff_inp);
-            }
+            // Original Atoms form (그림 1-2-4) buttons: Exit / Reload / Execute.
+            // "Build feff.inp" is Execute; Reload (re-read atoms.inp from disk)
+            // has no file source for the structured builder, so it is omitted.
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new("Build feff.inp")).clicked() {
+                    action = self.build(feff_inp);
+                }
+                if ui.button("Exit").clicked() {
+                    action = Some(AtomsAction::Exit);
+                }
+            });
             match &self.status {
                 Some(Ok(msg)) => {
                     ui.colored_label(GREEN, msg);

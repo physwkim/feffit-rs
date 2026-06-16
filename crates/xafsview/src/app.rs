@@ -1114,12 +1114,12 @@ impl eframe::App for XafsViewApp {
             Tab::Autobk => self.autobk_tab(ui),
             Tab::Feffit => self.feffit_tab(ui),
             Tab::FeffitTxt => self.feffit_txt_tab(ui),
-            Tab::Atoms => {
-                if let Some(AtomsAction::BuiltFeffInp) = self.atoms_tab.ui(ui, &mut self.feff_inp) {
-                    // Hand off to the Feff tab so the user can run the new input.
-                    self.tab = Tab::Feff;
-                }
-            }
+            Tab::Atoms => match self.atoms_tab.ui(ui, &mut self.feff_inp) {
+                // Hand off to the Feff tab so the user can run the new input.
+                Some(AtomsAction::BuiltFeffInp) => self.tab = Tab::Feff,
+                Some(AtomsAction::Exit) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+                None => {}
+            },
             Tab::Feff => {
                 match self.feff_tab.ui(
                     ui,
