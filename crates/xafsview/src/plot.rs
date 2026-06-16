@@ -62,16 +62,23 @@ pub fn toolbar(plot: &mut Plot1D, ui: &mut egui::Ui) {
 /// so they all get the same toolbar *and* a visible legend — siplot draws no
 /// in-axes legend, so without this call the curve names never appear.
 pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
+    // The plot and legend sit side by side, but each side must lay its own
+    // contents out *top-down*: `horizontal_top` makes its children left-to-right
+    // and both `allocate_ui` and `ScrollArea` inherit that layout, which would
+    // make `show_legend` flow its rows sideways — every row but the first then
+    // overflows the narrow strip and is clipped (only one legend entry shows).
+    // Forcing each panel to `top_down` keeps the legend a vertical list.
+    let top_down = egui::Layout::top_down(egui::Align::Min);
     toolbar(plot, ui);
     ui.horizontal_top(|ui| {
         let avail = ui.available_size();
         // A narrow legend strip on the right; the plot canvas fills the rest.
         let legend_w = (avail.x * 0.22).clamp(90.0, 180.0).min(avail.x);
         let plot_w = (avail.x - legend_w).max(0.0);
-        ui.allocate_ui(egui::vec2(plot_w, avail.y), |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(plot_w, avail.y), top_down, |ui| {
             plot.show(ui);
         });
-        ui.allocate_ui(egui::vec2(legend_w, avail.y), |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(legend_w, avail.y), top_down, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 plot.show_legend(ui);
             });
