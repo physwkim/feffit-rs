@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/feffdat", "crates/xafsft", "crates/feffit", "crates/params", "crates/lm", "crates/feffrun", "crates/feffinp", "crates/xasproc", "crates/xasdata"]
+members = ["crates/feffdat", "crates/xafsft", "crates/feffit", "crates/params", "crates/lm", "crates/feffrun", "crates/feffinp", "crates/xasproc", "crates/xasdata", "crates/xafsview"]
 
 [workspace.package]
 edition = "2024"
@@ -11,3 +11,6 @@ repository = "https://github.com/pls-controls/feffit-rs"
 [workspace.dependencies]
 num-complex = "0.4"
 rustfft = "6"
+# Pure-Rust atomic/X-ray database (edges, lines, cross-sections, Chantler f1/f2,
+# ion-chamber, materials) — mirrors Python xraydb. GUI-only (the P8 calculators).
+xraydb = "0.1.2"
