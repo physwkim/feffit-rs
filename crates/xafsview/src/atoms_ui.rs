@@ -550,12 +550,13 @@ impl PlotSitesWindow {
         }
 
         let mut open = self.open;
-        egui::Window::new("Plot Sites (3D cluster)")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(640.0)
-            .default_height(560.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "plot_sites",
+            "Plot Sites (3D cluster)",
+            &mut open,
+            [640.0, 560.0],
+            |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("Reset view").clicked() {
                         self.scene.reset_camera();
@@ -578,7 +579,8 @@ impl PlotSitesWindow {
                         ui.add_space(8.0);
                     }
                 });
-            });
+            },
+        );
         self.open = open;
     }
 

@@ -89,17 +89,20 @@ impl PeriodicTableWindow {
             return;
         }
         let mut open = self.open;
-        egui::Window::new("Periodic table — atom data")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(720.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "periodic_table",
+            "Periodic table — atom data",
+            &mut open,
+            [720.0, 600.0],
+            |ui| {
                 self.table(ui);
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .max_height(280.0)
                     .show(ui, |ui| self.atom_data(ui));
-            });
+            },
+        );
         self.open = open;
     }
 
@@ -268,11 +271,14 @@ impl IonChamberWindow {
             return;
         }
         let mut open = self.open;
-        egui::Window::new("Ion chamber / gas absorption")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(420.0)
-            .show(ctx, |ui| self.body(ui));
+        crate::window::detached(
+            ctx,
+            "ion_chamber",
+            "Ion chamber / gas absorption",
+            &mut open,
+            [420.0, 520.0],
+            |ui| self.body(ui),
+        );
         self.open = open;
     }
 
@@ -415,11 +421,14 @@ impl PowderWindow {
             return;
         }
         let mut open = self.open;
-        egui::Window::new("Powder weight")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(380.0)
-            .show(ctx, |ui| self.body(ui));
+        crate::window::detached(
+            ctx,
+            "powder",
+            "Powder weight",
+            &mut open,
+            [380.0, 480.0],
+            |ui| self.body(ui),
+        );
         self.open = open;
     }
 

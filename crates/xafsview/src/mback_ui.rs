@@ -102,12 +102,13 @@ impl MbackWindow {
             return;
         }
         let mut open = self.open;
-        egui::Window::new("MBACK / NEXAFS normalization")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(820.0)
-            .default_height(540.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "mback",
+            "MBACK / NEXAFS normalization",
+            &mut open,
+            [820.0, 540.0],
+            |ui| {
                 egui::Panel::left("mback_controls")
                     .resizable(true)
                     .default_size(280.0)
@@ -124,7 +125,8 @@ impl MbackWindow {
                     ui.separator();
                     self.stats(ui);
                 });
-            });
+            },
+        );
         self.open = open;
     }
 

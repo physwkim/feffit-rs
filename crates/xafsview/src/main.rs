@@ -18,6 +18,7 @@ mod plot;
 mod plot_data;
 mod reduce_ui;
 mod wavelet;
+mod window;
 mod xanes_ui;
 
 use app::XafsViewApp;

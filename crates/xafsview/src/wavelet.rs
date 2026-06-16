@@ -190,11 +190,13 @@ impl WaveletWindow {
 
         let mut action = None;
         let mut open = self.open;
-        egui::Window::new("Wavelet |W(k,R)|")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(560.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "wavelet",
+            "Wavelet |W(k,R)|",
+            &mut open,
+            [560.0, 560.0],
+            |ui| {
                 ui.horizontal(|ui| {
                     ui.label("k-weight");
                     ui.add(egui::DragValue::new(&mut self.kweight).range(0..=3));
@@ -240,7 +242,8 @@ impl WaveletWindow {
                         ui.weak("Run AUTOBK to get χ(k), then Compute.");
                     }
                 }
-            });
+            },
+        );
         self.open = open;
         action
     }

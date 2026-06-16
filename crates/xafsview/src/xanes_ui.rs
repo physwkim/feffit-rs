@@ -88,12 +88,13 @@ impl XanesWindow {
             return;
         }
         let mut open = self.open;
-        egui::Window::new("XANES tools")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(860.0)
-            .default_height(580.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "xanes",
+            "XANES tools",
+            &mut open,
+            [860.0, 580.0],
+            |ui| {
                 egui::Panel::left("xanes_controls")
                     .resizable(true)
                     .default_size(300.0)
@@ -110,7 +111,8 @@ impl XanesWindow {
                     ui.separator();
                     self.readout_table(ui);
                 });
-            });
+            },
+        );
         self.open = open;
     }
 

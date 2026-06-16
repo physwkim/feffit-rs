@@ -126,12 +126,13 @@ impl LcfWindow {
             return;
         }
         let mut open = self.open;
-        egui::Window::new("LCF — linear combination")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(820.0)
-            .default_height(560.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "lcf",
+            "LCF — linear combination",
+            &mut open,
+            [820.0, 560.0],
+            |ui| {
                 egui::Panel::left("lcf_controls")
                     .resizable(true)
                     .default_size(280.0)
@@ -148,7 +149,8 @@ impl LcfWindow {
                     ui.separator();
                     self.results(ui);
                 });
-            });
+            },
+        );
         self.open = open;
     }
 
@@ -369,12 +371,13 @@ impl PcaWindow {
             return;
         }
         let mut open = self.open;
-        egui::Window::new("PCA — principal components")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(820.0)
-            .default_height(560.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "pca",
+            "PCA — principal components",
+            &mut open,
+            [820.0, 560.0],
+            |ui| {
                 egui::Panel::left("pca_controls")
                     .resizable(true)
                     .default_size(280.0)
@@ -391,7 +394,8 @@ impl PcaWindow {
                     ui.separator();
                     self.results(ui);
                 });
-            });
+            },
+        );
         self.open = open;
     }
 

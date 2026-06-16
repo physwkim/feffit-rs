@@ -157,12 +157,13 @@ impl PlotDataWindow {
         }
 
         let mut open = self.open;
-        egui::Window::new("Plot Data")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(760.0)
-            .default_height(520.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "plot_data",
+            "Plot Data",
+            &mut open,
+            [760.0, 520.0],
+            |ui| {
                 egui::Panel::left("plot_data_controls")
                     .resizable(true)
                     .default_size(240.0)
@@ -179,7 +180,8 @@ impl PlotDataWindow {
                     self.plot.show_toolbar(ui);
                     self.plot.show(ui);
                 });
-            });
+            },
+        );
         self.open = open;
     }
 

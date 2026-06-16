@@ -130,12 +130,13 @@ impl FeffitBatch {
         }
         let mut bubble = None;
         let mut open = self.open;
-        egui::Window::new("Feffit batch (per-group)")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(900.0)
-            .default_height(620.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "feffit_batch",
+            "Feffit batch (per-group)",
+            &mut open,
+            [900.0, 620.0],
+            |ui| {
                 egui::Panel::left("feffit_batch_controls")
                     .resizable(true)
                     .default_size(380.0)
@@ -154,7 +155,8 @@ impl FeffitBatch {
                     ui.separator();
                     self.results_table(ui);
                 });
-            });
+            },
+        );
         self.open = open;
         bubble
     }

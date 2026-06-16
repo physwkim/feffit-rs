@@ -90,11 +90,13 @@ impl EditXmuState {
     ) -> Option<CleanAction> {
         let mut action = None;
         let mut open = self.open;
-        egui::Window::new("Edit μ(E)")
-            .open(&mut open)
-            .resizable(true)
-            .default_width(320.0)
-            .show(ctx, |ui| {
+        crate::window::detached(
+            ctx,
+            "edit_xmu",
+            "Edit μ(E)",
+            &mut open,
+            [320.0, 520.0],
+            |ui| {
                 if !has_group {
                     ui.weak("Load a spectrum to edit.");
                     return;
@@ -186,7 +188,8 @@ impl EditXmuState {
                 {
                     action = Some(CleanAction::Undo);
                 }
-            });
+            },
+        );
         self.open = open;
         action
     }
