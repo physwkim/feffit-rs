@@ -109,137 +109,21 @@ impl AtomsTab {
         });
         ui.separator();
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Title");
-                ui.add(egui::TextEdit::singleline(&mut self.title).desired_width(280.0));
-            });
-
-            ui.add_space(4.0);
-            ui.strong("Lattice (Å, degrees)");
-            egui::Grid::new("atoms_lattice")
-                .striped(true)
-                .show(ui, |ui| {
-                    ui.label("a");
-                    ui.add(
-                        egui::DragValue::new(&mut self.a)
-                            .speed(0.01)
-                            .range(0.1..=100.0),
-                    );
-                    ui.label("b");
-                    ui.add(
-                        egui::DragValue::new(&mut self.b)
-                            .speed(0.01)
-                            .range(0.1..=100.0),
-                    );
-                    ui.label("c");
-                    ui.add(
-                        egui::DragValue::new(&mut self.c)
-                            .speed(0.01)
-                            .range(0.1..=100.0),
-                    );
-                    ui.end_row();
-                    ui.label("α");
-                    ui.add(
-                        egui::DragValue::new(&mut self.alpha)
-                            .speed(0.1)
-                            .range(1.0..=179.0),
-                    );
-                    ui.label("β");
-                    ui.add(
-                        egui::DragValue::new(&mut self.beta)
-                            .speed(0.1)
-                            .range(1.0..=179.0),
-                    );
-                    ui.label("γ");
-                    ui.add(
-                        egui::DragValue::new(&mut self.gamma)
-                            .speed(0.1)
-                            .range(1.0..=179.0),
-                    );
-                    ui.end_row();
-                });
-
-            ui.add_space(6.0);
-            ui.strong("Sites (fractional coordinates)");
-            let mut remove: Option<usize> = None;
-            egui::Grid::new("atoms_sites").striped(true).show(ui, |ui| {
-                ui.label("abs");
-                ui.label("element");
-                ui.label("x");
-                ui.label("y");
-                ui.label("z");
-                ui.label("");
-                ui.end_row();
-                for (i, row) in self.sites.iter_mut().enumerate() {
-                    ui.radio_value(&mut self.absorber, i, "");
-                    ui.add(egui::TextEdit::singleline(&mut row.element).desired_width(44.0));
-                    ui.add(
-                        egui::DragValue::new(&mut row.x)
-                            .speed(0.001)
-                            .range(-1.0..=2.0),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut row.y)
-                            .speed(0.001)
-                            .range(-1.0..=2.0),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut row.z)
-                            .speed(0.001)
-                            .range(-1.0..=2.0),
-                    );
-                    if ui.button("✕").clicked() {
-                        remove = Some(i);
-                    }
-                    ui.end_row();
-                }
-            });
-            if let Some(i) = remove {
-                self.sites.remove(i);
-                if self.absorber >= self.sites.len() {
-                    self.absorber = 0;
-                }
-            }
-            if ui.button("➕ Add site").clicked() {
-                self.sites.push(SiteRow {
-                    element: "O".into(),
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                });
-            }
-
+        // Pin the Execute/Exit row + build status at the bottom (그림 1-2-4) so
+        // they are always visible; the cell inputs scroll above. Reload (re-read
+        // atoms.inp from disk) has no file source for the structured builder, so
+        // it is omitted per the functional-only field rule.
+        egui::Panel::bottom("atoms_actions").show_inside(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label("Space group (No.)");
-                ui.add(egui::DragValue::new(&mut self.space_group).range(1..=230))
-                    .on_hover_text("International number 1–230; 1 = P1 (no expansion)");
-            });
-            ui.horizontal(|ui| {
-                ui.label("Edge");
-                for (e, lbl) in EDGES {
-                    ui.selectable_value(&mut self.edge, e, lbl);
-                }
-                ui.add_space(12.0);
-                ui.label("Cluster size (Å)");
-                ui.add(
-                    egui::DragValue::new(&mut self.cluster_size)
-                        .speed(0.1)
-                        .range(1.0..=12.0),
-                );
-            });
-
-            ui.add_space(8.0);
-            // Original Atoms form (그림 1-2-4) buttons: Exit / Reload / Execute.
-            // "Build feff.inp" is Execute; Reload (re-read atoms.inp from disk)
-            // has no file source for the structured builder, so it is omitted.
-            ui.horizontal(|ui| {
-                if ui.add(egui::Button::new("Build feff.inp")).clicked() {
-                    action = self.build(feff_inp);
-                }
-                if ui.button("Exit").clicked() {
+                if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
                     action = Some(AtomsAction::Exit);
+                }
+                if crate::widgets::primary(ui, "Execute", crate::widgets::ROW_BTN, true)
+                    .on_hover_text("Build feff.inp from the cell")
+                    .clicked()
+                {
+                    action = self.build(feff_inp);
                 }
             });
             match &self.status {
@@ -251,6 +135,131 @@ impl AtomsTab {
                 }
                 None => {}
             }
+            ui.add_space(4.0);
+        });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Title");
+                    ui.add(egui::TextEdit::singleline(&mut self.title).desired_width(280.0));
+                });
+
+                ui.add_space(4.0);
+                ui.strong("Lattice (Å, degrees)");
+                egui::Grid::new("atoms_lattice")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label("a");
+                        ui.add(
+                            egui::DragValue::new(&mut self.a)
+                                .speed(0.01)
+                                .range(0.1..=100.0),
+                        );
+                        ui.label("b");
+                        ui.add(
+                            egui::DragValue::new(&mut self.b)
+                                .speed(0.01)
+                                .range(0.1..=100.0),
+                        );
+                        ui.label("c");
+                        ui.add(
+                            egui::DragValue::new(&mut self.c)
+                                .speed(0.01)
+                                .range(0.1..=100.0),
+                        );
+                        ui.end_row();
+                        ui.label("α");
+                        ui.add(
+                            egui::DragValue::new(&mut self.alpha)
+                                .speed(0.1)
+                                .range(1.0..=179.0),
+                        );
+                        ui.label("β");
+                        ui.add(
+                            egui::DragValue::new(&mut self.beta)
+                                .speed(0.1)
+                                .range(1.0..=179.0),
+                        );
+                        ui.label("γ");
+                        ui.add(
+                            egui::DragValue::new(&mut self.gamma)
+                                .speed(0.1)
+                                .range(1.0..=179.0),
+                        );
+                        ui.end_row();
+                    });
+
+                ui.add_space(6.0);
+                ui.strong("Sites (fractional coordinates)");
+                let mut remove: Option<usize> = None;
+                egui::Grid::new("atoms_sites").striped(true).show(ui, |ui| {
+                    ui.label("abs");
+                    ui.label("element");
+                    ui.label("x");
+                    ui.label("y");
+                    ui.label("z");
+                    ui.label("");
+                    ui.end_row();
+                    for (i, row) in self.sites.iter_mut().enumerate() {
+                        ui.radio_value(&mut self.absorber, i, "");
+                        ui.add(egui::TextEdit::singleline(&mut row.element).desired_width(44.0));
+                        ui.add(
+                            egui::DragValue::new(&mut row.x)
+                                .speed(0.001)
+                                .range(-1.0..=2.0),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut row.y)
+                                .speed(0.001)
+                                .range(-1.0..=2.0),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut row.z)
+                                .speed(0.001)
+                                .range(-1.0..=2.0),
+                        );
+                        if ui.button("✕").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+                if let Some(i) = remove {
+                    self.sites.remove(i);
+                    if self.absorber >= self.sites.len() {
+                        self.absorber = 0;
+                    }
+                }
+                if ui.button("➕ Add site").clicked() {
+                    self.sites.push(SiteRow {
+                        element: "O".into(),
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    });
+                }
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Space group (No.)");
+                    ui.add(egui::DragValue::new(&mut self.space_group).range(1..=230))
+                        .on_hover_text("International number 1–230; 1 = P1 (no expansion)");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Edge");
+                    for (e, lbl) in EDGES {
+                        ui.selectable_value(&mut self.edge, e, lbl);
+                    }
+                    ui.add_space(12.0);
+                    ui.label("Cluster size (Å)");
+                    ui.add(
+                        egui::DragValue::new(&mut self.cluster_size)
+                            .speed(0.1)
+                            .range(1.0..=12.0),
+                    );
+                });
+            });
         });
         action
     }
@@ -407,8 +416,9 @@ impl FeffTab {
         });
         ui.separator();
 
-        // Original Feff form (그림 1-2-5) button row: Exit / Select Feff Version
-        // / View Structure / Execute, plus our Load/Save for the input file.
+        // Top: the input/output file handling + "Select Feff Version" selector
+        // (그림 1-2-5: Input file / Output path rows + version ring). The action
+        // buttons live in the bottom row below, as in the original form.
         ui.horizontal(|ui| {
             if ui.button("Load…").clicked()
                 && let Some(text) = load_feff_inp(work_dir)
@@ -419,35 +429,9 @@ impl FeffTab {
                 save_feff_inp(feff_inp, work_dir);
             }
             ui.separator();
-            ui.label("Feff version");
+            ui.label("Select Feff Version");
             ui.selectable_value(&mut self.backend, BackendSel::Feff10, "FEFF10 (in-process)");
             ui.selectable_value(&mut self.backend, BackendSel::Feff8l, "FEFF8L (external)");
-            ui.separator();
-            if ui
-                .add_enabled(
-                    !feff_inp.trim().is_empty(),
-                    egui::Button::new("View Structure"),
-                )
-                .clicked()
-            {
-                action = Some(FeffAction::ViewStructure);
-            }
-            let can_run = !self.running && !feff_inp.trim().is_empty();
-            if ui
-                .add_enabled(can_run, egui::Button::new("Run FEFF"))
-                .clicked()
-            {
-                self.start_run(feff_inp, work_dir);
-            }
-            ui.separator();
-            if ui.button("Exit").clicked() {
-                action = Some(FeffAction::Exit);
-            }
-            if self.running {
-                ui.spinner();
-                ui.label("running…");
-                ui.ctx().request_repaint();
-            }
         });
 
         ui.separator();
@@ -458,7 +442,7 @@ impl FeffTab {
                     egui::TextEdit::multiline(feff_inp)
                         .code_editor()
                         .desired_width(f32::INFINITY)
-                        .desired_rows(24),
+                        .desired_rows(22),
                 );
             });
 
@@ -484,6 +468,39 @@ impl FeffTab {
                 ui.weak("No run yet.");
             }
         }
+
+        // Bottom action row (그림 1-2-5: Exit / Select Feff Version / View
+        // Structure / Execute), uniform width, with "Execute" (= Run FEFF) as the
+        // amber primary action.
+        ui.separator();
+        ui.horizontal(|ui| {
+            if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
+                action = Some(FeffAction::Exit);
+            }
+            let has_inp = !feff_inp.trim().is_empty();
+            if crate::widgets::action_enabled(
+                ui,
+                "View Structure",
+                crate::widgets::ROW_BTN,
+                has_inp,
+            )
+            .clicked()
+            {
+                action = Some(FeffAction::ViewStructure);
+            }
+            let can_run = !self.running && has_inp;
+            if crate::widgets::primary(ui, "Execute", crate::widgets::ROW_BTN, can_run)
+                .on_hover_text("Run FEFF → feffNNNN.dat")
+                .clicked()
+            {
+                self.start_run(feff_inp, work_dir);
+            }
+            if self.running {
+                ui.spinner();
+                ui.label("running…");
+                ui.ctx().request_repaint();
+            }
+        });
 
         action
     }

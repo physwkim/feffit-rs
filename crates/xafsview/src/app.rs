@@ -586,12 +586,18 @@ impl XafsViewApp {
             .resizable(true)
             .default_size(380.0)
             .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    feffit_action = self.feffit.controls(ui);
-                    ui.separator();
-                    if ui.button("Exit").clicked() {
+                // Pin Exit at the bottom (always visible); the controls scroll above.
+                egui::Panel::bottom("feffit_actions").show_inside(ui, |ui| {
+                    ui.add_space(6.0);
+                    if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
                         exit = true;
                     }
+                    ui.add_space(4.0);
+                });
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        feffit_action = self.feffit.controls(ui);
+                    });
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -618,7 +624,7 @@ impl XafsViewApp {
             // The original Feffit_txt form's "Exit" button (this view is the
             // functional equivalent of its feffit text output).
             ui.add_space(12.0);
-            if ui.button("Exit").clicked() {
+            if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
         });
@@ -799,95 +805,96 @@ impl XafsViewApp {
             .resizable(true)
             .default_size(360.0)
             .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.heading("Autobk");
-
-                    // info rows: Title (group label) / Data File / Theory standard
-                    egui::Grid::new("autobk_info")
-                        .num_columns(2)
-                        .spacing([6.0, 4.0])
-                        .show(ui, |ui| {
-                            ui.label("Title");
-                            match self.session.current_group_mut() {
-                                Some(g) => {
-                                    ui.text_edit_singleline(&mut g.label);
-                                }
-                                None => {
-                                    ui.weak("— no data —");
-                                }
-                            }
-                            ui.end_row();
-
-                            ui.label("Data File");
-                            match &data_file {
-                                Some(name) => {
-                                    ui.monospace(name.as_str());
-                                }
-                                None => {
-                                    ui.weak("—");
-                                }
-                            }
-                            ui.end_row();
-
-                            ui.label("Theory");
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button("Load…")
-                                    .on_hover_text(
-                                        "FEFF chi.dat standard for the background constraint",
-                                    )
-                                    .clicked()
-                                {
-                                    theory_pick = true;
-                                }
-                                match &theory_name {
-                                    Some(name) => {
-                                        ui.monospace(name.as_str());
-                                        if ui.small_button("✕").clicked() {
-                                            theory_clear = true;
-                                        }
-                                    }
-                                    None => {
-                                        ui.weak("(none)");
-                                    }
-                                }
-                            });
-                            ui.end_row();
-                        });
-
-                    // column chooser, shown while a raw / μ file is open
-                    if let Some(import) = self.import.as_mut() {
-                        ui.separator();
-                        import_action = import.ui(ui);
-                    }
-
-                    // the "Autobk parameters" grid (+ loading mode + graph type)
-                    ui.separator();
-                    replot = self.reduction.controls(ui);
-
-                    // button cluster: Open New file / Autobk Start / Exit / Edit μ(E)
-                    ui.separator();
+                // Pin the 2×2 button block at the bottom (그림 1-2-1-1) so it is
+                // always visible; the parameter area scrolls above it.
+                egui::Panel::bottom("autobk_actions").show_inside(ui, |ui| {
+                    ui.add_space(6.0);
+                    use crate::widgets::{self, CHUNKY_BTN};
                     ui.horizontal(|ui| {
-                        if ui.button("Open New file").clicked() {
+                        if widgets::action(ui, "Open New file", CHUNKY_BTN).clicked() {
                             open_clicked = true;
                         }
-                        if ui
-                            .add_enabled(has_mu, egui::Button::new("Autobk Start"))
-                            .clicked()
-                        {
+                        if widgets::primary(ui, "Autobk Start", CHUNKY_BTN, has_mu).clicked() {
                             start_clicked = true;
                         }
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Exit").clicked() {
+                        if widgets::exit(ui, CHUNKY_BTN).clicked() {
                             exit_clicked = true;
                         }
-                        if ui
-                            .add_enabled(has_mu, egui::Button::new("Edit μ(E)"))
-                            .clicked()
-                        {
+                        if widgets::action_enabled(ui, "Edit μ(E)", CHUNKY_BTN, has_mu).clicked() {
                             edit_clicked = true;
                         }
+                    });
+                    ui.add_space(4.0);
+                });
+
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.heading("Autobk");
+
+                        // info rows: Title (group label) / Data File / Theory
+                        egui::Grid::new("autobk_info")
+                            .num_columns(2)
+                            .spacing([6.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label("Title");
+                                match self.session.current_group_mut() {
+                                    Some(g) => {
+                                        ui.text_edit_singleline(&mut g.label);
+                                    }
+                                    None => {
+                                        ui.weak("— no data —");
+                                    }
+                                }
+                                ui.end_row();
+
+                                ui.label("Data File");
+                                match &data_file {
+                                    Some(name) => {
+                                        ui.monospace(name.as_str());
+                                    }
+                                    None => {
+                                        ui.weak("—");
+                                    }
+                                }
+                                ui.end_row();
+
+                                ui.label("Theory");
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .button("Load…")
+                                        .on_hover_text(
+                                            "FEFF chi.dat standard for the background constraint",
+                                        )
+                                        .clicked()
+                                    {
+                                        theory_pick = true;
+                                    }
+                                    match &theory_name {
+                                        Some(name) => {
+                                            ui.monospace(name.as_str());
+                                            if ui.small_button("✕").clicked() {
+                                                theory_clear = true;
+                                            }
+                                        }
+                                        None => {
+                                            ui.weak("(none)");
+                                        }
+                                    }
+                                });
+                                ui.end_row();
+                            });
+
+                        // column chooser, shown while a raw / μ file is open
+                        if let Some(import) = self.import.as_mut() {
+                            ui.separator();
+                            import_action = import.ui(ui);
+                        }
+
+                        // the "Autobk parameters" grid (+ loading mode + graph type)
+                        ui.separator();
+                        replot = self.reduction.controls(ui);
                     });
                 });
             });
@@ -1052,35 +1059,42 @@ impl XafsViewApp {
     /// The Folders tab: configure the data/work/feff working directories.
     fn folders_panel(&mut self, ui: &mut egui::Ui) {
         let mut exit_clicked = false;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Folders");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.strong("Change folder");
-                });
-            });
-            ui.label("Working directories used for file dialogs and output. Type a path or push.");
-            ui.add_space(8.0);
-
-            // Only the folders this app actually uses (functional fields only):
-            // the original's Base / Sub base / Autobk / Feffit_txt / IE Explorer /
-            // Results folders have no engine mapping here.
-            egui::Grid::new("folders_grid")
-                .num_columns(3)
-                .spacing([8.0, 8.0])
-                .show(ui, |ui| {
-                    folder_row(ui, "Data folder", &mut self.session.folders.data_dir);
-                    ui.end_row();
-                    folder_row(ui, "Work folder", &mut self.session.folders.work_dir);
-                    ui.end_row();
-                    folder_row(ui, "FEFF folder", &mut self.session.folders.feff_dir);
-                    ui.end_row();
-                });
-
-            ui.add_space(10.0);
-            if ui.button("Exit").clicked() {
+        // Pin Exit at the bottom (always visible); the folder rows scroll above.
+        egui::Panel::bottom("folders_actions").show_inside(ui, |ui| {
+            ui.add_space(6.0);
+            if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
                 exit_clicked = true;
             }
+            ui.add_space(4.0);
+        });
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Folders");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.strong("Change folder");
+                    });
+                });
+                ui.label(
+                    "Working directories used for file dialogs and output. Type a path or push.",
+                );
+                ui.add_space(8.0);
+
+                // Only the folders this app actually uses (functional fields only):
+                // the original's Base / Sub base / Autobk / Feffit_txt / IE Explorer
+                // / Results folders have no engine mapping here.
+                egui::Grid::new("folders_grid")
+                    .num_columns(3)
+                    .spacing([8.0, 8.0])
+                    .show(ui, |ui| {
+                        folder_row(ui, "Data folder", &mut self.session.folders.data_dir);
+                        ui.end_row();
+                        folder_row(ui, "Work folder", &mut self.session.folders.work_dir);
+                        ui.end_row();
+                        folder_row(ui, "FEFF folder", &mut self.session.folders.feff_dir);
+                        ui.end_row();
+                    });
+            });
         });
         if exit_clicked {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1241,7 +1255,7 @@ fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBu
             Some(std::path::PathBuf::from(text))
         };
     }
-    if ui.button("push").clicked()
+    if crate::widgets::action(ui, "push", crate::widgets::PUSH_BTN).clicked()
         && let Some(picked) = rfd::FileDialog::new().pick_folder()
     {
         *dir = Some(picked);

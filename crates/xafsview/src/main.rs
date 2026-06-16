@@ -19,6 +19,7 @@ mod plot;
 mod plot_data;
 mod reduce_ui;
 mod wavelet;
+mod widgets;
 mod window;
 mod xanes_ui;
 

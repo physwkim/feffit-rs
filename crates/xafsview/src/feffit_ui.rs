@@ -634,8 +634,7 @@ impl FeffitUi {
         });
 
         ui.separator();
-        if ui
-            .add_enabled(self.has_enabled_path(), egui::Button::new("Run"))
+        if crate::widgets::primary(ui, "Run", crate::widgets::ROW_BTN, self.has_enabled_path())
             .clicked()
         {
             action = Some(FeffitAction::Run);
