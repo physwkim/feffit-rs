@@ -17,7 +17,7 @@ pub enum GraphType {
     Norm,
     /// First derivative `d(mu)/dE`.
     Deriv,
-    /// k-weighted EXAFS `kʷ·χ(k)`.
+    /// k-weighted EXAFS `k^w·χ(k)`.
     KChi,
     /// Magnitude of the Fourier transform `|χ(R)|`.
     ChiR,
@@ -39,7 +39,7 @@ impl GraphType {
             GraphType::MuBkg => "μ + bkg",
             GraphType::Norm => "norm",
             GraphType::Deriv => "deriv",
-            GraphType::KChi => "kʷ·χ(k)",
+            GraphType::KChi => "k^w·χ(k)",
             GraphType::ChiR => "χ(R)",
         }
     }
@@ -61,7 +61,7 @@ pub struct ReductionUi {
     pub e0: f64,
     /// AUTOBK `Rbkg` (Å).
     pub rbkg: f64,
-    /// k-weight for the background FT and the kʷ·χ(k) plot.
+    /// k-weight for the background FT and the k^w·χ(k) plot.
     pub kweight: i32,
     /// FT window lower bound (Å⁻¹).
     pub kmin: f64,
