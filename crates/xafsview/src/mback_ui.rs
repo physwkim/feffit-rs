@@ -4,7 +4,7 @@
 //!
 //! This is the one Phase-8 feature that joins both halves of the stack: the
 //! Chantler `f2` comes from [`xraydb`] (keyed by element + energy grid) and the
-//! fit itself is the headless [`mback_norm`](xasdata::mback_norm) engine. The
+//! fit itself is the headless [`mback_norm`] engine. The
 //! window plots the MBACK-normalized spectrum against the group's existing
 //! polynomial normalization for comparison.
 

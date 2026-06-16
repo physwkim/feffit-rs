@@ -9,7 +9,7 @@
 //!   chemical formula ([`XrayDb::material_mu`]).
 //!
 //! These windows are pure read-outs (no plot, no session mutation), so they take
-//! no [`siplot`](siplot) handle.
+//! no [`siplot`] handle.
 
 use eframe::egui;
 use egui::Color32;

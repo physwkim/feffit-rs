@@ -3,9 +3,8 @@
 //!
 //! All tools read the chosen group's normalized or flattened μ(E) (a group must
 //! have been normalized first) and call the headless [`xasdata`] primitives
-//! ([`peak`](xasdata::peak), [`valley`](xasdata::valley),
-//! [`x_at_y`](xasdata::x_at_y), [`arctan_step`](xasdata::arctan_step),
-//! [`centroid`](xasdata::centroid)). The window owns its own [`Plot1D`].
+//! ([`peak`], [`valley`], [`x_at_y`], [`arctan_step`], [`centroid`]). The window
+//! owns its own [`Plot1D`].
 //!
 //! MBACK / NEXAFS normalization (the other XANES-tab item) is intentionally not
 //! here: it needs Chantler `f2` from xraydb keyed by element + edge, which lands
