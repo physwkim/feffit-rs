@@ -30,10 +30,10 @@ pub use xmu::{MuSpec, XmuError, build_mu};
 // Re-export the engine parameter/window types so downstream crates (the GUI,
 // batch tools) can drive reduction through `xasdata` alone.
 pub use xafsft::Window;
-pub use xasproc::mathutils::interp_linear;
+pub use xasproc::mathutils::{interp_cubic, interp_linear};
 pub use xasproc::mback::{Edge, MbackNorm, MbackNormParams, mback_norm};
 pub use xasproc::xanes::{arctan_step, centroid, peak, valley, x_at_y};
 pub use xasproc::{
-    AutobkParams, Lincombo, LincomboParams, PcaFit, PcaModel, PreEdgeParams, lincombo_fit, pca_fit,
-    pca_train,
+    AutobkParams, Lincombo, LincomboParams, PcaFit, PcaModel, PreEdgeParams, groups2matrix,
+    lincombo_fit, pca_fit, pca_train,
 };

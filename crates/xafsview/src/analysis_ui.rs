@@ -1,9 +1,10 @@
 //! XANES **linear-combination fitting** (LCF) and **principal-component
 //! analysis** (PCA) windows.
 //!
-//! Both reduce to: pick spectra from the session, resample them onto one common
-//! energy grid over a fit range ([`xasdata::resample_matrix`]), and call the
-//! headless engine ([`xasdata::lincombo_fit`] / [`xasdata::pca_train`] +
+//! Both reduce to: pick spectra from the session, build the analysis matrix on
+//! the reference spectrum's native energy grid over a fit range
+//! ([`xasdata::groups2matrix`], cubic interpolation — matching larch), and call
+//! the headless engine ([`xasdata::lincombo_fit`] / [`xasdata::pca_train`] +
 //! [`xasdata::pca_fit`]). Each window owns its own [`Plot1D`]. Spectra are taken
 //! as normalized or flattened μ(E); a group must have been normalized first.
 
@@ -11,9 +12,7 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
 use siplot::{Plot1D, YAxis};
-use xasdata::{
-    PcaModel, XasGroup, interp_linear, lincombo_fit, pca_fit, pca_train, resample_matrix,
-};
+use xasdata::{PcaModel, XasGroup, groups2matrix, interp_cubic, lincombo_fit, pca_fit, pca_train};
 
 const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
 const RED: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
@@ -92,7 +91,6 @@ pub struct LcfWindow {
     use_flat: bool,
     emin: f64,
     emax: f64,
-    npts: usize,
     seeded: bool,
     result: Option<LcfResult>,
     error: Option<String>,
@@ -112,7 +110,6 @@ impl LcfWindow {
             use_flat: true,
             emin: 0.0,
             emax: 0.0,
-            npts: 300,
             seeded: false,
             result: None,
             error: None,
@@ -193,7 +190,6 @@ impl LcfWindow {
             ui.add(egui::DragValue::new(&mut self.emin).speed(1.0));
             ui.add(egui::DragValue::new(&mut self.emax).speed(1.0));
         });
-        ui.add(egui::Slider::new(&mut self.npts, 50..=2000).text("grid points"));
 
         ui.separator();
         ui.strong("Standards");
@@ -249,7 +245,7 @@ impl LcfWindow {
                 }
             }
         }
-        let Some((grid, rows)) = resample_matrix(&curves, self.emin, self.emax, self.npts) else {
+        let Some((grid, rows)) = groups2matrix(&curves, self.emin, self.emax) else {
             self.error = Some("empty fit range / no overlap".to_owned());
             return;
         };
@@ -333,7 +329,6 @@ pub struct PcaWindow {
     use_flat: bool,
     emin: f64,
     emax: f64,
-    npts: usize,
     seeded: bool,
     ncomps: usize,
     target: Option<usize>,
@@ -355,7 +350,6 @@ impl PcaWindow {
             use_flat: true,
             emin: 0.0,
             emax: 0.0,
-            npts: 300,
             seeded: false,
             ncomps: 2,
             target: None,
@@ -421,7 +415,6 @@ impl PcaWindow {
             ui.add(egui::DragValue::new(&mut self.emin).speed(1.0));
             ui.add(egui::DragValue::new(&mut self.emax).speed(1.0));
         });
-        ui.add(egui::Slider::new(&mut self.npts, 50..=2000).text("grid points"));
 
         ui.separator();
         ui.strong("Training set");
@@ -477,7 +470,7 @@ impl PcaWindow {
                 curves.push(xy);
             }
         }
-        let Some((grid, rows)) = resample_matrix(&curves, self.emin, self.emax, self.npts) else {
+        let Some((grid, rows)) = groups2matrix(&curves, self.emin, self.emax) else {
             self.error = Some("empty range / no overlap".to_owned());
             return;
         };
@@ -495,8 +488,13 @@ impl PcaWindow {
             self.error = Some("unknown not normalized".to_owned());
             return;
         };
-        // Put the unknown on the model's exact grid.
-        let on_grid = interp_linear(&t.grid, e, a);
+        // larch `pca_fit`: slice the unknown to the model's fit range on its own
+        // native grid, then cubic-interpolate onto the model's grid.
+        let Some((xdat, rows)) = groups2matrix(&[(e, a)], self.emin, self.emax) else {
+            self.error = Some("empty range / no overlap".to_owned());
+            return;
+        };
+        let on_grid = interp_cubic(&xdat, &rows[0], &t.grid);
         let fit = pca_fit(&on_grid, &t.model, self.ncomps, true);
         self.reco = Some(PcaReco {
             label: groups[ti].label.clone(),
