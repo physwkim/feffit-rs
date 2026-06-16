@@ -463,8 +463,13 @@ impl XafsViewApp {
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot
                     .set_graph_y_label("normalized μ(E)", siplot::YAxis::Left);
-                if let Some(norm) = &g.norm {
-                    let h = self.plot.add_curve(&g.energy, norm, BLUE);
+                // Athena/XAFSView convention: the "normalized" view shows the
+                // *flattened* μ (post-edge curvature removed, lifted to ~1),
+                // not the plain edge-step normalization (which keeps the
+                // post-edge slope). Fall back to `norm` only if flattening is
+                // somehow unavailable — `reduce` always sets them together.
+                if let Some(flat) = g.flat.as_ref().or(g.norm.as_ref()) {
+                    let h = self.plot.add_curve(&g.energy, flat, BLUE);
                     self.plot.set_item_legend(h, "norm");
                 }
             }
