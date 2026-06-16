@@ -19,7 +19,7 @@
 //!     `mean` are sign-independent, as is `pca_fit`'s `yfit`/`chi_square`/`scale`
 //!     (a component sign flip flips its weight, leaving the product invariant).
 //!   * `pca_fit(rescale=true)` fits a `scale` parameter bounded `min=0`; lmfit's
-//!     MINUIT lower-bound transform is reproduced exactly (see [`from_internal`]).
+//!     MINUIT lower-bound transform is reproduced exactly (see `from_internal`).
 
 use lm::{LmConfig, lmdif};
 use nalgebra::{DMatrix, DVector, SymmetricEigen};

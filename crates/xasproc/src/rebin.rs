@@ -10,7 +10,7 @@
 //! Boxcar / centroid / interp paths are bit-exact vs larch. The `'spline'`
 //! method stands a Thomas tridiagonal solve in for scipy's LAPACK
 //! `solve_banded`; for these well-conditioned interpolation systems the two
-//! agree to round-off (~1e-16 on the Cu foil), see [`cubic_spline_at`].
+//! agree to round-off (~1e-16 on the Cu foil), see `cubic_spline_at`.
 
 use crate::mathutils::{etok, index_of, ktoe, remove_dups, remove_nans2};
 
