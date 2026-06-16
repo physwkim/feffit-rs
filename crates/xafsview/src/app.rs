@@ -8,7 +8,7 @@ use siplot::Plot1D;
 use xasdata::{ColumnFile, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
-use crate::atoms_ui::{AtomsAction, AtomsTab, FeffTab, PlotSitesWindow};
+use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindow};
 use crate::calc_ui::{IonChamberWindow, PeriodicTableWindow, PowderWindow};
 use crate::clean_ui::{CleanAction, EditXmuState};
 use crate::feffit_batch::{BatchAction, FeffitBatch};
@@ -1120,11 +1120,19 @@ impl eframe::App for XafsViewApp {
                     self.tab = Tab::Feff;
                 }
             }
-            Tab::Feff => self.feff_tab.ui(
-                ui,
-                &mut self.feff_inp,
-                self.session.folders.work_dir.as_deref(),
-            ),
+            Tab::Feff => {
+                match self.feff_tab.ui(
+                    ui,
+                    &mut self.feff_inp,
+                    self.session.folders.work_dir.as_deref(),
+                ) {
+                    Some(FeffAction::ViewStructure) => self.plot_sites.open = true,
+                    Some(FeffAction::Exit) => {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close)
+                    }
+                    None => {}
+                }
+            }
             Tab::About => self.about_tab(ui),
         });
 

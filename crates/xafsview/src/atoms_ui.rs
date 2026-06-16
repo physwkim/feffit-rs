@@ -349,6 +349,16 @@ struct RunSummary {
     dat_names: Vec<String>,
 }
 
+/// Signals the app should act after the Feff tab renders (the original Feff
+/// form's "View Structure" and "Exit" buttons, which the tab itself can't honor
+/// — they touch the app-owned Plot Sites window / the viewport).
+pub enum FeffAction {
+    /// Open the Plot Sites 3D cluster viewer (original "View Structure").
+    ViewStructure,
+    /// Close the application (original "Exit").
+    Exit,
+}
+
 /// The **Feff** tab state: the backend choice and the in-flight/last run.
 pub struct FeffTab {
     backend: BackendSel,
@@ -369,9 +379,16 @@ impl Default for FeffTab {
 }
 
 impl FeffTab {
-    /// Render the Feff tab; edits `feff_inp` in place and can run FEFF.
-    pub fn ui(&mut self, ui: &mut egui::Ui, feff_inp: &mut String, work_dir: Option<&Path>) {
+    /// Render the Feff tab; edits `feff_inp` in place and can run FEFF. Returns a
+    /// [`FeffAction`] for the buttons the app must service (View Structure, Exit).
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        feff_inp: &mut String,
+        work_dir: Option<&Path>,
+    ) -> Option<FeffAction> {
         self.poll();
+        let mut action = None;
 
         ui.horizontal(|ui| {
             ui.heading("Feff");
@@ -380,6 +397,8 @@ impl FeffTab {
         });
         ui.separator();
 
+        // Original Feff form (그림 1-2-5) button row: Exit / Select Feff Version
+        // / View Structure / Execute, plus our Load/Save for the input file.
         ui.horizontal(|ui| {
             if ui.button("Load…").clicked()
                 && let Some(text) = load_feff_inp(work_dir)
@@ -390,16 +409,29 @@ impl FeffTab {
                 save_feff_inp(feff_inp, work_dir);
             }
             ui.separator();
-            ui.label("Backend");
+            ui.label("Feff version");
             ui.selectable_value(&mut self.backend, BackendSel::Feff10, "FEFF10 (in-process)");
             ui.selectable_value(&mut self.backend, BackendSel::Feff8l, "FEFF8L (external)");
             ui.separator();
+            if ui
+                .add_enabled(
+                    !feff_inp.trim().is_empty(),
+                    egui::Button::new("View Structure"),
+                )
+                .clicked()
+            {
+                action = Some(FeffAction::ViewStructure);
+            }
             let can_run = !self.running && !feff_inp.trim().is_empty();
             if ui
                 .add_enabled(can_run, egui::Button::new("Run FEFF"))
                 .clicked()
             {
                 self.start_run(feff_inp, work_dir);
+            }
+            ui.separator();
+            if ui.button("Exit").clicked() {
+                action = Some(FeffAction::Exit);
             }
             if self.running {
                 ui.spinner();
@@ -442,6 +474,8 @@ impl FeffTab {
                 ui.weak("No run yet.");
             }
         }
+
+        action
     }
 
     /// Drain a finished background run, if any.
