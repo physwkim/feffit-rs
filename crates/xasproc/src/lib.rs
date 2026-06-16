@@ -7,6 +7,7 @@
 //! against `larch` on a real `mu(E)` dataset.
 
 pub mod autobk;
+pub mod clean;
 pub mod deconvolve;
 pub mod diffkk;
 pub mod e0;
@@ -17,8 +18,12 @@ pub mod pca;
 pub mod preedge;
 pub mod rebin;
 pub mod special;
+pub mod xanes;
 
 pub use autobk::{Autobk, AutobkDelta, AutobkParams, autobk, autobk_delta_chi};
+pub use clean::{
+    RangeSide, deglitch_point_mask, deglitch_range_mask, removed_count, select, trim_mask,
+};
 pub use deconvolve::{ConvParams, DeconvForm, DeconvParams, xas_convolve, xas_deconvolve};
 pub use diffkk::{DiffKK, diffkk};
 pub use e0::{find_e0, find_energy_step};
@@ -27,3 +32,4 @@ pub use mback::{Edge, Mback, MbackNorm, MbackNormParams, MbackParams, mback, mba
 pub use pca::{PcaFit, PcaModel, pca_fit, pca_train};
 pub use preedge::{PreEdge, PreEdgeParams, pre_edge};
 pub use rebin::{RebinMethod, RebinParams, Rebinned, rebin_xafs, sort_xafs};
+pub use xanes::{arctan_step, centroid, peak, valley, x_at_y};
