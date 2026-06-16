@@ -1032,21 +1032,40 @@ impl XafsViewApp {
 
     /// The Folders tab: configure the data/work/feff working directories.
     fn folders_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Folders");
-        ui.label("Configure the working directories used for file dialogs and output.");
-        ui.add_space(8.0);
-
-        egui::Grid::new("folders_grid")
-            .num_columns(3)
-            .spacing([12.0, 8.0])
-            .show(ui, |ui| {
-                folder_row(ui, "Data folder", &mut self.session.folders.data_dir);
-                ui.end_row();
-                folder_row(ui, "Work folder", &mut self.session.folders.work_dir);
-                ui.end_row();
-                folder_row(ui, "FEFF folder", &mut self.session.folders.feff_dir);
-                ui.end_row();
+        let mut exit_clicked = false;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Folders");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.strong("Change folder");
+                });
             });
+            ui.label("Working directories used for file dialogs and output. Type a path or push.");
+            ui.add_space(8.0);
+
+            // Only the folders this app actually uses (functional fields only):
+            // the original's Base / Sub base / Autobk / Feffit_txt / IE Explorer /
+            // Results folders have no engine mapping here.
+            egui::Grid::new("folders_grid")
+                .num_columns(3)
+                .spacing([8.0, 8.0])
+                .show(ui, |ui| {
+                    folder_row(ui, "Data folder", &mut self.session.folders.data_dir);
+                    ui.end_row();
+                    folder_row(ui, "Work folder", &mut self.session.folders.work_dir);
+                    ui.end_row();
+                    folder_row(ui, "FEFF folder", &mut self.session.folders.feff_dir);
+                    ui.end_row();
+                });
+
+            ui.add_space(10.0);
+            if ui.button("Exit").clicked() {
+                exit_clicked = true;
+            }
+        });
+        if exit_clicked {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 }
 
@@ -1175,11 +1194,27 @@ impl eframe::App for XafsViewApp {
 /// button that opens a native folder picker.
 fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBuf>) {
     ui.label(label);
-    match dir.as_ref() {
-        Some(p) => ui.monospace(p.display().to_string()),
-        None => ui.weak("(not set)"),
-    };
-    if ui.button("Browse…").clicked()
+    // Editable path text (mirrors the original's typeable folder field), kept in
+    // sync with the PathBuf; an empty string clears it.
+    let mut text = dir
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    if ui
+        .add(
+            egui::TextEdit::singleline(&mut text)
+                .desired_width(300.0)
+                .hint_text("(not set)"),
+        )
+        .changed()
+    {
+        *dir = if text.trim().is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(text))
+        };
+    }
+    if ui.button("push").clicked()
         && let Some(picked) = rfd::FileDialog::new().pick_folder()
     {
         *dir = Some(picked);
