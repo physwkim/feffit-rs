@@ -115,6 +115,11 @@ pub struct XafsViewApp {
 impl XafsViewApp {
     /// Build the app. Requires the wgpu render state (see [`main`](crate::main)).
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Install the glyph-fallback font before anything draws, so both the egui
+        // UI and siplot axis labels can render the superscript/subscript math
+        // glyphs the default font lacks (Å⁻¹, kʷ, χ²ᵣ).
+        crate::fonts::install_fallback(&cc.egui_ctx);
+
         let render_state = cc
             .wgpu_render_state
             .as_ref()

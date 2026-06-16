@@ -12,6 +12,7 @@ mod calc_ui;
 mod clean_ui;
 mod feffit_batch;
 mod feffit_ui;
+mod fonts;
 mod import;
 mod mback_ui;
 mod plot;
