@@ -123,9 +123,10 @@ const PALETTE: [Color32; 8] = [
     Color32::from_rgb(0x17, 0xbe, 0xcf),
 ];
 
-/// Feffit "Send to Plot Data" overlay colours (data vs model).
-const FIT_DATA: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
-const FIT_MODEL: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
+/// Feffit data vs model curve colours, shared by the Feffit tab's own plot
+/// ([`replot_feffit`](crate::app)) and this window's "Send to Plot Data" overlay.
+pub(crate) const FIT_DATA: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
+pub(crate) const FIT_MODEL: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
 
 /// A Feffit fit handed over from the Feffit tab's "Send to Plot Data": its data
 /// and model curves in the chosen space, with that space's axis labels. When

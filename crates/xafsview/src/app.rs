@@ -852,8 +852,7 @@ impl XafsViewApp {
     /// Redraw the shared plot with the last fit's data vs model in the selected
     /// space/part.
     fn replot_feffit(&mut self) {
-        const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
-        const RED: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
+        use crate::plot_data::{FIT_DATA, FIT_MODEL};
 
         self.plot.clear_curves();
         let (space, part) = self.feffit.plot_selection();
@@ -865,9 +864,9 @@ impl XafsViewApp {
         self.plot.set_graph_x_label(xlabel);
         self.plot.set_graph_y_label(ylabel, siplot::YAxis::Left);
         if !x.is_empty() {
-            let hd = self.plot.add_curve(&x, &data_y, BLUE);
+            let hd = self.plot.add_curve(&x, &data_y, FIT_DATA);
             self.plot.set_item_legend(hd, "data");
-            let hm = self.plot.add_curve(&x, &model_y, RED);
+            let hm = self.plot.add_curve(&x, &model_y, FIT_MODEL);
             self.plot.set_item_legend(hm, "model");
         }
     }
