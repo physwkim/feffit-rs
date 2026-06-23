@@ -25,6 +25,9 @@ pub enum FeffitAction {
     Run,
     /// Redraw the data-vs-model plot (the plot space/part changed).
     Replot,
+    /// Open the Plot Data overlay window for the fit's group (the original's
+    /// "Send to plot data").
+    SendToPlotData,
 }
 
 /// How a global variable enters the fit.
@@ -75,26 +78,23 @@ impl PathRow {
     /// first-shell wiring (degen from the file; s02/e0/Δr/σ² bound to the
     /// default variables) so a loaded path is ready to fit.
     fn new(label: String, path: FeffPath) -> Self {
-        let degen = path.feffdat.degen;
         let reff = path.feffdat.reff;
         let nleg = path.feffdat.nleg;
+        let specs = default_specs(path.feffdat.degen);
         Self {
             label,
             reff,
             nleg,
             enabled: true,
             path,
-            specs: [
-                format!("{degen}"),      // degen
-                "amp".to_owned(),        // s02
-                "del_e0".to_owned(),     // e0
-                "0".to_owned(),          // ei
-                "alpha*reff".to_owned(), // deltar
-                "sig2".to_owned(),       // sigma2
-                "0".to_owned(),          // third
-                "0".to_owned(),          // fourth
-            ],
+            specs,
         }
+    }
+
+    /// Reset the eight parameter-spec fields to the standard first-shell starter
+    /// wiring (the original "Init" button for the selected path).
+    fn reset_specs(&mut self) {
+        self.specs = default_specs(self.path.feffdat.degen);
     }
 
     /// Parse the eight spec fields into a [`PathSpec`] (a field that parses as a
@@ -120,6 +120,49 @@ fn parse_spec(s: &str) -> Spec {
         Ok(v) => Spec::Const(v),
         Err(_) => Spec::Expr(t.to_owned()),
     }
+}
+
+/// The standard first-shell starter spec fields (degen from the file; s02/e0/Δr/σ²
+/// bound to the default variables) — shared by [`PathRow::new`] and the "Init"
+/// reset.
+fn default_specs(degen: impl std::fmt::Display) -> [String; 8] {
+    [
+        format!("{degen}"),      // degen
+        "amp".to_owned(),        // s02
+        "del_e0".to_owned(),     // e0
+        "0".to_owned(),          // ei
+        "alpha*reff".to_owned(), // deltar
+        "sig2".to_owned(),       // sigma2
+        "0".to_owned(),          // third
+        "0".to_owned(),          // fourth
+    ]
+}
+
+/// Parse the "user defined functions" box: each `%set NAME = EXPR` line yields a
+/// `(name, expr)` pair (blank lines and `%`-comments are ignored), the way the
+/// original XAFSView's UDF block defines extra named fit constants/constraints.
+fn parse_user_funcs(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        // Only `%set` definitions; other `%`-lines are comments/directives.
+        if t.len() < 4 || !t[..4].eq_ignore_ascii_case("%set") {
+            continue;
+        }
+        let rest = &t[4..];
+        if !rest.starts_with(char::is_whitespace) {
+            continue; // e.g. "%setx" is not a "%set" definition
+        }
+        let Some((name, expr)) = rest.split_once('=') else {
+            continue;
+        };
+        let (name, expr) = (name.trim(), expr.trim());
+        let valid_name = !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if valid_name && !expr.is_empty() {
+            out.push((name.to_owned(), expr.to_owned()));
+        }
+    }
+    out
 }
 
 /// Fit-transform (k/R window) settings for the FEFFIT fit.
@@ -291,6 +334,9 @@ pub struct FeffitUi {
     /// Which path's parameter specs the path panel is showing (the original's
     /// "Path index" selector); clamped to the path list.
     selected_path: usize,
+    /// The "user defined functions" box: extra `%set name = expr` definitions
+    /// parsed into the fit's parameters before each run.
+    user_funcs: String,
     result: Option<FeffitResult>,
     plot: Option<FeffitPlot>,
 }
@@ -310,6 +356,7 @@ impl Default for FeffitUi {
             space: PlotSpace::R,
             part: PlotPart::Mag,
             selected_path: 0,
+            user_funcs: String::new(),
             result: None,
             plot: None,
         }
@@ -329,6 +376,7 @@ impl FeffitUi {
             space: self.space,
             part: self.part,
             selected_path: 0,
+            user_funcs: self.user_funcs.clone(),
             result: None,
             plot: None,
         }
@@ -423,6 +471,15 @@ impl FeffitUi {
                 ParamKind::Vary => params.add_var(&row.name, row.value),
                 ParamKind::Fixed => params.add_fixed(&row.name, row.value),
                 ParamKind::Expr => params.add_expr(&row.name, row.expr.trim()),
+            }
+        }
+        // User-defined functions: `%set name = expr` lines become extra fixed
+        // (numeric RHS) or expression parameters. Order-independent — the
+        // dependency resolve happens in `update_constraints` at fit time.
+        for (name, expr) in parse_user_funcs(&self.user_funcs) {
+            match expr.parse::<f64>() {
+                Ok(v) => params.add_fixed(&name, v),
+                Err(_) => params.add_expr(&name, &expr),
             }
         }
 
@@ -564,6 +621,22 @@ impl FeffitUi {
                     if ui.small_button("✕").clicked() {
                         remove_path = Some(idx);
                     }
+                    if ui
+                        .button("Init")
+                        .on_hover_text("reset this path's parameters to their defaults")
+                        .clicked()
+                    {
+                        self.paths[idx].reset_specs();
+                    }
+                    if ui
+                        .button("Init all")
+                        .on_hover_text("reset every path's parameters to their defaults")
+                        .clicked()
+                    {
+                        for p in self.paths.iter_mut() {
+                            p.reset_specs();
+                        }
+                    }
                 });
                 let idx = self.selected_path;
                 {
@@ -633,12 +706,39 @@ impl FeffitUi {
             }
         });
 
+        // --- User defined functions ---------------------------------------
+        // The original's UDF block: `%set name = expr` lines define extra named
+        // constants/constraints the path and variable expressions can reference.
+        ui.group(|ui| {
+            ui.strong("User defined functions");
+            ui.weak("one %set per line, e.g.  %set drcorr = alpha*reff");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.user_funcs)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace)
+                    .hint_text("%set name = expr"),
+            );
+        });
+
         ui.separator();
-        if crate::widgets::primary(ui, "Run", crate::widgets::ROW_BTN, self.has_enabled_path())
-            .clicked()
-        {
-            action = Some(FeffitAction::Run);
-        }
+        ui.horizontal(|ui| {
+            if crate::widgets::primary(ui, "Run", crate::widgets::ROW_BTN, self.has_enabled_path())
+                .clicked()
+            {
+                action = Some(FeffitAction::Run);
+            }
+            if ui
+                .add_enabled(
+                    self.result.is_some(),
+                    egui::Button::new("Send to Plot Data"),
+                )
+                .on_hover_text("open the Plot Data overlay for this group")
+                .clicked()
+            {
+                action = Some(FeffitAction::SendToPlotData);
+            }
+        });
 
         // --- Graph item (space) / Graph type (component) ------------------
         ui.horizontal(|ui| {
@@ -803,6 +903,28 @@ mod tests {
         assert!(matches!(parse_spec("0"), Spec::Const(v) if v == 0.0));
         assert!(matches!(parse_spec("amp"), Spec::Expr(s) if s == "amp"));
         assert!(matches!(parse_spec("alpha*reff"), Spec::Expr(s) if s == "alpha*reff"));
+    }
+
+    #[test]
+    fn parse_user_funcs_extracts_set_definitions() {
+        let text = "\
+            %set hbar_c = 1973\n\
+            %set drcorr = alpha*reff\n\
+            % bkg = true\n\
+            \n\
+            %setx = 5\n\
+            not a directive\n\
+            %SET Caps_OK = 2.5\n";
+        let fns = parse_user_funcs(text);
+        assert_eq!(
+            fns,
+            vec![
+                ("hbar_c".to_owned(), "1973".to_owned()),
+                ("drcorr".to_owned(), "alpha*reff".to_owned()),
+                ("Caps_OK".to_owned(), "2.5".to_owned()),
+            ],
+            "only well-formed %set lines are taken; comments and %setx are skipped"
+        );
     }
 
     #[test]

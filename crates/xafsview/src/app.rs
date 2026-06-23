@@ -582,8 +582,8 @@ impl XafsViewApp {
         // The original Feffit form's bottom "Exit" button is tab chrome, not part
         // of the reusable control set the batch window also renders, so it lives
         // in this wrapper rather than in `FeffitUi::controls`. Hide Log / Load
-        // result / Send to plot data don't map to the engine and are omitted per
-        // the functional-only field rule.
+        // result don't map to the engine and are omitted per the functional-only
+        // field rule; "Send to plot data" opens the group's Plot Data overlay.
         let mut exit = false;
         egui::Panel::left("feffit_controls")
             .resizable(true)
@@ -609,6 +609,10 @@ impl XafsViewApp {
             Some(FeffitAction::AddPath) => self.add_feff_path(),
             Some(FeffitAction::Run) => self.run_feffit(),
             Some(FeffitAction::Replot) => self.replot_feffit(),
+            Some(FeffitAction::SendToPlotData) => {
+                self.plot_data.open = true;
+                self.plot_data.mark_dirty();
+            }
             None => {}
         }
     }
