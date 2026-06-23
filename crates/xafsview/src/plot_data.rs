@@ -152,6 +152,8 @@ pub struct PlotDataWindow {
     /// Vertical offset added to trace `i` (`i · stack`), in data units.
     stack: f64,
     show_average: bool,
+    /// "Change BG color": dark plot background (the original's black/white swap).
+    dark_bg: bool,
     peak_lo: f64,
     peak_hi: f64,
     /// Which feature the Multiple peaks catching window locates.
@@ -182,6 +184,7 @@ impl PlotDataWindow {
             selected: Vec::new(),
             stack: 0.0,
             show_average: false,
+            dark_bg: false,
             peak_lo: 0.0,
             peak_hi: 0.0,
             peak_mode: PeakMode::Max,
@@ -343,6 +346,12 @@ impl PlotDataWindow {
         {
             self.dirty = true;
         }
+        if ui
+            .checkbox(&mut self.dark_bg, "Change BG color (dark)")
+            .changed()
+        {
+            self.dirty = true;
+        }
 
         ui.separator();
         ui.label("Multiple peak catching");
@@ -418,6 +427,16 @@ impl PlotDataWindow {
     fn rebuild(&mut self, groups: &[XasGroup]) {
         self.plot.clear();
 
+        // Background colour (the "Change BG color" swap): a dark canvas or the
+        // default light one, on both the window and the data area. `fg` is the
+        // overlay (average) colour, kept legible against the chosen background.
+        let (bg, fg) = if self.dark_bg {
+            (Color32::from_gray(0x12), Color32::from_gray(0xe0))
+        } else {
+            (Color32::WHITE, Color32::from_rgb(0x20, 0x20, 0x20))
+        };
+        self.plot.set_background_colors(bg, bg);
+
         // A sent Feffit fit takes over the plot (its space/axes differ from the
         // group items), so draw it alone and skip the group traces.
         if self.show_overlay
@@ -472,8 +491,7 @@ impl PlotDataWindow {
         }
 
         if let Some((x, y)) = avg {
-            self.plot
-                .add_curve_with_legend(&x, &y, Color32::from_rgb(0x20, 0x20, 0x20), "average");
+            self.plot.add_curve_with_legend(&x, &y, fg, "average");
         }
 
         for (_, px, _) in &self.peaks {
