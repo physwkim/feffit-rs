@@ -427,6 +427,7 @@ impl XafsViewApp {
         let mut built = 0usize;
         let mut build_errors = 0usize;
         let mut written = 0usize;
+        let mut write_failed = 0usize;
         for (i, result) in xasdata::make_xmu_batch(&files, &spec)
             .into_iter()
             .enumerate()
@@ -435,11 +436,15 @@ impl XafsViewApp {
                 Ok(group) => {
                     let index = number.then_some(i + 1);
                     let input = files.get(i).and_then(|f| f.path.as_deref());
-                    if self
-                        .write_xmu_output(input, &group.label, &group.energy, &group.mu, index)
-                        .is_ok()
-                    {
-                        written += 1;
+                    match self.write_xmu_output(
+                        input,
+                        &group.label,
+                        &group.energy,
+                        &group.mu,
+                        index,
+                    ) {
+                        Ok(_) => written += 1,
+                        Err(_) => write_failed += 1,
                     }
                     self.session.add_group(group);
                     built += 1;
@@ -456,7 +461,8 @@ impl XafsViewApp {
             self.replot_graph();
         }
         self.status = format!(
-            "Batch μ(E): built {built}, wrote {written} .xmu, build errors {build_errors}, \
+            "Batch μ(E): built {built}, wrote {written} .xmu \
+             ({write_failed} not written), build errors {build_errors}, \
              unreadable {read_errors}."
         );
     }
