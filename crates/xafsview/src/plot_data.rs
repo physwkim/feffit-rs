@@ -10,7 +10,7 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
 use siplot::{Plot1D, YAxis};
-use xasdata::{XasGroup, average_curves, peak_in_range};
+use xasdata::{XasGroup, average_curves, peak_in_range, x_at_y};
 
 /// Which reduction stage to overlay.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -85,6 +85,32 @@ impl PlotItem {
     }
 }
 
+/// The "Items" of the Multiple peaks catching window: which feature to locate
+/// in the search range. (The original's derivative-based "Peak @ x" needs the
+/// raw-data round-trip it describes and is left out.)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PeakMode {
+    /// Position of the maximum (the original "Max").
+    Max,
+    /// Position of the minimum (the original "Min").
+    Min,
+    /// Interpolated x where the curve crosses a target y — covers the original
+    /// "Half step" (y = 0.5 on normalized μ) and "x[i] at y".
+    AtY,
+}
+
+impl PeakMode {
+    const ALL: [PeakMode; 3] = [PeakMode::Max, PeakMode::Min, PeakMode::AtY];
+
+    fn label(self) -> &'static str {
+        match self {
+            PeakMode::Max => "Max",
+            PeakMode::Min => "Min",
+            PeakMode::AtY => "x at y",
+        }
+    }
+}
+
 /// A tab10-style palette cycled across the overlaid traces.
 const PALETTE: [Color32; 8] = [
     Color32::from_rgb(0x1f, 0x77, 0xb4),
@@ -128,7 +154,12 @@ pub struct PlotDataWindow {
     show_average: bool,
     peak_lo: f64,
     peak_hi: f64,
-    peak: Option<(f64, f64)>,
+    /// Which feature the Multiple peaks catching window locates.
+    peak_mode: PeakMode,
+    /// Target y for the "x at y" mode (0.5 = normalized half-step).
+    peak_target: f64,
+    /// One `(group label, x, y)` row per selected group from the last catch.
+    peaks: Vec<(String, f64, f64)>,
     /// A Feffit fit sent here via "Send to Plot Data", if any.
     overlay: Option<FitOverlay>,
     /// Whether the sent fit takes over the plot (vs the group items).
@@ -153,7 +184,9 @@ impl PlotDataWindow {
             show_average: false,
             peak_lo: 0.0,
             peak_hi: 0.0,
-            peak: None,
+            peak_mode: PeakMode::Max,
+            peak_target: 0.5,
+            peaks: Vec::new(),
             overlay: None,
             show_overlay: false,
             dirty: true,
@@ -312,24 +345,40 @@ impl PlotDataWindow {
         }
 
         ui.separator();
-        ui.label("Peak search");
+        ui.label("Multiple peak catching");
+        egui::ComboBox::from_id_salt("peak_mode")
+            .selected_text(self.peak_mode.label())
+            .show_ui(ui, |ui| {
+                for m in PeakMode::ALL {
+                    ui.selectable_value(&mut self.peak_mode, m, m.label());
+                }
+            });
         ui.horizontal(|ui| {
             ui.label("from");
             ui.add(egui::DragValue::new(&mut self.peak_lo).speed(0.5));
             ui.label("to");
             ui.add(egui::DragValue::new(&mut self.peak_hi).speed(0.5));
         });
-        if ui.button("Find peak (first selected)").clicked() {
-            self.find_peak(groups);
+        if self.peak_mode == PeakMode::AtY {
+            ui.horizontal(|ui| {
+                ui.label("target y");
+                ui.add(egui::DragValue::new(&mut self.peak_target).speed(0.01));
+            });
+        }
+        if ui.button("Catch peaks (selected)").clicked() {
+            self.catch_peaks(groups);
             self.dirty = true;
         }
-        match self.peak {
-            Some((x, y)) => {
-                ui.monospace(format!("peak @ x = {x:.4}, y = {y:.5}"));
-            }
-            None => {
-                ui.weak("no peak in range");
-            }
+        if self.peaks.is_empty() {
+            ui.weak("no peaks caught");
+        } else {
+            egui::ScrollArea::vertical()
+                .max_height(140.0)
+                .show(ui, |ui| {
+                    for (label, x, y) in &self.peaks {
+                        ui.monospace(format!("{label}:  x = {x:.4}, y = {y:.5}"));
+                    }
+                });
         }
 
         ui.separator();
@@ -338,21 +387,31 @@ impl PlotDataWindow {
         }
     }
 
-    /// Find the maximum of the chosen item within `[peak_lo, peak_hi]` on the
-    /// first selected group, and store it (a marker is drawn on rebuild).
-    fn find_peak(&mut self, groups: &[XasGroup]) {
-        self.peak = self
-            .first_selected(groups)
-            .and_then(|g| self.item.xy(g, self.kweight))
-            .and_then(|(x, y)| peak_in_range(&x, &y, self.peak_lo, self.peak_hi));
-    }
-
-    fn first_selected<'a>(&self, groups: &'a [XasGroup]) -> Option<&'a XasGroup> {
-        self.selected
-            .iter()
-            .zip(groups)
-            .find(|(sel, _)| **sel)
-            .map(|(_, g)| g)
+    /// Apply the chosen finder to every selected group over `[peak_lo, peak_hi]`,
+    /// collecting one `(label, x, y)` row per group — the original "Multiple peaks
+    /// catching", which tabulates a peak position across all plotted spectra. A
+    /// marker is drawn at each caught x on rebuild.
+    fn catch_peaks(&mut self, groups: &[XasGroup]) {
+        self.peaks.clear();
+        for (i, g) in groups.iter().enumerate() {
+            if !self.selected.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some((x, y)) = self.item.xy(g, self.kweight) else {
+                continue;
+            };
+            let found = match self.peak_mode {
+                PeakMode::Max => peak_in_range(&x, &y, self.peak_lo, self.peak_hi),
+                PeakMode::Min => min_in_range(&x, &y, self.peak_lo, self.peak_hi),
+                PeakMode::AtY => {
+                    x_at_y_in_range(&x, &y, self.peak_target, self.peak_lo, self.peak_hi)
+                        .map(|px| (px, self.peak_target))
+                }
+            };
+            if let Some((px, py)) = found {
+                self.peaks.push((g.label.clone(), px, py));
+            }
+        }
     }
 
     /// Rebuild every plotted curve from the current selection and settings.
@@ -417,9 +476,67 @@ impl PlotDataWindow {
                 .add_curve_with_legend(&x, &y, Color32::from_rgb(0x20, 0x20, 0x20), "average");
         }
 
-        if let Some((px, _)) = self.peak {
+        for (_, px, _) in &self.peaks {
             self.plot
-                .add_x_marker(px, Color32::from_rgb(0x80, 0x80, 0x80));
+                .add_x_marker(*px, Color32::from_rgb(0x80, 0x80, 0x80));
         }
+    }
+}
+
+/// The minimum `(x, y)` of `y` over `x ∈ [lo, hi]` (inclusive); `None` when no
+/// sample falls in the range. Mirrors [`peak_in_range`] for the minimum.
+fn min_in_range(x: &[f64], y: &[f64], lo: f64, hi: f64) -> Option<(f64, f64)> {
+    let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+    let mut best: Option<(f64, f64)> = None;
+    for (&xi, &yi) in x.iter().zip(y) {
+        if xi < lo || xi > hi {
+            continue;
+        }
+        match best {
+            Some((_, by)) if yi >= by => {}
+            _ => best = Some((xi, yi)),
+        }
+    }
+    best
+}
+
+/// Interpolated x where `y` first crosses `target`, restricted to the samples
+/// with `x ∈ [lo, hi]`. Range-limits the arrays, then defers to [`x_at_y`].
+fn x_at_y_in_range(x: &[f64], y: &[f64], target: f64, lo: f64, hi: f64) -> Option<f64> {
+    let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+    let (xs, ys): (Vec<f64>, Vec<f64>) = x
+        .iter()
+        .zip(y)
+        .filter(|&(&xi, _)| xi >= lo && xi <= hi)
+        .map(|(&xi, &yi)| (xi, yi))
+        .unzip();
+    x_at_y(&xs, &ys, target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn min_in_range_finds_min_and_respects_range() {
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = [5.0, -2.0, 3.0, -9.0, 1.0];
+        // -9 at x=3 is the global min but lies outside [0, 2]; in-range min is -2.
+        assert_eq!(min_in_range(&x, &y, 0.0, 2.0), Some((1.0, -2.0)));
+        // Full range sees the global minimum.
+        assert_eq!(min_in_range(&x, &y, 0.0, 4.0), Some((3.0, -9.0)));
+        // Empty range yields nothing.
+        assert_eq!(min_in_range(&x, &y, 10.0, 20.0), None);
+    }
+
+    #[test]
+    fn x_at_y_in_range_restricts_then_interpolates() {
+        // A line y = x: crossing y = 2.5 is at x = 2.5 by linear interpolation.
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let got = x_at_y_in_range(&x, &y, 2.5, 0.0, 4.0).expect("crossing");
+        assert!((got - 2.5).abs() < 1e-9, "got {got}");
+        // The same target outside the restricted window is not found.
+        assert_eq!(x_at_y_in_range(&x, &y, 2.5, 3.0, 4.0), None);
     }
 }
