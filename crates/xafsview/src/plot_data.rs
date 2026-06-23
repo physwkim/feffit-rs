@@ -152,6 +152,8 @@ pub struct PlotDataWindow {
     /// Vertical offset added to trace `i` (`i · stack`), in data units.
     stack: f64,
     show_average: bool,
+    /// "Average (5 points)": display-smooth each curve (5-point moving average).
+    smooth5: bool,
     /// "Change BG color": dark plot background (the original's black/white swap).
     dark_bg: bool,
     peak_lo: f64,
@@ -184,6 +186,7 @@ impl PlotDataWindow {
             selected: Vec::new(),
             stack: 0.0,
             show_average: false,
+            smooth5: false,
             dark_bg: false,
             peak_lo: 0.0,
             peak_hi: 0.0,
@@ -347,6 +350,13 @@ impl PlotDataWindow {
             self.dirty = true;
         }
         if ui
+            .checkbox(&mut self.smooth5, "Average (5 points)")
+            .on_hover_text("Display-smooth each curve with a 5-point moving average")
+            .changed()
+        {
+            self.dirty = true;
+        }
+        if ui
             .checkbox(&mut self.dark_bg, "Change BG color (dark)")
             .changed()
         {
@@ -463,6 +473,7 @@ impl PlotDataWindow {
                 continue;
             }
             if let Some((x, y)) = self.item.xy(g, self.kweight) {
+                let y = if self.smooth5 { smooth5(&y) } else { y };
                 let color = PALETTE[traces.len() % PALETTE.len()];
                 traces.push((g.label.clone(), x, y, color));
             }
@@ -499,6 +510,20 @@ impl PlotDataWindow {
                 .add_x_marker(*px, Color32::from_rgb(0x80, 0x80, 0x80));
         }
     }
+}
+
+/// A 5-point centered moving average (the original's "Average (5 points)"), with
+/// the window shrinking at the ends. Display-only smoothing.
+fn smooth5(y: &[f64]) -> Vec<f64> {
+    let n = y.len();
+    (0..n)
+        .map(|i| {
+            let lo = i.saturating_sub(2);
+            let hi = (i + 2).min(n - 1);
+            let win = &y[lo..=hi];
+            win.iter().sum::<f64>() / win.len() as f64
+        })
+        .collect()
 }
 
 /// The minimum `(x, y)` of `y` over `x ∈ [lo, hi]` (inclusive); `None` when no
@@ -545,6 +570,18 @@ mod tests {
         assert_eq!(min_in_range(&x, &y, 0.0, 4.0), Some((3.0, -9.0)));
         // Empty range yields nothing.
         assert_eq!(min_in_range(&x, &y, 10.0, 20.0), None);
+    }
+
+    #[test]
+    fn smooth5_is_a_shrinking_window_moving_average() {
+        // The interior point averages its 5-sample window; the ends shrink it.
+        let s = smooth5(&[0.0, 0.0, 10.0, 0.0, 0.0]);
+        assert!((s[2] - 2.0).abs() < 1e-12, "centre = 10/5: {s:?}");
+        assert!((s[0] - 10.0 / 3.0).abs() < 1e-12, "left edge = 10/3: {s:?}");
+        // A constant signal is unchanged, and an empty input stays empty.
+        let c = smooth5(&[5.0, 5.0, 5.0, 5.0]);
+        assert!(c.iter().all(|v| (v - 5.0).abs() < 1e-12), "constant: {c:?}");
+        assert!(smooth5(&[]).is_empty());
     }
 
     #[test]
