@@ -9,7 +9,7 @@ use xasdata::{ColumnFile, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
 use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindow};
-use crate::calc_ui::{IonChamberWindow, PeriodicTableWindow, PowderWindow};
+use crate::calc_ui::{IonChamberWindow, KeConvertWindow, PeriodicTableWindow, PowderWindow};
 use crate::clean_ui::{CleanAction, EditXmuState};
 use crate::feffit_batch::{BatchAction, FeffitBatch};
 use crate::feffit_ui::{FeffitAction, FeffitUi};
@@ -100,6 +100,8 @@ pub struct XafsViewApp {
     ion_chamber: IonChamberWindow,
     /// The powder-weight calculator.
     powder: PowderWindow,
+    /// The k ↔ E conversion calculator.
+    ke_convert: KeConvertWindow,
     /// The Atoms tab state (crystal cell → feff.inp).
     atoms_tab: AtomsTab,
     /// The Feff tab state (edit feff.inp / run FEFF).
@@ -176,6 +178,7 @@ impl XafsViewApp {
             periodic,
             ion_chamber,
             powder,
+            ke_convert: KeConvertWindow::default(),
             atoms_tab: AtomsTab::default(),
             feff_tab: FeffTab::default(),
             plot_sites,
@@ -1023,6 +1026,10 @@ impl XafsViewApp {
                     self.powder.open = true;
                     ui.close();
                 }
+                if ui.button("k ↔ E conversion…").clicked() {
+                    self.ke_convert.open = true;
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("Plot Sites (3D cluster)…").clicked() {
                     self.plot_sites.open = true;
@@ -1205,6 +1212,9 @@ impl eframe::App for XafsViewApp {
         self.periodic.show(ui.ctx());
         self.ion_chamber.show(ui.ctx());
         self.powder.show(ui.ctx());
+        // k ↔ E conversion: seeded from the active group's edge energy E₀.
+        let group_e0 = self.session.current_group().and_then(|g| g.e0);
+        self.ke_convert.show(ui.ctx(), group_e0);
 
         // The Plot Sites 3D viewer parses the shared feff.inp into a point cloud.
         // It needs the wgpu render state each frame (unlike the 2D Plot1D, which

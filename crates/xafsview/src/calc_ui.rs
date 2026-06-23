@@ -518,6 +518,114 @@ fn powder_weight(
     Ok((mass_g * 1000.0, mu_mass))
 }
 
+/// **k ↔ E conversion** (the original XAFSView Tools menu item): convert between
+/// photoelectron wavenumber `k` [Å⁻¹] and photon energy `E` [eV] about an
+/// absorption-edge energy `E₀`, using larch's `KTOE` (`E − E₀ = KTOE·k²`, with
+/// [`feffdat::ktoe`]/[`feffdat::etok`]). Handy for locating a glitch or Bragg
+/// peak seen in one space while working in the other. `E₀` is seeded from the
+/// active group's edge energy when the window opens and can be overridden.
+pub struct KeConvertWindow {
+    pub open: bool,
+    /// Edge energy `E₀` [eV].
+    e0: f64,
+    /// Whether `E₀` has been seeded from the active group since the last open.
+    seeded: bool,
+    /// Absolute photon energy [eV] for the E→k direction.
+    energy: f64,
+    /// Photoelectron wavenumber [Å⁻¹] for the k→E direction.
+    k: f64,
+}
+
+impl Default for KeConvertWindow {
+    fn default() -> Self {
+        Self {
+            open: false,
+            e0: 0.0,
+            seeded: false,
+            energy: 0.0,
+            k: 0.0,
+        }
+    }
+}
+
+impl KeConvertWindow {
+    /// Render the window. `group_e0` is the active group's edge energy; it seeds
+    /// `E₀` the first time the window opens (the user may then override it).
+    pub fn show(&mut self, ctx: &egui::Context, group_e0: Option<f64>) {
+        if !self.open {
+            // Re-seed from the active group on the next open.
+            self.seeded = false;
+            return;
+        }
+        if !self.seeded {
+            if let Some(e0) = group_e0 {
+                self.e0 = e0;
+                if self.energy <= 0.0 {
+                    self.energy = e0;
+                }
+            }
+            self.seeded = true;
+        }
+
+        let mut open = self.open;
+        crate::window::detached(
+            ctx,
+            "ke_convert",
+            "k ↔ E conversion",
+            &mut open,
+            [380.0, 210.0],
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Edge E₀ (eV)");
+                    ui.add(egui::DragValue::new(&mut self.e0).speed(0.1));
+                    if let Some(e0) = group_e0
+                        && ui
+                            .small_button("use group E₀")
+                            .on_hover_text(format!("active group E₀ = {e0:.3} eV"))
+                            .clicked()
+                    {
+                        self.e0 = e0;
+                    }
+                });
+                ui.weak("E − E₀ = KTOE·k²   (KTOE = 3.809982 eV·Å²)");
+                ui.separator();
+
+                // E → k
+                ui.horizontal(|ui| {
+                    ui.label("E");
+                    ui.add(
+                        egui::DragValue::new(&mut self.energy)
+                            .speed(0.5)
+                            .suffix(" eV"),
+                    );
+                    ui.label("⇒");
+                    let de = self.energy - self.e0;
+                    if de > 0.0 {
+                        ui.strong(format!("k = {:.4} Å⁻¹", feffdat::etok(de).sqrt()));
+                    } else {
+                        ui.strong("k = 0 Å⁻¹");
+                        ui.weak("(at/below edge)");
+                    }
+                });
+
+                // k → E
+                ui.horizontal(|ui| {
+                    ui.label("k");
+                    ui.add(
+                        egui::DragValue::new(&mut self.k)
+                            .speed(0.05)
+                            .range(0.0..=1000.0)
+                            .suffix(" Å⁻¹"),
+                    );
+                    ui.label("⇒");
+                    ui.strong(format!("E = {:.3} eV", self.e0 + feffdat::ktoe(self.k)));
+                });
+            },
+        );
+        self.open = open;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
