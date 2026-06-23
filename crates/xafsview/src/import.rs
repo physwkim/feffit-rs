@@ -114,11 +114,41 @@ impl ImportState {
         if let Some(p) = self.file.path.as_ref() {
             ui.label(format!("File: {}", p.display()));
         }
+        // The original "Change reading format" readout: header-line count and
+        // data-point count, the two numbers XAFSView shows for the loaded file.
         ui.weak(format!(
-            "{} columns × {} rows",
+            "{} header lines · {} columns × {} data points",
+            self.file.header.len(),
             self.file.ncols(),
             self.file.nrows()
         ));
+
+        // File preview (the original "File preview" pane): the header metadata
+        // block plus the first few data rows, each line-numbered as XAFSView
+        // does, so the right columns can be picked by inspecting the header.
+        egui::CollapsingHeader::new("File preview")
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(150.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (i, line) in self.file.header.iter().enumerate() {
+                            ui.monospace(format!("{:>3}  {}", i + 1, line));
+                        }
+                        let base = self.file.header.len();
+                        let ncols = self.file.ncols();
+                        for r in 0..self.file.nrows().min(6) {
+                            let mut row = String::new();
+                            for c in 0..ncols {
+                                if let Some(col) = self.file.column(c) {
+                                    row.push_str(&format!("{:>12.5}", col[r]));
+                                }
+                            }
+                            ui.monospace(format!("{:>3} {row}", base + r + 1));
+                        }
+                    });
+            });
         ui.separator();
 
         ui.horizontal_wrapped(|ui| {
