@@ -1,7 +1,10 @@
 # feffit-rs
 
-A Rust port of [xraylarch](https://github.com/xraypy/xraylarch)'s EXAFS path-fitting
-core (`feffit` / `feffdat`).
+A Rust port of [xraylarch](https://github.com/xraypy/xraylarch)'s EXAFS
+path-fitting core (`feffit` / `feffdat`) and `larch.xafs` data-reduction chain
+(`xasproc` / `xasdata`), plus **XAFSView** (`xafsview`) — a desktop GUI that
+re-implements the LabVIEW *XAFSView v1.6* (성낙언/POSTECH) EXAFS toolkit on top
+of them.
 
 ## Scope and the FEFF boundary
 
@@ -28,6 +31,46 @@ feffNNNN.dat ─▶ FeffDatFile ─▶ path2chi/ff2chi ─▶ xafsft ─▶ feff
 The FEFF8L Fortran is built from the [`feff85exafs`](https://github.com/xraypy/feff85exafs)
 project (native per-host architecture); `feffrun` finds the `feff8l_*`
 executables via the `FEFF8L_DIR` environment variable or `PATH`.
+
+## XAFSView GUI
+
+The `xafsview` crate is a desktop application — [egui](https://github.com/emilk/egui)/eframe
+with the `siplot` GPU plotter — that re-implements the LabVIEW **XAFSView v1.6**
+EXAFS toolkit on the engines above. The data model lives in `xasdata`, the
+reduction math in `xasproc`, and the fitting math in `feffit`/`feffdat`; this
+binary is the shell that wires them to the UI. The original LabVIEW manual is the
+porting spec, and the section numbers below follow it.
+
+```sh
+cargo run -p xafsview --release
+```
+
+Path fitting (the Feff tab) needs the FEFF8L `feff8l_*` executables on `PATH` (or
+`FEFF8L_DIR`), as above; data reduction, plotting, and the calculators are
+self-contained.
+
+**Tabs** — Autobk (import + pre-edge/normalize + AUTOBK), Feffit (path fitting),
+Feffit_txt (fit report), Atoms (crystal → `feff.inp`), Feff (edit `feff.inp` /
+run FEFF8L), Folders (working directories), About.
+
+**Menu bar**
+
+- **File** — open a data file; quit.
+- **Multiple_data** — *Plot Data* multi-group overlay window (stacking, average,
+  5-point smoothing, NEXAFS normalize options, multiple-peak catching);
+  *Multiple AUTOBK* (reduce every loaded group with one parameter set); *Make
+  μ(E) from files* (batch column-import → numbered `.xmu`); *Feffit batch* (one
+  fit config per group, with Save Items).
+- **Smoothing** — *Edit μ(E)*: deglitch / trim / smooth.
+- **Periodic table** — element + atom-data browser.
+- **Tools** — wavelet transform |W(k,R)|; LCF; PCA; XANES tools (peak / cursors /
+  arctangent subtraction); MBACK / NEXAFS normalization; ion-chamber / gas
+  absorption; powder weight; k ↔ E conversion; Extract XAS measured time
+  (time-resolved); Plot Sites (3D scattering-cluster viewer).
+- **Change BG** — toggle dark / light theme.
+
+Each pop-up is a real OS window (an egui immediate viewport), so it can be moved
+independently of the main window.
 
 ## Status
 
@@ -82,6 +125,19 @@ crates/lm/             # Levenberg-Marquardt least squares (MINPACK lmdif port)
 crates/feffrun/        # drive FEFF8L (feff8l_* subprocess) feff.inp -> feffNNNN.dat
   src/lib.rs           # Feff8l runner: pipeline, exe discovery (FEFF8L_DIR/PATH)
   tests/data/feff.inp  # real Cu feff.inp fixture (from feff85exafs)
+crates/feffinp/        # crystal cell -> feff.inp + parse feff.inp (input side of the FEFF boundary)
+  src/lib.rs           # Crystal::cluster (cell -> FEFF cluster) + feff.inp parser
+crates/xasproc/        # larch.xafs reduction: pre_edge/normalize, AUTOBK, rebin, deconvolve (vs larch)
+crates/xasdata/        # XAS session model: XasGroup (mu(E)->norm->AUTOBK->FT), Session/Folders, beamline I/O, batch drivers
+crates/xafsview/       # the XAFSView desktop GUI (egui/eframe + siplot)
+  src/app.rs           # app shell: tabs, menu bar, shared plot, window wiring
+  src/reduce_ui.rs     # Autobk tab: import + pre-edge/normalize + AUTOBK
+  src/feffit_ui.rs     # Feffit tab: path list, variables, fit + report
+  src/feffit_batch.rs  # per-group batch fits + Save Items
+  src/plot_data.rs     # Plot Data overlay window (stack/average/peak/normalize)
+  src/atoms_ui.rs      # Atoms/Feff tabs + Plot Sites 3D cluster viewer
+  src/calc_ui.rs       # Tools calculators: periodic table, gas absorption, powder, k<->E
+  src/{analysis,xanes,mback,wavelet,timeres}_ui.rs  # Tools windows: LCF/PCA, XANES, MBACK, wavelet, time-resolved
 scripts/ref_chi.py     # numpy-only reference generator (also emits cubic when scipy present)
 scripts/ref_xftf.py    # scipy.fftpack/scipy.special reference for xafsft
 scripts/ref_feffit.py  # larch.xafs.feffit residual reference (needs xraylarch)
@@ -118,4 +174,7 @@ supported way to regenerate it.
 
 ## Provenance
 
-Ported from xraylarch (`larch/xafs/feffdat.py`). Upstream is BSD-licensed.
+The fitting + reduction engines are ported from xraylarch (`larch/xafs/*.py`,
+notably `feffdat.py` / `feffit.py` / the `pre_edge`/`autobk` chain); upstream is
+BSD-licensed. The `xafsview` GUI re-implements the feature set of the LabVIEW
+*XAFSView v1.6* (성낙언/POSTECH) EXAFS toolkit, which serves as its porting spec.
