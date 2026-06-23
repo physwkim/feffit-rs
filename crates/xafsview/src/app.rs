@@ -277,18 +277,29 @@ impl XafsViewApp {
             return;
         };
         let spec = import.to_spec();
+        let input_path = import.file.path.clone();
         match xasdata::build_mu(&import.file, &spec) {
             Ok((energy, mu)) => {
-                let label = import
-                    .file
-                    .path
+                let label = input_path
                     .as_ref()
                     .and_then(|p| p.file_stem())
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| format!("group{}", self.session.groups.len() + 1));
                 let n = energy.len();
+                // Persist μ(E) as a .xmu next to the source (the original's
+                // "Output file"); a single Calc XMU is never numbered.
+                let xmu = match self.write_xmu_output(
+                    input_path.as_deref(),
+                    &label,
+                    &energy,
+                    &mu,
+                    None,
+                ) {
+                    Ok(name) => format!(" · wrote {name}"),
+                    Err(e) => format!(" · .xmu not written: {e}"),
+                };
                 self.session.add_group(XasGroup::from_mu(label, energy, mu));
-                self.status = format!("Built μ(E): {n} points");
+                self.status = format!("Built μ(E): {n} points{xmu}");
                 self.reduction.graph = GraphType::MuBkg;
                 // New spectrum: drop stale undo history and re-seed the editor.
                 self.clean_undo.clear();
@@ -298,6 +309,49 @@ impl XafsViewApp {
             }
             Err(e) => self.status = format!("Calc XMU failed: {e}"),
         }
+    }
+
+    /// Persist a μ(E) spectrum as a `.xmu` text file next to its source file (or
+    /// in a configured folder). `index`, when set, appends a zero-padded sequence
+    /// number to the stem ("Output file numbering"). Returns the written file
+    /// name on success, or a reason on failure.
+    fn write_xmu_output(
+        &self,
+        input: Option<&std::path::Path>,
+        label: &str,
+        energy: &[f64],
+        mu: &[f64],
+        index: Option<usize>,
+    ) -> Result<String, String> {
+        let Some(dir) = input
+            .and_then(|p| p.parent())
+            .filter(|d| !d.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| self.session.folders.data_dir.clone())
+            .or_else(|| self.session.folders.work_dir.clone())
+        else {
+            return Err("no output folder".to_owned());
+        };
+        let stem = input
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| label.to_owned());
+        let name = match index {
+            Some(i) => format!("{stem}{i:04}.xmu"),
+            None => format!("{stem}.xmu"),
+        };
+        let out = dir.join(&name);
+        // Never overwrite the source itself (e.g. Raw mode re-reading a `.xmu`,
+        // where the derived output resolves to the same file — case-insensitively
+        // on macOS).
+        if let Some(inp) = input
+            && same_file(inp, &out)
+        {
+            return Err("would overwrite the source file".to_owned());
+        }
+        write_xmu(&out, label, energy, mu)
+            .map(|()| name)
+            .map_err(|e| e.to_string())
     }
 
     /// Run normalize → autobk → xftf on the current group, then redraw.
@@ -363,11 +417,26 @@ impl XafsViewApp {
             }
         }
 
+        // "Output file numbering": append a sequence number to each .xmu so the
+        // batch outputs stay distinct (the original toggles this in the dialog).
+        let number = self.import.as_ref().is_some_and(|i| i.number_outputs);
         let mut built = 0usize;
         let mut build_errors = 0usize;
-        for result in xasdata::make_xmu_batch(&files, &spec) {
+        let mut written = 0usize;
+        for (i, result) in xasdata::make_xmu_batch(&files, &spec)
+            .into_iter()
+            .enumerate()
+        {
             match result {
                 Ok(group) => {
+                    let index = number.then_some(i + 1);
+                    let input = files.get(i).and_then(|f| f.path.as_deref());
+                    if self
+                        .write_xmu_output(input, &group.label, &group.energy, &group.mu, index)
+                        .is_ok()
+                    {
+                        written += 1;
+                    }
                     self.session.add_group(group);
                     built += 1;
                 }
@@ -383,7 +452,8 @@ impl XafsViewApp {
             self.replot_graph();
         }
         self.status = format!(
-            "Batch μ(E): built {built}, build errors {build_errors}, unreadable {read_errors}."
+            "Batch μ(E): built {built}, wrote {written} .xmu, build errors {build_errors}, \
+             unreadable {read_errors}."
         );
     }
 
@@ -1275,5 +1345,78 @@ fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBu
         && let Some(picked) = rfd::FileDialog::new().pick_folder()
     {
         *dir = Some(picked);
+    }
+}
+
+/// Whether two paths point to the same file. Canonicalizes both (so case-folding
+/// and `..` are resolved on macOS); falls back to a path compare when `b` does
+/// not exist yet (in which case it is a different, new file).
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
+}
+
+/// Write a μ(E) spectrum as a two-column `.xmu` text file (energy, μ) with a
+/// short header — the format the column reader reads back.
+fn write_xmu(
+    path: &std::path::Path,
+    label: &str,
+    energy: &[f64],
+    mu: &[f64],
+) -> std::io::Result<()> {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(energy.len() * 32 + 64);
+    let _ = writeln!(s, "# {label}");
+    let _ = writeln!(s, "#  energy            xmu");
+    for (&e, &m) in energy.iter().zip(mu) {
+        let _ = writeln!(s, "{e:14.6}  {m:18.10}");
+    }
+    std::fs::write(path, s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_xmu_roundtrips_through_the_column_reader() {
+        // A written .xmu must read back as a 2-column energy/μ file (the format
+        // the import path itself consumes).
+        let path =
+            std::env::temp_dir().join(format!("xafsview_write_xmu_{}.xmu", std::process::id()));
+        let energy = [7000.0, 7001.5, 7003.0];
+        let mu = [0.10, 0.25, 0.42];
+        write_xmu(&path, "roundtrip", &energy, &mu).expect("write .xmu");
+
+        let cf = ColumnFile::from_path(&path).expect("read .xmu back");
+        assert_eq!(cf.nrows(), 3);
+        assert_eq!(cf.ncols(), 2);
+        let e = cf.column(0).expect("energy column");
+        let m = cf.column(1).expect("μ column");
+        assert!((e[0] - 7000.0).abs() < 1e-3, "energy {e:?}");
+        assert!((m[2] - 0.42).abs() < 1e-6, "mu {m:?}");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn same_file_guards_against_overwriting_the_source() {
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let a = dir.join(format!("xafsview_same_a_{pid}.xmu"));
+        let b = dir.join(format!("xafsview_same_b_{pid}.xmu"));
+        std::fs::write(&a, "x").expect("write a");
+        std::fs::write(&b, "y").expect("write b");
+
+        assert!(same_file(&a, &a), "a path is the same file as itself");
+        assert!(!same_file(&a, &b), "distinct existing files differ");
+        // A not-yet-existing output beside an existing source is a new file.
+        let c = dir.join(format!("xafsview_same_c_{pid}.xmu"));
+        assert!(!same_file(&a, &c), "non-existent output is distinct");
+
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
     }
 }

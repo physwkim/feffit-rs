@@ -47,6 +47,9 @@ pub struct ImportState {
     pub mu_col: usize,
     /// Per-column flag: include this column in the fluorescence sum.
     pub channels: Vec<bool>,
+    /// "Output file numbering": when batching several files into μ(E), append a
+    /// sequential number to each written `.xmu` so the outputs stay distinct.
+    pub number_outputs: bool,
 }
 
 impl ImportState {
@@ -73,6 +76,7 @@ impl ImportState {
             iref: roles.iref.unwrap_or(0),
             mu_col: roles.mu.unwrap_or(0),
             channels,
+            number_outputs: false,
             file,
         }
     }
@@ -185,6 +189,17 @@ impl ImportState {
                 column_combo(ui, "imp_mu", "μ column", &mut self.mu_col, &labels);
             }
         }
+
+        ui.separator();
+        ui.checkbox(
+            &mut self.number_outputs,
+            "Output file numbering (batch outputs)",
+        )
+        .on_hover_text(
+            "When making μ(E) from several files at once, append 0001, 0002, … to each \
+             written .xmu so the outputs stay distinct.",
+        );
+        ui.weak("Calc XMU writes a .xmu next to each source file.");
 
         ui.separator();
         ui.button("Calc XMU")
