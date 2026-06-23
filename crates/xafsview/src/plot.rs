@@ -85,8 +85,6 @@ pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
     // and `constrain_to` keeps it within the axes.
     const PAD: f32 = 6.0;
     let legend_id = egui::Id::new(plot.backend().plot().id).with("legend_overlay");
-    let win = ui.visuals().window_fill;
-    let bg = egui::Color32::from_rgba_unmultiplied(win.r(), win.g(), win.b(), 220);
     let ctx = ui.ctx().clone();
     egui::Area::new(legend_id)
         .order(egui::Order::Foreground)
@@ -95,24 +93,39 @@ pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
         .default_pos(area.right_top() + egui::vec2(-PAD, PAD))
         .pivot(egui::Align2::RIGHT_TOP)
         .show(&ctx, |ui| {
-            egui::Frame::popup(ui.style()).fill(bg).show(ui, |ui| {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                    ui.set_max_width((area.width() * 0.45).clamp(90.0, 200.0));
-                    // Disable drag-to-scroll: the ScrollArea sits above the Area
-                    // and would otherwise sense the drag and scroll instead of
-                    // letting the movable Area move. Scrollbar + wheel still scroll
-                    // an overflowing legend (only the `drag` source is turned off).
-                    egui::ScrollArea::vertical()
-                        .max_height((area.height() - 2.0 * PAD).max(40.0))
-                        .scroll_source(egui::scroll_area::ScrollSource {
-                            drag: false,
-                            ..Default::default()
-                        })
-                        .show(ui, |ui| {
-                            plot.show_legend(ui);
-                        });
+            // A plain transparent box: the legend draws no fill or border of its
+            // own (the `show_legend` call below nulls both of siplot's), so this
+            // wrapper only pads the bare swatch + labels off the axis frame.
+            egui::Frame::new()
+                .inner_margin(egui::Margin::same(PAD as i8))
+                .show(ui, |ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.set_max_width((area.width() * 0.45).clamp(90.0, 200.0));
+                        // Disable drag-to-scroll: the ScrollArea sits above the Area
+                        // and would otherwise sense the drag and scroll instead of
+                        // letting the movable Area move. Scrollbar + wheel still scroll
+                        // an overflowing legend (only the `drag` source is turned off).
+                        egui::ScrollArea::vertical()
+                            .max_height((area.height() - 2.0 * PAD).max(40.0))
+                            .scroll_source(egui::scroll_area::ScrollSource {
+                                drag: false,
+                                ..Default::default()
+                            })
+                            .show(ui, |ui| {
+                                // Strip siplot's legend chrome so only the line
+                                // swatch + label float over the canvas (pyqtgraph
+                                // style): `show_legend` fills the *active* row with
+                                // `selection.bg_fill` and wraps the rows in a
+                                // rectangular border drawn from
+                                // `widgets.noninteractive.bg_stroke`. Null both on
+                                // this ui so the legend shows no fill and no border.
+                                let v = ui.visuals_mut();
+                                v.selection.bg_fill = egui::Color32::TRANSPARENT;
+                                v.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+                                plot.show_legend(ui);
+                            });
+                    });
                 });
-            });
         });
 }
 
