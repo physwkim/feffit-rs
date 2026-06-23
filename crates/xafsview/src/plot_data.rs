@@ -526,6 +526,16 @@ impl PlotDataWindow {
         self.item.xy(g, self.kweight)
     }
 
+    /// The `(x, y)` actually drawn for `g`: [`series_for`](Self::series_for) plus
+    /// the optional 5-point display smoothing. The single source both the trace
+    /// loop and [`catch_peaks`](Self::catch_peaks) read, so a caught peak (and its
+    /// marker) lands on the same curve the user sees.
+    fn displayed_series(&self, g: &XasGroup) -> Option<(Vec<f64>, Vec<f64>)> {
+        let (x, y) = self.series_for(g)?;
+        let y = if self.smooth5 { smooth5(&y) } else { y };
+        Some((x, y))
+    }
+
     /// Apply the chosen finder to every selected group over `[peak_lo, peak_hi]`,
     /// collecting one `(label, x, y)` row per group — the original "Multiple peaks
     /// catching", which tabulates a peak position across all plotted spectra. A
@@ -536,7 +546,7 @@ impl PlotDataWindow {
             if !self.selected.get(i).copied().unwrap_or(false) {
                 continue;
             }
-            let Some((x, y)) = self.series_for(g) else {
+            let Some((x, y)) = self.displayed_series(g) else {
                 continue;
             };
             let found = match self.peak_mode {
@@ -592,8 +602,7 @@ impl PlotDataWindow {
             if !self.selected.get(i).copied().unwrap_or(false) {
                 continue;
             }
-            if let Some((x, y)) = self.series_for(g) {
-                let y = if self.smooth5 { smooth5(&y) } else { y };
+            if let Some((x, y)) = self.displayed_series(g) {
                 let color = PALETTE[traces.len() % PALETTE.len()];
                 traces.push((g.label.clone(), x, y, color));
             }
