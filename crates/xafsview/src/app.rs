@@ -78,6 +78,9 @@ pub struct XafsViewApp {
     reduction: ReductionUi,
     /// FEFFIT tab state: paths, variables, transform, and last fit result.
     feffit: FeffitUi,
+    /// Label of the group the last main-tab Feffit fit was run on, so "Send to
+    /// Plot Data" names the fitted group even after the current group changes.
+    feffit_fit_group: Option<String>,
     /// The multi-FEFFIT batch window (one independent fit config per group).
     feffit_batch: FeffitBatch,
     /// The Edit-μ(E) window (deglitch / trim / smooth) state.
@@ -167,6 +170,7 @@ impl XafsViewApp {
             import: None,
             reduction: ReductionUi::default(),
             feffit: FeffitUi::default(),
+            feffit_fit_group: None,
             feffit_batch,
             edit_xmu: EditXmuState::default(),
             wavelet: WaveletWindow::default(),
@@ -818,19 +822,20 @@ impl XafsViewApp {
 
     /// Run the FEFFIT fit on the current group's `chi(k)` and redraw.
     fn run_feffit(&mut self) {
-        let Some((k, chi)) = self
-            .session
-            .current_group()
-            .and_then(|g| match (&g.k, &g.chi) {
-                (Some(k), Some(chi)) => Some((k.clone(), chi.clone())),
-                _ => None,
-            })
+        let Some((label, k, chi)) =
+            self.session
+                .current_group()
+                .and_then(|g| match (&g.k, &g.chi) {
+                    (Some(k), Some(chi)) => Some((g.label.clone(), k.clone(), chi.clone())),
+                    _ => None,
+                })
         else {
             self.status = "No chi(k) for the current group — run AUTOBK first.".to_owned();
             return;
         };
         match self.feffit.run(&k, &chi) {
             Ok(msg) => {
+                self.feffit_fit_group = Some(label);
                 self.status = msg;
                 self.replot_feffit();
             }
@@ -864,11 +869,10 @@ impl XafsViewApp {
     /// Hand the last Feffit fit's data + model curves to the Plot Data window
     /// (the Feffit form's "Send to plot data"), in the currently-selected space.
     fn send_feffit_to_plot_data(&mut self) {
-        let label = self
-            .session
-            .current_group()
-            .map(|g| format!("Feffit fit — {}", g.label))
-            .unwrap_or_else(|| "Feffit fit".to_owned());
+        let label = match &self.feffit_fit_group {
+            Some(g) => format!("Feffit fit — {g}"),
+            None => "Feffit fit".to_owned(),
+        };
         let (space, part) = self.feffit.plot_selection();
         let Some(p) = self.feffit.plot() else {
             self.status = "Run a fit first, then send it to Plot Data.".to_owned();
