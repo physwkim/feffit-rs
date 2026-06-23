@@ -10,7 +10,7 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
 use siplot::{Plot1D, YAxis};
-use xasdata::{XasGroup, average_curves, peak_in_range, x_at_y};
+use xasdata::{PreEdgeParams, XasGroup, average_curves, normalize, peak_in_range, x_at_y};
 
 /// Which reduction stage to overlay.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -139,6 +139,55 @@ struct FitOverlay {
     model: Vec<f64>,
 }
 
+/// The Plot Data "Normalize options" (그림 1-5-1): override the reduction's
+/// pre/post-edge normalization for the Norm/Flat/dμ view, with an optional
+/// NEXAFS peak-normalization. Display-only — the session groups are untouched.
+struct NormOptions {
+    /// Apply this override instead of each group's reduction normalization.
+    on: bool,
+    /// Let `pre_edge` find E₀ (vs the explicit `e0`).
+    e0_auto: bool,
+    e0: f64,
+    pre1: f64,
+    pre2: f64,
+    norm1: f64,
+    norm2: f64,
+    /// NEXAFS: normalize so the largest peak is 1, instead of the edge step.
+    maxpoint: bool,
+}
+
+impl Default for NormOptions {
+    fn default() -> Self {
+        // larch's pre/post-edge ranges (eV relative to E₀).
+        Self {
+            on: false,
+            e0_auto: true,
+            e0: 0.0,
+            pre1: -150.0,
+            pre2: -30.0,
+            norm1: 150.0,
+            norm2: 800.0,
+            maxpoint: false,
+        }
+    }
+}
+
+impl NormOptions {
+    /// Build the [`PreEdgeParams`] for these options (mirrors the Autobk tab's
+    /// `pre_params`).
+    fn params(&self) -> PreEdgeParams {
+        let mut p = PreEdgeParams::default();
+        if !self.e0_auto {
+            p.e0 = Some(self.e0);
+        }
+        p.pre1 = Some(self.pre1);
+        p.pre2 = Some(self.pre2);
+        p.norm1 = Some(self.norm1);
+        p.norm2 = Some(self.norm2);
+        p
+    }
+}
+
 /// The Plot Data window state and its own plot.
 pub struct PlotDataWindow {
     /// Whether the window is shown.
@@ -156,6 +205,8 @@ pub struct PlotDataWindow {
     smooth5: bool,
     /// "Change BG color": dark plot background (the original's black/white swap).
     dark_bg: bool,
+    /// "Normalize options" (그림 1-5-1).
+    norm: NormOptions,
     peak_lo: f64,
     peak_hi: f64,
     /// Which feature the Multiple peaks catching window locates.
@@ -188,6 +239,7 @@ impl PlotDataWindow {
             show_average: false,
             smooth5: false,
             dark_bg: false,
+            norm: NormOptions::default(),
             peak_lo: 0.0,
             peak_hi: 0.0,
             peak_mode: PeakMode::Max,
@@ -364,6 +416,56 @@ impl PlotDataWindow {
         }
 
         ui.separator();
+        egui::CollapsingHeader::new("Normalize options")
+            .default_open(false)
+            .show(ui, |ui| {
+                let mut changed = ui
+                    .checkbox(&mut self.norm.on, "Apply (override reduction)")
+                    .on_hover_text(
+                        "Re-normalize the Norm/Flat/dμ view from these settings, \
+                         leaving the loaded groups unchanged",
+                    )
+                    .changed();
+                changed |= ui.checkbox(&mut self.norm.e0_auto, "auto E₀").changed();
+                if !self.norm.e0_auto {
+                    ui.horizontal(|ui| {
+                        ui.label("E₀");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut self.norm.e0).speed(0.5))
+                            .changed();
+                    });
+                }
+                egui::Grid::new("plot_norm_ranges")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.label("pre1");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut self.norm.pre1).speed(1.0))
+                            .changed();
+                        ui.label("pre2");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut self.norm.pre2).speed(1.0))
+                            .changed();
+                        ui.end_row();
+                        ui.label("norm1");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut self.norm.norm1).speed(1.0))
+                            .changed();
+                        ui.label("norm2");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut self.norm.norm2).speed(1.0))
+                            .changed();
+                        ui.end_row();
+                    });
+                changed |= ui
+                    .checkbox(&mut self.norm.maxpoint, "NEXAFS: normalize to max peak")
+                    .changed();
+                if changed {
+                    self.dirty = true;
+                }
+            });
+
+        ui.separator();
         ui.label("Multiple peak catching");
         egui::ComboBox::from_id_salt("peak_mode")
             .selected_text(self.peak_mode.label())
@@ -406,6 +508,24 @@ impl PlotDataWindow {
         }
     }
 
+    /// The `(x, y)` arrays to plot for `g` under the current item, applying the
+    /// "Normalize options" override (Norm/Flat/dμ recomputed from a throwaway
+    /// clone) when active; otherwise the group's own reduction arrays.
+    fn series_for(&self, g: &XasGroup) -> Option<(Vec<f64>, Vec<f64>)> {
+        if self.norm.on
+            && matches!(self.item, PlotItem::Norm | PlotItem::Flat | PlotItem::Deriv)
+            && !g.energy.is_empty()
+        {
+            let mut tmp = g.clone();
+            normalize(&mut tmp, &self.norm.params());
+            if self.norm.maxpoint && self.item == PlotItem::Norm {
+                return Some((tmp.energy.clone(), peak_normalized(&tmp)));
+            }
+            return self.item.xy(&tmp, self.kweight);
+        }
+        self.item.xy(g, self.kweight)
+    }
+
     /// Apply the chosen finder to every selected group over `[peak_lo, peak_hi]`,
     /// collecting one `(label, x, y)` row per group — the original "Multiple peaks
     /// catching", which tabulates a peak position across all plotted spectra. A
@@ -416,7 +536,7 @@ impl PlotDataWindow {
             if !self.selected.get(i).copied().unwrap_or(false) {
                 continue;
             }
-            let Some((x, y)) = self.item.xy(g, self.kweight) else {
+            let Some((x, y)) = self.series_for(g) else {
                 continue;
             };
             let found = match self.peak_mode {
@@ -472,7 +592,7 @@ impl PlotDataWindow {
             if !self.selected.get(i).copied().unwrap_or(false) {
                 continue;
             }
-            if let Some((x, y)) = self.item.xy(g, self.kweight) {
+            if let Some((x, y)) = self.series_for(g) {
                 let y = if self.smooth5 { smooth5(&y) } else { y };
                 let color = PALETTE[traces.len() % PALETTE.len()];
                 traces.push((g.label.clone(), x, y, color));
@@ -510,6 +630,19 @@ impl PlotDataWindow {
                 .add_x_marker(*px, Color32::from_rgb(0x80, 0x80, 0x80));
         }
     }
+}
+
+/// NEXAFS peak normalization: `(μ − pre-edge) / max(μ − pre-edge)`, so the
+/// largest peak sits at 1 (the original's "normalize to the max point"). Expects
+/// `g.pre_edge` filled (call [`normalize`] first).
+fn peak_normalized(g: &XasGroup) -> Vec<f64> {
+    let pre = g.pre_edge.as_deref().unwrap_or(&[]);
+    let diff: Vec<f64> = g.mu.iter().zip(pre).map(|(&m, &p)| m - p).collect();
+    let peak = diff.iter().copied().fold(f64::MIN, f64::max);
+    if peak.abs() < 1e-300 {
+        return diff;
+    }
+    diff.iter().map(|d| d / peak).collect()
 }
 
 /// A 5-point centered moving average (the original's "Average (5 points)"), with
