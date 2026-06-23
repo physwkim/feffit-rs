@@ -787,6 +787,35 @@ impl XafsViewApp {
         }
     }
 
+    /// Write the batch "Save Items" files to the work folder (the original's
+    /// results folder; falls back to the data folder), reporting the outcome.
+    fn write_saved_items(&mut self, files: Vec<(String, String)>) {
+        let Some(dir) = self
+            .session
+            .folders
+            .work_dir
+            .clone()
+            .or_else(|| self.session.folders.data_dir.clone())
+        else {
+            self.status = "Set a work folder (Folders tab) before saving items.".to_owned();
+            return;
+        };
+        let mut written = 0usize;
+        let mut failed = 0usize;
+        for (name, content) in &files {
+            match std::fs::write(dir.join(name), content) {
+                Ok(()) => written += 1,
+                Err(_) => failed += 1,
+            }
+        }
+        let extra = if failed > 0 {
+            format!(" ({failed} failed)")
+        } else {
+            String::new()
+        };
+        self.status = format!("Saved {written} item file(s) to {}{extra}.", dir.display());
+    }
+
     /// Run the FEFFIT fit on the current group's `chi(k)` and redraw.
     fn run_feffit(&mut self) {
         let Some((k, chi)) = self
@@ -1277,12 +1306,15 @@ impl eframe::App for XafsViewApp {
         self.plot_data.show(ui.ctx(), &self.session.groups);
 
         // The multi-FEFFIT batch window: each group has its own fit config seeded
-        // from the Feffit tab (the template). Only the add-path dialog bubbles up.
-        if let Some(BatchAction::AddPath(idx)) =
-            self.feffit_batch
-                .show(ui.ctx(), &self.session.groups, &self.feffit)
+        // from the Feffit tab (the template). The add-path dialog and Save Items
+        // file writes bubble up for the app to service.
+        match self
+            .feffit_batch
+            .show(ui.ctx(), &self.session.groups, &self.feffit)
         {
-            self.add_feff_path_to_batch(idx);
+            Some(BatchAction::AddPath(idx)) => self.add_feff_path_to_batch(idx),
+            Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
+            None => {}
         }
 
         // The LCF and PCA windows each overlay several groups onto one common

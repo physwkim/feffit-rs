@@ -11,16 +11,32 @@
 //! The window is self-contained except for the file dialog used to add a path,
 //! which it bubbles up as [`BatchAction::AddPath`] for the app to service.
 
+use std::fmt::Write as _;
+
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
 use siplot::{Plot1D, YAxis};
 use xasdata::XasGroup;
 
-use crate::feffit_ui::{FeffitAction, FeffitUi};
+use crate::feffit_ui::{FeffitAction, FeffitUi, SavedPath};
 
 const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
 const RED: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
+
+/// The eight savable "items" of the original Save-Items dialog, each as
+/// `(display/file name, FeffitResult path-parameter key)`. An empty key marks
+/// the computed `reff + Δr`. Order matches the dialog (그림 1-5-3).
+const SAVE_ITEMS: [(&str, &str); 8] = [
+    ("e0", "e0"),
+    ("delr", "deltar"),
+    ("n", "degen"),
+    ("sigma2", "sigma2"),
+    ("third", "third"),
+    ("fourth", "fourth"),
+    ("ei", "ei"),
+    ("reff+delr", ""),
+];
 
 /// One group's independent fit configuration, result, and last run status.
 struct GroupFit {
@@ -39,6 +55,9 @@ pub enum BatchAction {
     /// Open a file dialog and add the chosen Feff path(s) to the config at this
     /// index (into the batch's own config list).
     AddPath(usize),
+    /// Write these `(filename, content)` pairs (one per selected Save-Items
+    /// item); the app picks the destination folder and reports the outcome.
+    SaveItems(Vec<(String, String)>),
 }
 
 /// The multi-FEFFIT batch window: a per-group config list, a shared template
@@ -52,6 +71,11 @@ pub struct FeffitBatch {
     selected: usize,
     /// Whether the plot needs rebuilding from the selected config.
     dirty: bool,
+    /// "Save Items": which of the eight items to write (in [`SAVE_ITEMS`] order).
+    save_sel: [bool; 8],
+    /// Inclusive path-index range written for each item.
+    save_from: usize,
+    save_to: usize,
 }
 
 impl FeffitBatch {
@@ -66,6 +90,10 @@ impl FeffitBatch {
             configs: Vec::new(),
             selected: 0,
             dirty: true,
+            // Default to the most-used items (N and the bond distance reff+Δr).
+            save_sel: [false, false, true, false, false, false, false, true],
+            save_from: 1,
+            save_to: 1,
         }
     }
 
@@ -223,6 +251,47 @@ impl FeffitBatch {
         }
 
         ui.separator();
+        egui::CollapsingHeader::new("Save items")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label("Items to save (per path index):");
+                egui::Grid::new("save_items_grid")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for (i, (name, _)) in SAVE_ITEMS.iter().enumerate() {
+                            ui.checkbox(&mut self.save_sel[i], *name);
+                            if i % 2 == 1 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label("path index from");
+                    ui.add(egui::DragValue::new(&mut self.save_from).range(1..=99));
+                    ui.label("to");
+                    ui.add(egui::DragValue::new(&mut self.save_to).range(1..=99));
+                });
+                let any_item = self.save_sel.iter().any(|s| *s);
+                let any_result = self.configs.iter().any(|c| c.ui.result().is_some());
+                if ui
+                    .add_enabled(
+                        any_item && any_result,
+                        egui::Button::new("Save items to work folder"),
+                    )
+                    .on_hover_text(
+                        "One file per item in the work folder; rows are groups, columns are \
+                         path indices (value and stderr; unused paths are 0).",
+                    )
+                    .clicked()
+                {
+                    let files = self.build_saved_items();
+                    if !files.is_empty() {
+                        bubble = Some(BatchAction::SaveItems(files));
+                    }
+                }
+            });
+
+        ui.separator();
         self.selected = self.selected.min(self.configs.len() - 1);
         let sel_label = self.configs[self.selected].label.clone();
         egui::ComboBox::from_label("Edit group")
@@ -270,6 +339,65 @@ impl FeffitBatch {
         }
     }
 
+    /// Build one output file per selected Save-Items item: rows are the fitted
+    /// groups, columns are path indices `from..=to`. Each cell is the item's
+    /// value and propagated stderr for that path, or `0` when a group's fit has
+    /// no such path (the original's `n = 0` filler). Returns `(filename,
+    /// content)` pairs for the app to write.
+    fn build_saved_items(&self) -> Vec<(String, String)> {
+        let (from, to) = if self.save_from <= self.save_to {
+            (self.save_from, self.save_to)
+        } else {
+            (self.save_to, self.save_from)
+        };
+        // Only groups whose last run produced a result contribute rows.
+        let groups: Vec<(&str, Vec<SavedPath>)> = self
+            .configs
+            .iter()
+            .filter_map(|c| {
+                let sp = c.ui.saved_paths();
+                (!sp.is_empty()).then_some((c.label.as_str(), sp))
+            })
+            .collect();
+
+        let mut files = Vec::new();
+        for (sel, (name, key)) in self.save_sel.iter().zip(SAVE_ITEMS) {
+            if !*sel {
+                continue;
+            }
+            let mut s = String::new();
+            let _ = writeln!(s, "# Save items — {name}");
+            let _ = writeln!(
+                s,
+                "# value and propagated stderr per path index; unused paths are 0"
+            );
+            let _ = write!(s, "# {:<18}", "group");
+            for p in from..=to {
+                let _ = write!(
+                    s,
+                    "{:>16}{:>16}",
+                    format!("path{p}"),
+                    format!("path{p}_err")
+                );
+            }
+            let _ = writeln!(s);
+            for (label, paths) in &groups {
+                let _ = write!(s, "  {label:<18}");
+                for p in from..=to {
+                    let (v, e) = paths
+                        .iter()
+                        .find(|sp| sp.number == p)
+                        .map(|sp| sp.item(key))
+                        .unwrap_or((0.0, 0.0));
+                    let _ = write!(s, "{v:>16.6}{e:>16.6}");
+                }
+                let _ = writeln!(s);
+            }
+            files.push((format!("save_items_{}.txt", sanitize(name)), s));
+        }
+        files
+    }
+
     /// The results grid: one row per group with its run status and key stats.
     fn results_table(&mut self, ui: &mut egui::Ui) {
         ui.strong("Results");
@@ -315,5 +443,37 @@ impl FeffitBatch {
                     ui.end_row();
                 }
             });
+    }
+}
+
+/// A filename-safe form of an item name (`reff+delr` → `reff_delr`).
+fn sanitize(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_makes_item_names_filename_safe() {
+        assert_eq!(sanitize("reff+delr"), "reff_delr");
+        assert_eq!(sanitize("sigma2"), "sigma2");
+        assert_eq!(sanitize("e0"), "e0");
+    }
+
+    #[test]
+    fn save_items_covers_all_eight_dialog_items() {
+        // The savable set matches the original dialog's eight items, and only
+        // reff+Δr is the computed (empty-key) one.
+        assert_eq!(SAVE_ITEMS.len(), 8);
+        let computed: Vec<&str> = SAVE_ITEMS
+            .iter()
+            .filter(|(_, key)| key.is_empty())
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(computed, vec!["reff+delr"]);
     }
 }

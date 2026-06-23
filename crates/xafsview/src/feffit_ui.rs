@@ -323,6 +323,55 @@ fn pick_part(
     }
 }
 
+/// One fitted path's data for the batch "Save Items": its feff path number
+/// (parsed from the `feffNNNN.dat` label), its `reff`, and the path parameters
+/// that were fitted (each as `value` + propagated stderr).
+pub struct SavedPath {
+    /// The feff path number (`feff0007.dat` → 7), or the 1-based position when
+    /// the label carries no number.
+    pub number: usize,
+    /// Half path length from the feff file.
+    pub reff: f64,
+    /// `(parameter name, value, stderr)` for each fitted path parameter, names
+    /// drawn from [`PATH_PNAMES`].
+    params: Vec<(String, f64, f64)>,
+}
+
+impl SavedPath {
+    /// `(value, stderr)` of the named path parameter, if it was fitted.
+    fn param(&self, name: &str) -> Option<(f64, f64)> {
+        self.params
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, v, e)| (*v, *e))
+    }
+
+    /// `(value, stderr)` for a Save-Items key: a [`PATH_PNAMES`] parameter name,
+    /// or `""` for the computed `reff + Δr` (Δr's value offset by the constant
+    /// `reff`, carrying Δr's stderr). Missing parameters report `(0, 0)`, the
+    /// original's `n = 0` filler for paths a fit does not use.
+    pub fn item(&self, key: &str) -> (f64, f64) {
+        if key.is_empty() {
+            let (dv, de) = self.param("deltar").unwrap_or((0.0, 0.0));
+            (self.reff + dv, de)
+        } else {
+            self.param(key).unwrap_or((0.0, 0.0))
+        }
+    }
+}
+
+/// The feff path number embedded in a `feffNNNN.dat` label (`feff0007.dat` → 7),
+/// if present.
+fn path_number(label: &str) -> Option<usize> {
+    let lower = label.to_ascii_lowercase();
+    let start = lower.find("feff")? + 4;
+    let digits: String = lower[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
 /// FEFFIT tab state: the path list, the variables, the transform, the plot
 /// selection, and the last fit result.
 pub struct FeffitUi {
@@ -385,6 +434,32 @@ impl FeffitUi {
     /// The last fit result, if a fit has been run (for the batch result table).
     pub fn result(&self) -> Option<&FeffitResult> {
         self.result.as_ref()
+    }
+
+    /// Per-path fitted data for the batch "Save Items", in the order the paths
+    /// were fitted (the enabled rows). Empty until a fit has been run. The
+    /// `path` index of each [`PathParam`](feffit::PathParam) matches the enabled
+    /// path position, since [`run`](Self::run) builds the fit's path list from
+    /// exactly those rows in order.
+    pub fn saved_paths(&self) -> Vec<SavedPath> {
+        let Some(res) = &self.result else {
+            return Vec::new();
+        };
+        self.paths
+            .iter()
+            .filter(|p| p.enabled)
+            .enumerate()
+            .map(|(pi, row)| SavedPath {
+                number: path_number(&row.label).unwrap_or(pi + 1),
+                reff: row.reff,
+                params: res
+                    .path_params
+                    .iter()
+                    .filter(|pp| pp.path == pi)
+                    .map(|pp| (pp.name.clone(), pp.value, pp.stderr))
+                    .collect(),
+            })
+            .collect()
     }
 
     /// The last fit's plot arrays, if a fit has been run.
@@ -863,6 +938,35 @@ fn window_name(w: Window) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn path_number_parses_feff_label() {
+        assert_eq!(path_number("feff0007.dat"), Some(7));
+        assert_eq!(path_number("FEFF0123.DAT"), Some(123));
+        assert_eq!(path_number("dir/feff0002.dat"), Some(2));
+        assert_eq!(path_number("custom_path.dat"), None);
+    }
+
+    #[test]
+    fn saved_path_item_maps_keys_and_computes_reff_plus_delr() {
+        let sp = SavedPath {
+            number: 1,
+            reff: 2.50,
+            params: vec![
+                ("degen".to_owned(), 12.0, 1.5),
+                ("deltar".to_owned(), 0.03, 0.004),
+                ("sigma2".to_owned(), 0.009, 0.0008),
+            ],
+        };
+        // A plain key returns that parameter's (value, stderr).
+        assert_eq!(sp.item("degen"), (12.0, 1.5));
+        // reff+Δr ("" key): reff offset by Δr's value, carrying Δr's stderr.
+        let (v, e) = sp.item("");
+        assert!((v - 2.53).abs() < 1e-12, "reff+delr value {v}");
+        assert!((e - 0.004).abs() < 1e-12, "reff+delr err {e}");
+        // A parameter not fitted reports the (0, 0) filler.
+        assert_eq!(sp.item("e0"), (0.0, 0.0));
+    }
+
     use feffdat::FeffDatFile;
     use xasdata::{
         AutobkParams, ColumnFile, MuSpec, PreEdgeParams, XasGroup, autobk_group, build_mu,
@@ -1019,5 +1123,36 @@ mod tests {
         assert_eq!(plot.data.r.len(), plot.data.chir_mag.len());
         assert_eq!(plot.model.r.len(), plot.model.chir_mag.len());
         assert_eq!(plot.data_k.len(), plot.model_chi.len());
+    }
+
+    #[test]
+    fn saved_paths_number_and_carry_fitted_items() {
+        let (k, chi) = cu_kchi();
+        let mut ui = feffit_ui_with_paths();
+        ui.run(&k, &chi).expect("fit should run");
+
+        let saved = ui.saved_paths();
+        // Two enabled paths, numbered from their feff0001/feff0002 labels.
+        assert_eq!(saved.len(), 2, "both enabled paths are saved");
+        assert_eq!(saved[0].number, 1);
+        assert_eq!(saved[1].number, 2);
+        for sp in &saved {
+            assert!(
+                sp.reff > 0.0,
+                "reff carried from the feff file: {}",
+                sp.reff
+            );
+            // The standard wiring fits degen, Δr, and σ² on each path.
+            let (degen, _) = sp.item("degen");
+            assert!(degen > 0.0, "degen present: {degen}");
+            let (delr, _) = sp.item("deltar");
+            // reff+Δr is the bond distance: reff offset by the fitted Δr.
+            let (bond, _) = sp.item("");
+            assert!(
+                (bond - (sp.reff + delr)).abs() < 1e-9,
+                "reff+delr = reff + Δr: {bond} vs {}",
+                sp.reff + delr
+            );
+        }
     }
 }
