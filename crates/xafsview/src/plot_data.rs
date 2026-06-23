@@ -2,14 +2,14 @@
 //! loaded groups on one plot, with vertical stacking, an averaged trace, and a
 //! peak readout. Mirrors XAFSView's *Plot Data* window.
 //!
-//! It owns its own [`Plot1D`] (separate from the tabs' shared plot) so it can
+//! It owns its own plot (separate from the tabs' shared plot) so it can
 //! float independently. Save / zoom / legend come from the siplot toolbar; the
 //! data work (averaging, peak finding) is the headless [`xasdata::batch`] code.
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
-use siplot::{Plot1D, YAxis};
+use siplot::YAxis;
 use xasdata::{PreEdgeParams, XasGroup, average_curves, normalize, peak_in_range, x_at_y};
 
 /// Which reduction stage to overlay.
@@ -193,7 +193,7 @@ impl NormOptions {
 pub struct PlotDataWindow {
     /// Whether the window is shown.
     pub open: bool,
-    plot: Plot1D,
+    plot: crate::plot::Plot,
     item: PlotItem,
     kweight: i32,
     /// Per-group "show this trace" flags, kept the same length as the session's
@@ -228,7 +228,7 @@ impl PlotDataWindow {
     /// Build the window with its own plot (use a distinct `PlotId` from the
     /// tabs' shared plot).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = crate::plot::new_plot1d(render_state, 1);
+        let mut plot = crate::plot::Plot::new(render_state, 1);
         plot.set_graph_title("Plot Data");
         Self {
             open: false,

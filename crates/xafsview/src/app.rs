@@ -4,7 +4,6 @@
 
 use eframe::egui;
 use egui::Color32;
-use siplot::Plot1D;
 use xasdata::{ColumnFile, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
@@ -72,7 +71,7 @@ impl Tab {
 pub struct XafsViewApp {
     session: Session,
     tab: Tab,
-    plot: Plot1D,
+    plot: crate::plot::Plot,
     /// The in-progress data import (column → role mapping), if a raw file is open.
     import: Option<ImportState>,
     /// Reduction (normalize/autobk/FT) parameters and the active graph type.
@@ -137,7 +136,7 @@ impl XafsViewApp {
             .as_ref()
             .expect("eframe must use the wgpu renderer (NativeOptions.renderer = Wgpu)");
 
-        let mut plot = crate::plot::new_plot1d(render_state, 0);
+        let mut plot = crate::plot::Plot::new(render_state, 0);
         plot.set_graph_title("XAFSView");
         plot.set_graph_x_label("Energy (eV)");
         plot.set_graph_y_label("μ(E)", siplot::YAxis::Left);
@@ -152,8 +151,7 @@ impl XafsViewApp {
                 0.5 + 0.5 * ((e - 8979.0) / 8.0).tanh()
             })
             .collect();
-        let h = plot.add_curve(&x, &y, Color32::from_rgb(0x1f, 0x77, 0xb4));
-        plot.set_item_legend(h, "demo edge");
+        plot.add_curve_with_legend(&x, &y, Color32::from_rgb(0x1f, 0x77, 0xb4), "demo edge");
 
         let plot_data = PlotDataWindow::new(render_state);
         let feffit_batch = FeffitBatch::new(render_state);
@@ -606,12 +604,12 @@ impl XafsViewApp {
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot.set_graph_y_label("μ(E)", siplot::YAxis::Left);
                 if !g.energy.is_empty() {
-                    let h = self.plot.add_curve(&g.energy, &g.mu, BLUE);
-                    self.plot.set_item_legend(h, "μ(E)");
+                    self.plot
+                        .add_curve_with_legend(&g.energy, &g.mu, BLUE, "μ(E)");
                 }
                 if let Some(bkg) = &g.bkg {
-                    let h = self.plot.add_curve(&g.energy, bkg, ORANGE);
-                    self.plot.set_item_legend(h, "background");
+                    self.plot
+                        .add_curve_with_legend(&g.energy, bkg, ORANGE, "background");
                 }
             }
             GraphType::Norm => {
@@ -624,16 +622,15 @@ impl XafsViewApp {
                 // post-edge slope). Fall back to `norm` only if flattening is
                 // somehow unavailable — `reduce` always sets them together.
                 if let Some(flat) = g.flat.as_ref().or(g.norm.as_ref()) {
-                    let h = self.plot.add_curve(&g.energy, flat, BLUE);
-                    self.plot.set_item_legend(h, "norm");
+                    self.plot
+                        .add_curve_with_legend(&g.energy, flat, BLUE, "norm");
                 }
             }
             GraphType::Deriv => {
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot.set_graph_y_label("d μ / dE", siplot::YAxis::Left);
                 if let Some(d) = &g.dmude {
-                    let h = self.plot.add_curve(&g.energy, d, BLUE);
-                    self.plot.set_item_legend(h, "dμ/dE");
+                    self.plot.add_curve_with_legend(&g.energy, d, BLUE, "dμ/dE");
                 }
             }
             GraphType::KChi => {
@@ -645,16 +642,14 @@ impl XafsViewApp {
                         .zip(chi)
                         .map(|(&kk, &c)| c * kk.powi(kweight))
                         .collect();
-                    let h = self.plot.add_curve(k, &y, BLUE);
-                    self.plot.set_item_legend(h, "kʷ·χ(k)");
+                    self.plot.add_curve_with_legend(k, &y, BLUE, "kʷ·χ(k)");
                 }
             }
             GraphType::ChiR => {
                 self.plot.set_graph_x_label("R (Å)");
                 self.plot.set_graph_y_label("|χ(R)|", siplot::YAxis::Left);
                 if let (Some(r), Some(mag)) = (&g.r, &g.chir_mag) {
-                    let h = self.plot.add_curve(r, mag, BLUE);
-                    self.plot.set_item_legend(h, "|χ(R)|");
+                    self.plot.add_curve_with_legend(r, mag, BLUE, "|χ(R)|");
                 }
             }
         }
@@ -868,10 +863,10 @@ impl XafsViewApp {
         self.plot.set_graph_x_label(xlabel);
         self.plot.set_graph_y_label(ylabel, siplot::YAxis::Left);
         if !x.is_empty() {
-            let hd = self.plot.add_curve(&x, &data_y, FIT_DATA);
-            self.plot.set_item_legend(hd, "data");
-            let hm = self.plot.add_curve(&x, &model_y, FIT_MODEL);
-            self.plot.set_item_legend(hm, "model");
+            self.plot
+                .add_curve_with_legend(&x, &data_y, FIT_DATA, "data");
+            self.plot
+                .add_curve_with_legend(&x, &model_y, FIT_MODEL, "model");
         }
     }
 

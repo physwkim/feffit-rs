@@ -4,7 +4,7 @@
 //! All tools read the chosen group's normalized or flattened μ(E) (a group must
 //! have been normalized first) and call the headless [`xasdata`] primitives
 //! ([`peak`], [`valley`], [`x_at_y`], [`arctan_step`], [`centroid`]). The window
-//! owns its own [`Plot1D`].
+//! owns its own plot.
 //!
 //! MBACK / NEXAFS normalization (the other XANES-tab item) is intentionally not
 //! here: it needs Chantler `f2` from xraydb keyed by element + edge, which lands
@@ -13,7 +13,7 @@
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
-use siplot::{Plot1D, YAxis};
+use siplot::YAxis;
 use xasdata::{XasGroup, arctan_step, centroid, peak, valley, x_at_y};
 
 use crate::analysis_ui::array_xy;
@@ -33,7 +33,7 @@ struct Readout {
 /// The XANES-tools window.
 pub struct XanesWindow {
     pub open: bool,
-    plot: Plot1D,
+    plot: crate::plot::Plot,
     target: Option<usize>,
     use_flat: bool,
     /// Region [rlo, rhi] used by peak / valley / half-max searches.
@@ -59,7 +59,7 @@ pub struct XanesWindow {
 impl XanesWindow {
     /// Build the window with its own plot (`PlotId` 5).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = crate::plot::new_plot1d(render_state, 5);
+        let mut plot = crate::plot::Plot::new(render_state, 5);
         plot.set_graph_title("XANES");
         Self {
             open: false,

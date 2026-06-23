@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
-use siplot::{Plot1D, YAxis};
+use siplot::YAxis;
 use xasdata::XasGroup;
 
 use crate::feffit_ui::{FeffitAction, FeffitUi, SavedPath};
@@ -65,7 +65,7 @@ pub enum BatchAction {
 pub struct FeffitBatch {
     /// Whether the window is shown.
     pub open: bool,
-    plot: Plot1D,
+    plot: crate::plot::Plot,
     configs: Vec<GroupFit>,
     /// Which config is shown in the editor / plot.
     selected: usize,
@@ -82,7 +82,7 @@ impl FeffitBatch {
     /// Build the window with its own plot (use a distinct `PlotId` from the tabs'
     /// shared plot and the Plot Data window).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = crate::plot::new_plot1d(render_state, 2);
+        let mut plot = crate::plot::Plot::new(render_state, 2);
         plot.set_graph_title("Feffit batch");
         Self {
             open: false,

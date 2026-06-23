@@ -5,13 +5,13 @@
 //! the reference spectrum's native energy grid over a fit range
 //! ([`xasdata::groups2matrix`], cubic interpolation — matching larch), and call
 //! the headless engine ([`xasdata::lincombo_fit`] / [`xasdata::pca_train`] +
-//! [`xasdata::pca_fit`]). Each window owns its own [`Plot1D`]. Spectra are taken
+//! [`xasdata::pca_fit`]). Each window owns its own plot. Spectra are taken
 //! as normalized or flattened μ(E); a group must have been normalized first.
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
-use siplot::{Plot1D, YAxis};
+use siplot::YAxis;
 use xasdata::{PcaModel, XasGroup, groups2matrix, interp_cubic, lincombo_fit, pca_fit, pca_train};
 
 const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
@@ -85,7 +85,7 @@ struct LcfResult {
 /// The linear-combination-fitting window.
 pub struct LcfWindow {
     pub open: bool,
-    plot: Plot1D,
+    plot: crate::plot::Plot,
     target: Option<usize>,
     components: Vec<bool>,
     use_flat: bool,
@@ -100,7 +100,7 @@ pub struct LcfWindow {
 impl LcfWindow {
     /// Build the window with its own plot (`PlotId` 3).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = crate::plot::new_plot1d(render_state, 3);
+        let mut plot = crate::plot::Plot::new(render_state, 3);
         plot.set_graph_title("LCF");
         Self {
             open: false,
@@ -358,7 +358,7 @@ struct PcaReco {
 /// The principal-component-analysis window.
 pub struct PcaWindow {
     pub open: bool,
-    plot: Plot1D,
+    plot: crate::plot::Plot,
     training: Vec<bool>,
     use_flat: bool,
     emin: f64,
@@ -375,7 +375,7 @@ pub struct PcaWindow {
 impl PcaWindow {
     /// Build the window with its own plot (`PlotId` 4).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = crate::plot::new_plot1d(render_state, 4);
+        let mut plot = crate::plot::Plot::new(render_state, 4);
         plot.set_graph_title("PCA");
         Self {
             open: false,

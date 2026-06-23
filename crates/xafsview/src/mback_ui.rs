@@ -11,7 +11,7 @@
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
-use siplot::{Plot1D, YAxis};
+use siplot::YAxis;
 use xasdata::{Edge, MbackNorm, MbackNormParams, XasGroup, mback_norm};
 use xraydb::XrayDb;
 
@@ -67,7 +67,7 @@ struct MbackResult {
 pub struct MbackWindow {
     pub open: bool,
     db: XrayDb,
-    plot: Plot1D,
+    plot: crate::plot::Plot,
     target: Option<usize>,
     z: u16,
     edge: EdgeSel,
@@ -80,7 +80,7 @@ pub struct MbackWindow {
 impl MbackWindow {
     /// Build the window with its own plot (`PlotId` 6).
     pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = crate::plot::new_plot1d(render_state, 6);
+        let mut plot = crate::plot::Plot::new(render_state, 6);
         plot.set_graph_title("MBACK");
         Self {
             open: false,

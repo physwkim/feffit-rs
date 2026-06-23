@@ -10,7 +10,7 @@
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use siplot::{DataMargins, Plot1D, PlotId, Symbol};
+use siplot::{DataMargins, ItemHandle, Plot1D, PlotId, Symbol};
 
 /// Fraction of the data range left blank on each side of the data extent, so
 /// samples at the extremes are lifted just off the axis frame without wasting
@@ -35,6 +35,74 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
     // toggling the toolbar's crosshair button.
     plot.set_graph_cursor(true);
     plot
+}
+
+/// A [`Plot1D`] bundled with the legend entries for the curves currently on it.
+///
+/// siplot exposes no per-item colour, and its own `show_legend` draws a
+/// visibility-toggle control on every row that the GUI does not want; so each
+/// curve's `(label, colour)` is tracked here as it is added and [`show`] draws a
+/// plain in-axes legend from it. Curves added through
+/// [`Plot::add_curve_with_legend`] are recorded; bare `add_curve` curves (no
+/// legend) are not. Every other operation falls through to the inner [`Plot1D`]
+/// via `Deref`/`DerefMut`, so all existing plot calls are unchanged.
+pub struct Plot {
+    inner: Plot1D,
+    legend: Vec<(String, egui::Color32)>,
+}
+
+impl std::ops::Deref for Plot {
+    type Target = Plot1D;
+    fn deref(&self) -> &Plot1D {
+        &self.inner
+    }
+}
+
+impl std::ops::DerefMut for Plot {
+    fn deref_mut(&mut self) -> &mut Plot1D {
+        &mut self.inner
+    }
+}
+
+impl Plot {
+    /// Build a [`Plot`] with the house data margins (see [`new_plot1d`]) and an
+    /// empty legend.
+    pub fn new(render_state: &RenderState, id: PlotId) -> Self {
+        Self {
+            inner: new_plot1d(render_state, id),
+            legend: Vec::new(),
+        }
+    }
+
+    /// Add a curve and record its `(label, colour)` for the in-axes legend.
+    /// Shadows [`Plot1D::add_curve_with_legend`], so existing call sites record
+    /// their legend entry without change.
+    pub fn add_curve_with_legend(
+        &mut self,
+        x: &[f64],
+        y: &[f64],
+        color: egui::Color32,
+        legend: impl Into<String>,
+    ) -> ItemHandle {
+        let legend = legend.into();
+        self.legend.push((legend.clone(), color));
+        self.inner.add_curve_with_legend(x, y, color, legend)
+    }
+
+    /// Clear all plot items and the recorded legend together. Shadows
+    /// [`Plot1D::clear`], so a rebuild that calls `clear()` also empties the
+    /// legend (otherwise stale entries would accumulate each frame).
+    pub fn clear(&mut self) {
+        self.inner.clear();
+        self.legend.clear();
+    }
+
+    /// Clear curve items and the recorded legend together. Shadows
+    /// [`Plot1D::clear_curves`].
+    pub fn clear_curves(&mut self) {
+        self.inner.clear_curves();
+        self.legend.clear();
+    }
 }
 
 /// Draw `plot`'s standard toolbar plus the house extras on one row, then leave
@@ -63,15 +131,14 @@ pub fn toolbar(plot: &mut Plot1D, ui: &mut egui::Ui) {
 /// *and* a visible legend — siplot draws no in-axes legend, so without this call
 /// the curve names never appear. The legend floats over the canvas (an egui
 /// `Area`) instead of taking a separate column, so it no longer steals width.
-pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
-    toolbar(plot, ui);
+pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
+    toolbar(&mut plot.inner, ui);
     // The canvas fills the whole width; `PlotResponse::transform` carries the
     // data-area rectangle (screen points) that we anchor the legend overlay to.
-    let area = plot.show(ui).transform.area;
+    let area = plot.inner.show(ui).transform.area;
 
-    // An empty plot has nothing to label — skip the overlay so no stray box
-    // floats over a blank canvas.
-    if plot.get_items().is_empty() {
+    // No labelled curve — nothing to put in the legend, so skip the overlay.
+    if plot.legend.is_empty() {
         return;
     }
 
@@ -84,7 +151,7 @@ pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
     // themselves to move it. egui remembers the dragged spot (keyed by plot id)
     // and `constrain_to` keeps it within the axes.
     const PAD: f32 = 6.0;
-    let legend_id = egui::Id::new(plot.backend().plot().id).with("legend_overlay");
+    let legend_id = egui::Id::new(plot.inner.backend().plot().id).with("legend_overlay");
     let ctx = ui.ctx().clone();
     egui::Area::new(legend_id)
         .order(egui::Order::Foreground)
@@ -93,9 +160,8 @@ pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
         .default_pos(area.right_top() + egui::vec2(-PAD, PAD))
         .pivot(egui::Align2::RIGHT_TOP)
         .show(&ctx, |ui| {
-            // A plain transparent box: the legend draws no fill or border of its
-            // own (the `show_legend` call below nulls both of siplot's), so this
-            // wrapper only pads the bare swatch + labels off the axis frame.
+            // A plain transparent box that only pads the legend off the axis
+            // frame — no fill or border of its own.
             egui::Frame::new()
                 .inner_margin(egui::Margin::same(PAD as i8))
                 .show(ui, |ui| {
@@ -112,21 +178,38 @@ pub fn show(plot: &mut Plot1D, ui: &mut egui::Ui) {
                                 ..Default::default()
                             })
                             .show(ui, |ui| {
-                                // Strip siplot's legend chrome so only the line
-                                // swatch + label float over the canvas (pyqtgraph
-                                // style): `show_legend` fills the *active* row with
-                                // `selection.bg_fill` and wraps the rows in a
-                                // rectangular border drawn from
-                                // `widgets.noninteractive.bg_stroke`. Null both on
-                                // this ui so the legend shows no fill and no border.
-                                let v = ui.visuals_mut();
-                                v.selection.bg_fill = egui::Color32::TRANSPARENT;
-                                v.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-                                plot.show_legend(ui);
+                                draw_legend(ui, &plot.legend);
                             });
                     });
                 });
         });
+}
+
+/// Draw the plain in-axes legend: one row per entry — a short line swatch in the
+/// curve's colour, then its label. No fill, border, or visibility toggle (unlike
+/// siplot's `show_legend`, which the GUI deliberately bypasses); just the colour
+/// key over the transparent overlay. Rows are non-interactive so a drag anywhere
+/// on the legend moves the enclosing `Area` rather than being captured.
+fn draw_legend(ui: &mut egui::Ui, entries: &[(String, egui::Color32)]) {
+    const SWATCH_W: f32 = 22.0;
+    const SWATCH_H: f32 = 12.0;
+    ui.spacing_mut().item_spacing.y = 2.0;
+    for (label, color) in entries {
+        ui.horizontal(|ui| {
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(SWATCH_W, SWATCH_H), egui::Sense::hover());
+            let y = rect.center().y;
+            ui.painter().line_segment(
+                [
+                    egui::pos2(rect.left() + 2.0, y),
+                    egui::pos2(rect.right() - 2.0, y),
+                ],
+                egui::Stroke::new(2.0, *color),
+            );
+            ui.add_space(4.0);
+            ui.label(label.as_str());
+        });
+    }
 }
 
 /// A "Symbol" menu that toggles data-point markers (shape + size) on every curve
