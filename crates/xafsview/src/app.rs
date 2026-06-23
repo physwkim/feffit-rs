@@ -1224,7 +1224,9 @@ impl eframe::App for XafsViewApp {
         // It needs the wgpu render state each frame (unlike the 2D Plot1D, which
         // caches it), so it is fed from the eframe Frame here.
         if let Some(rs) = frame.wgpu_render_state() {
-            self.plot_sites.show(ui.ctx(), rs, &self.feff_inp);
+            let path_files = self.feff_tab.last_path_files();
+            self.plot_sites
+                .show(ui.ctx(), rs, &self.feff_inp, &path_files);
         }
     }
 }
