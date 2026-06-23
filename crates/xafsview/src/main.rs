@@ -18,6 +18,7 @@ mod mback_ui;
 mod plot;
 mod plot_data;
 mod reduce_ui;
+mod timeres_ui;
 mod wavelet;
 mod widgets;
 mod window;

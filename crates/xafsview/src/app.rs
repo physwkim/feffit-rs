@@ -17,6 +17,7 @@ use crate::import::{ImportAction, ImportState};
 use crate::mback_ui::MbackWindow;
 use crate::plot_data::PlotDataWindow;
 use crate::reduce_ui::{GraphType, LoadingType, ReductionUi, TheoryStd};
+use crate::timeres_ui::TimeResolvedWindow;
 use crate::wavelet::{WaveletAction, WaveletWindow, morlet_cwt};
 use crate::xanes_ui::XanesWindow;
 
@@ -105,6 +106,8 @@ pub struct XafsViewApp {
     powder: PowderWindow,
     /// The k ↔ E conversion calculator.
     ke_convert: KeConvertWindow,
+    /// The Extract-XAS-measured-time window (time-resolved series timing).
+    time_resolved: TimeResolvedWindow,
     /// The Atoms tab state (crystal cell → feff.inp).
     atoms_tab: AtomsTab,
     /// The Feff tab state (edit feff.inp / run FEFF).
@@ -183,6 +186,7 @@ impl XafsViewApp {
             ion_chamber,
             powder,
             ke_convert: KeConvertWindow::default(),
+            time_resolved: TimeResolvedWindow::default(),
             atoms_tab: AtomsTab::default(),
             feff_tab: FeffTab::default(),
             plot_sites,
@@ -1158,6 +1162,13 @@ impl XafsViewApp {
                     self.ke_convert.open = true;
                     ui.close();
                 }
+                if ui
+                    .button("Extract XAS measured time (time-resolved)…")
+                    .clicked()
+                {
+                    self.time_resolved.open = true;
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("Plot Sites (3D cluster)…").clicked() {
                     self.plot_sites.open = true;
@@ -1346,6 +1357,8 @@ impl eframe::App for XafsViewApp {
         // k ↔ E conversion: seeded from the active group's edge energy E₀.
         let group_e0 = self.session.current_group().and_then(|g| g.e0);
         self.ke_convert.show(ui.ctx(), group_e0);
+        // Extract XAS measured time: self-contained (picks its own file series).
+        self.time_resolved.show(ui.ctx());
 
         // The Plot Sites 3D viewer parses the shared feff.inp into a point cloud.
         // It needs the wgpu render state each frame (unlike the 2D Plot1D, which
