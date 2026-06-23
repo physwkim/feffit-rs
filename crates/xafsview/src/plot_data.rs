@@ -97,6 +97,22 @@ const PALETTE: [Color32; 8] = [
     Color32::from_rgb(0x17, 0xbe, 0xcf),
 ];
 
+/// Feffit "Send to Plot Data" overlay colours (data vs model).
+const FIT_DATA: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
+const FIT_MODEL: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
+
+/// A Feffit fit handed over from the Feffit tab's "Send to Plot Data": its data
+/// and model curves in the chosen space, with that space's axis labels. When
+/// shown it takes over the plot (its axes differ from the group items).
+struct FitOverlay {
+    label: String,
+    xlabel: &'static str,
+    ylabel: &'static str,
+    x: Vec<f64>,
+    data: Vec<f64>,
+    model: Vec<f64>,
+}
+
 /// The Plot Data window state and its own plot.
 pub struct PlotDataWindow {
     /// Whether the window is shown.
@@ -113,6 +129,10 @@ pub struct PlotDataWindow {
     peak_lo: f64,
     peak_hi: f64,
     peak: Option<(f64, f64)>,
+    /// A Feffit fit sent here via "Send to Plot Data", if any.
+    overlay: Option<FitOverlay>,
+    /// Whether the sent fit takes over the plot (vs the group items).
+    show_overlay: bool,
     /// Set whenever the overlay needs rebuilding (control change or new data).
     dirty: bool,
 }
@@ -134,6 +154,8 @@ impl PlotDataWindow {
             peak_lo: 0.0,
             peak_hi: 0.0,
             peak: None,
+            overlay: None,
+            show_overlay: false,
             dirty: true,
         }
     }
@@ -141,6 +163,31 @@ impl PlotDataWindow {
     /// Request a rebuild on the next show — call after the loaded groups or their
     /// reduction stages change (e.g. after a batch AUTOBK).
     pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Take a Feffit fit's data + model curves (the Feffit form's "Send to plot
+    /// data"). The window opens showing the fit; untick "Show Feffit fit" or
+    /// "Clear fit" to return to the group plot.
+    pub fn set_fit_overlay(
+        &mut self,
+        label: String,
+        xlabel: &'static str,
+        ylabel: &'static str,
+        x: Vec<f64>,
+        data: Vec<f64>,
+        model: Vec<f64>,
+    ) {
+        self.overlay = Some(FitOverlay {
+            label,
+            xlabel,
+            ylabel,
+            x,
+            data,
+            model,
+        });
+        self.show_overlay = true;
+        self.open = true;
         self.dirty = true;
     }
 
@@ -188,6 +235,26 @@ impl PlotDataWindow {
     /// averaging, and peak search.
     fn controls(&mut self, ui: &mut egui::Ui, groups: &[XasGroup]) {
         ui.heading("Plot Data");
+
+        // A Feffit fit sent here overrides the group items while shown.
+        if let Some(ov) = &self.overlay {
+            let label = ov.label.clone();
+            ui.separator();
+            ui.strong("Feffit fit");
+            if ui
+                .checkbox(&mut self.show_overlay, "Show Feffit fit (data + model)")
+                .changed()
+            {
+                self.dirty = true;
+            }
+            ui.weak(label);
+            if ui.button("Clear fit").clicked() {
+                self.overlay = None;
+                self.show_overlay = false;
+                self.dirty = true;
+            }
+            ui.separator();
+        }
 
         egui::ComboBox::from_label("Array")
             .selected_text(self.item.label())
@@ -291,6 +358,23 @@ impl PlotDataWindow {
     /// Rebuild every plotted curve from the current selection and settings.
     fn rebuild(&mut self, groups: &[XasGroup]) {
         self.plot.clear();
+
+        // A sent Feffit fit takes over the plot (its space/axes differ from the
+        // group items), so draw it alone and skip the group traces.
+        if self.show_overlay
+            && let Some(ov) = &self.overlay
+        {
+            self.plot.set_graph_x_label(ov.xlabel);
+            self.plot.set_graph_y_label(ov.ylabel, YAxis::Left);
+            if !ov.x.is_empty() {
+                self.plot
+                    .add_curve_with_legend(&ov.x, &ov.data, FIT_DATA, "fit data");
+                self.plot
+                    .add_curve_with_legend(&ov.x, &ov.model, FIT_MODEL, "fit model");
+            }
+            return;
+        }
+
         self.plot.set_graph_x_label(self.item.x_label());
         self.plot.set_graph_y_label(self.item.label(), YAxis::Left);
 

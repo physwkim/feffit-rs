@@ -609,10 +609,7 @@ impl XafsViewApp {
             Some(FeffitAction::AddPath) => self.add_feff_path(),
             Some(FeffitAction::Run) => self.run_feffit(),
             Some(FeffitAction::Replot) => self.replot_feffit(),
-            Some(FeffitAction::SendToPlotData) => {
-                self.plot_data.open = true;
-                self.plot_data.mark_dirty();
-            }
+            Some(FeffitAction::SendToPlotData) => self.send_feffit_to_plot_data(),
             None => {}
         }
     }
@@ -763,6 +760,25 @@ impl XafsViewApp {
             let hm = self.plot.add_curve(&x, &model_y, RED);
             self.plot.set_item_legend(hm, "model");
         }
+    }
+
+    /// Hand the last Feffit fit's data + model curves to the Plot Data window
+    /// (the Feffit form's "Send to plot data"), in the currently-selected space.
+    fn send_feffit_to_plot_data(&mut self) {
+        let label = self
+            .session
+            .current_group()
+            .map(|g| format!("Feffit fit — {}", g.label))
+            .unwrap_or_else(|| "Feffit fit".to_owned());
+        let (space, part) = self.feffit.plot_selection();
+        let Some(p) = self.feffit.plot() else {
+            self.status = "Run a fit first, then send it to Plot Data.".to_owned();
+            return;
+        };
+        let (x, data_y, model_y, xlabel, ylabel) = p.series(space, part);
+        self.plot_data
+            .set_fit_overlay(label, xlabel, ylabel, x, data_y, model_y);
+        self.status = "Sent the Feffit fit (data + model) to Plot Data.".to_owned();
     }
 
     /// The Autobk tab: import + reduction controls on the left, plot on the right.
