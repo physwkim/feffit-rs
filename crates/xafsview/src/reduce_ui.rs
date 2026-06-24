@@ -133,6 +133,11 @@ pub struct ReductionUi {
     pub loading: LoadingType,
     /// Optional theoretical χ(k) standard constraining the background fit.
     pub theory: Option<TheoryStd>,
+    /// The "Output file" chi base name (original Autobk "Output file" field):
+    /// AUTOBK Start writes χ(k) to `<stem>k.chi` and χ(R) to `<stem>r.chi`.
+    /// Auto-filled from the loaded file's stem on load; editable. Empty falls
+    /// back to the group label at write time.
+    pub output_file: String,
 }
 
 impl Default for ReductionUi {
@@ -156,6 +161,7 @@ impl Default for ReductionUi {
             norm2: 300.0,
             loading: LoadingType::CalcXmu,
             theory: None,
+            output_file: String::new(),
         }
     }
 }

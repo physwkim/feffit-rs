@@ -243,6 +243,8 @@ impl XafsViewApp {
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| format!("chi{}", self.session.groups.len() + 1));
                 let n = k.len();
+                // Seed the Autobk "Output file" chi base from the loaded name.
+                self.reduction.output_file = format!("{label}.chi");
                 let mut g = XasGroup::from_chi(label, k, chi);
                 g.filename = Some(path.clone());
                 self.session.add_group(g);
@@ -303,6 +305,8 @@ impl XafsViewApp {
                     Ok(name) => format!(" · wrote {name}"),
                     Err(e) => format!(" · .xmu not written: {e}"),
                 };
+                // Seed the Autobk "Output file" chi base from the loaded name.
+                self.reduction.output_file = format!("{label}.chi");
                 self.session.add_group(XasGroup::from_mu(label, energy, mu));
                 self.status = format!("Built μ(E): {n} points{xmu}");
                 self.reduction.graph = GraphType::MuBkg;
@@ -376,9 +380,73 @@ impl XafsViewApp {
             xasdata::xftf_group(g, &ft);
             (g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len()))
         };
-        self.status = format!("Reduction done: E₀ = {:.2} eV, {} k-points", info.0, info.1);
+        // Original Autobk "Output file" behaviour: persist χ(k) → <stem>k.chi and
+        // χ(R) → <stem>r.chi once the transform has produced them.
+        let saved = match self.session.current_group() {
+            Some(g) if g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some() => match self
+                .write_chi_files(g)
+            {
+                Ok((kp, rp)) => format!(" · saved {} + {}", file_name_of(&kp), file_name_of(&rp)),
+                Err(e) => format!(" · χ files not written: {e}"),
+            },
+            _ => String::new(),
+        };
+        self.status = format!(
+            "AUTOBK done: E₀ = {:.2} eV, {} k-points{saved}",
+            info.0, info.1
+        );
         self.plot_data.mark_dirty();
         self.replot_graph();
+    }
+
+    /// Write the AUTOBK outputs the original's "Output file" produces: χ(k) →
+    /// `<stem>k.chi` (k, χ) and χ(R) → `<stem>r.chi` (R, |χ|, Re, Im), into the
+    /// work folder (falling back to the data folder, then the source folder).
+    /// `<stem>` comes from the editable "Output file" name, else the group label.
+    fn write_chi_files(
+        &self,
+        g: &XasGroup,
+    ) -> std::io::Result<(std::path::PathBuf, std::path::PathBuf)> {
+        let stem = std::path::Path::new(self.reduction.output_file.trim())
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if g.label.is_empty() {
+                    "chi".to_owned()
+                } else {
+                    g.label.clone()
+                }
+            });
+        let dir = self
+            .session
+            .folders
+            .work_dir
+            .clone()
+            .or_else(|| self.session.folders.data_dir.clone())
+            .or_else(|| {
+                g.filename
+                    .as_ref()
+                    .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let k_path = dir.join(format!("{stem}k.chi"));
+        let r_path = dir.join(format!("{stem}r.chi"));
+        write_chik(
+            &k_path,
+            &g.label,
+            g.k.as_deref().unwrap_or(&[]),
+            g.chi.as_deref().unwrap_or(&[]),
+        )?;
+        write_chir(
+            &r_path,
+            &g.label,
+            g.r.as_deref().unwrap_or(&[]),
+            g.chir_mag.as_deref().unwrap_or(&[]),
+            g.chir_re.as_deref().unwrap_or(&[]),
+            g.chir_im.as_deref().unwrap_or(&[]),
+        )?;
+        Ok((k_path, r_path))
     }
 
     /// Run normalize → AUTOBK → FT on every loaded group with one shared set of
@@ -980,6 +1048,18 @@ impl XafsViewApp {
                                 }
                                 ui.end_row();
 
+                                ui.label("Output file");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.reduction.output_file)
+                                        .desired_width(180.0)
+                                        .hint_text("(auto)"),
+                                )
+                                .on_hover_text(
+                                    "AUTOBK Start writes <stem>k.chi (χ(k)) and \
+                                     <stem>r.chi (χ(R)) into the work folder",
+                                );
+                                ui.end_row();
+
                                 ui.label("Theory");
                                 ui.horizontal(|ui| {
                                     if ui
@@ -1462,6 +1542,52 @@ fn write_xmu(
     std::fs::write(path, s)
 }
 
+/// Serialize χ(k) as a two-column UWXAFS-style `.chi` file: `k` (Å⁻¹) and the
+/// unweighted `χ(k)` (k-weighting is applied at plot/FT time, not stored).
+fn write_chik(path: &std::path::Path, label: &str, k: &[f64], chi: &[f64]) -> std::io::Result<()> {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(k.len() * 32 + 64);
+    let _ = writeln!(s, "# {label}");
+    let _ = writeln!(s, "#  k                chi");
+    for (&kk, &cc) in k.iter().zip(chi) {
+        let _ = writeln!(s, "{kk:12.6}  {cc:18.10}");
+    }
+    std::fs::write(path, s)
+}
+
+/// Serialize χ(R) as a four-column `.chi` file: `R` (Å), `|χ(R)|`, `Re χ(R)`,
+/// `Im χ(R)`, all on the same `R` grid.
+fn write_chir(
+    path: &std::path::Path,
+    label: &str,
+    r: &[f64],
+    mag: &[f64],
+    re: &[f64],
+    im: &[f64],
+) -> std::io::Result<()> {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(r.len() * 60 + 64);
+    let _ = writeln!(s, "# {label}");
+    let _ = writeln!(
+        s,
+        "#  R              |chi(R)|          re                im"
+    );
+    for (i, &rr) in r.iter().enumerate() {
+        let m = mag.get(i).copied().unwrap_or(0.0);
+        let re_i = re.get(i).copied().unwrap_or(0.0);
+        let im_i = im.get(i).copied().unwrap_or(0.0);
+        let _ = writeln!(s, "{rr:12.6}  {m:16.8e}  {re_i:16.8e}  {im_i:16.8e}");
+    }
+    std::fs::write(path, s)
+}
+
+/// The file-name portion of a path as an owned string (for status messages).
+fn file_name_of(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1485,6 +1611,37 @@ mod tests {
         assert!((m[2] - 0.42).abs() < 1e-6, "mu {m:?}");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_chik_is_two_columns_and_write_chir_is_four() {
+        let pid = std::process::id();
+        let kp = std::env::temp_dir().join(format!("xafsview_chik_{pid}k.chi"));
+        let rp = std::env::temp_dir().join(format!("xafsview_chir_{pid}r.chi"));
+
+        let k = [2.0, 2.05, 2.10];
+        let chi = [0.012, -0.008, 0.003];
+        write_chik(&kp, "demo", &k, &chi).expect("write k.chi");
+
+        let r = [0.0, 0.05, 0.10, 0.15];
+        let mag = [1.0e-2, 2.0e-2, 1.5e-2, 5.0e-3];
+        let re = [1.0e-2, 0.0, -1.5e-2, 5.0e-3];
+        let im = [0.0, 2.0e-2, 0.0, 0.0];
+        write_chir(&rp, "demo", &r, &mag, &re, &im).expect("write r.chi");
+
+        let ck = ColumnFile::from_path(&kp).expect("read k.chi");
+        assert_eq!(ck.ncols(), 2, "χ(k) file is k + chi");
+        assert_eq!(ck.nrows(), 3);
+        assert!((ck.column(0).unwrap()[0] - 2.0).abs() < 1e-3, "k grid");
+        assert!((ck.column(1).unwrap()[1] + 0.008).abs() < 1e-6, "χ value");
+
+        let cr = ColumnFile::from_path(&rp).expect("read r.chi");
+        assert_eq!(cr.ncols(), 4, "χ(R) file is R + |χ| + re + im");
+        assert_eq!(cr.nrows(), 4);
+        assert!((cr.column(0).unwrap()[2] - 0.10).abs() < 1e-3, "R grid");
+
+        let _ = std::fs::remove_file(&kp);
+        let _ = std::fs::remove_file(&rp);
     }
 
     #[test]
