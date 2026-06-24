@@ -1214,39 +1214,44 @@ impl XafsViewApp {
     fn folders_panel(&mut self, ui: &mut egui::Ui) {
         let mut exit_clicked = false;
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("Folders");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.strong("Change folder");
+            // `auto_shrink` off on the horizontal axis: otherwise the scroll area
+            // collapses its width to the content, which clamps the path fields'
+            // `desired_width` down to a sliver (the "folder name too small" bug).
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Folders");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.strong("Change folder");
+                        });
                     });
-                });
-                ui.label(
+                    ui.label(
                     "Working directories used for file dialogs and output. Type a path or push.",
                 );
-                ui.add_space(8.0);
+                    ui.add_space(8.0);
 
-                // Only the folders this app actually uses (functional fields only):
-                // the original's Base / Sub base / Autobk / Feffit_txt / IE Explorer
-                // / Results folders have no engine mapping here.
-                egui::Grid::new("folders_grid")
-                    .num_columns(3)
-                    .spacing([8.0, 8.0])
-                    .show(ui, |ui| {
-                        folder_row(ui, "Data folder", &mut self.session.folders.data_dir);
-                        ui.end_row();
-                        folder_row(ui, "Work folder", &mut self.session.folders.work_dir);
-                        ui.end_row();
-                        folder_row(ui, "FEFF folder", &mut self.session.folders.feff_dir);
-                        ui.end_row();
-                    });
+                    // Only the folders this app actually uses (functional fields only):
+                    // the original's Base / Sub base / Autobk / Feffit_txt / IE Explorer
+                    // / Results folders have no engine mapping here.
+                    egui::Grid::new("folders_grid")
+                        .num_columns(3)
+                        .spacing([8.0, 8.0])
+                        .show(ui, |ui| {
+                            folder_row(ui, "Data folder", &mut self.session.folders.data_dir);
+                            ui.end_row();
+                            folder_row(ui, "Work folder", &mut self.session.folders.work_dir);
+                            ui.end_row();
+                            folder_row(ui, "FEFF folder", &mut self.session.folders.feff_dir);
+                            ui.end_row();
+                        });
 
-                // Exit sits directly below the folder rows (그림 1-2-6), no gap.
-                ui.add_space(8.0);
-                if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                    exit_clicked = true;
-                }
-            });
+                    // Exit sits directly below the folder rows (그림 1-2-6), no gap.
+                    ui.add_space(8.0);
+                    if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
+                        exit_clicked = true;
+                    }
+                });
         });
         if exit_clicked {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1405,19 +1410,22 @@ fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBu
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
-    if ui
-        .add(
-            egui::TextEdit::singleline(&mut text)
-                .desired_width(300.0)
-                .hint_text("(not set)"),
-        )
-        .changed()
-    {
+    let resp = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .desired_width(380.0)
+            .hint_text("(not set)"),
+    );
+    if resp.changed() {
         *dir = if text.trim().is_empty() {
             None
         } else {
-            Some(std::path::PathBuf::from(text))
+            Some(std::path::PathBuf::from(text.clone()))
         };
+    }
+    // A deep path can still outrun the field; show the whole path on hover so it
+    // stays readable.
+    if !text.is_empty() {
+        resp.on_hover_text(text);
     }
     if crate::widgets::action(ui, "push", crate::widgets::PUSH_BTN).clicked()
         && let Some(picked) = rfd::FileDialog::new().pick_folder()
