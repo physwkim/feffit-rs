@@ -381,14 +381,22 @@ impl XafsViewApp {
             (g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len()))
         };
         // Original Autobk "Output file" behaviour: persist χ(k) → <stem>k.chi and
-        // χ(R) → <stem>r.chi once the transform has produced them.
+        // χ(R) → <stem>r.chi once the transform has produced them. The stem is the
+        // editable "Output file" name, falling back to the group label.
         let saved = match self.session.current_group() {
-            Some(g) if g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some() => match self
-                .write_chi_files(g)
-            {
-                Ok((kp, rp)) => format!(" · saved {} + {}", file_name_of(&kp), file_name_of(&rp)),
-                Err(e) => format!(" · χ files not written: {e}"),
-            },
+            Some(g) if g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some() => {
+                let stem = std::path::Path::new(self.reduction.output_file.trim())
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| g.label.clone());
+                match self.write_chi_files(g, &stem) {
+                    Ok((kp, rp)) => {
+                        format!(" · saved {} + {}", file_name_of(&kp), file_name_of(&rp))
+                    }
+                    Err(e) => format!(" · χ files not written: {e}"),
+                }
+            }
             _ => String::new(),
         };
         self.status = format!(
@@ -402,22 +410,18 @@ impl XafsViewApp {
     /// Write the AUTOBK outputs the original's "Output file" produces: χ(k) →
     /// `<stem>k.chi` (k, χ) and χ(R) → `<stem>r.chi` (R, |χ|, Re, Im), into the
     /// work folder (falling back to the data folder, then the source folder).
-    /// `<stem>` comes from the editable "Output file" name, else the group label.
+    /// The single-group path passes the editable "Output file" stem; the
+    /// Multiple-autobk path passes each group's own label so the outputs stay
+    /// distinct.
     fn write_chi_files(
         &self,
         g: &XasGroup,
+        stem: &str,
     ) -> std::io::Result<(std::path::PathBuf, std::path::PathBuf)> {
-        let stem = std::path::Path::new(self.reduction.output_file.trim())
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                if g.label.is_empty() {
-                    "chi".to_owned()
-                } else {
-                    g.label.clone()
-                }
-            });
+        let stem = match stem.trim() {
+            "" => "chi",
+            s => s,
+        };
         let dir = self
             .session
             .folders
@@ -460,7 +464,26 @@ impl XafsViewApp {
         let bk = self.reduction.autobk_params();
         let ft = self.reduction.ft_params();
         let n = xasdata::reduce_all(&mut self.session.groups, &pre, &bk, &ft, 1.0);
-        self.status = format!("Multiple AUTOBK: reduced {n} group(s).");
+        // Per-group χ outputs, the original Multiple-autobk behaviour: each group
+        // writes its own <label>k.chi / <label>r.chi (its label, not the shared
+        // "Output file", so batch outputs stay distinct).
+        let mut saved = 0usize;
+        let mut write_failed = 0usize;
+        for g in &self.session.groups {
+            if g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some() {
+                match self.write_chi_files(g, &g.label) {
+                    Ok(_) => saved += 1,
+                    Err(_) => write_failed += 1,
+                }
+            }
+        }
+        let fail = if write_failed > 0 {
+            format!(", {write_failed} write error(s)")
+        } else {
+            String::new()
+        };
+        self.status =
+            format!("Multiple AUTOBK: reduced {n} group(s); saved {saved} χ pair(s){fail}.");
         self.plot_data.mark_dirty();
         self.replot_graph();
     }
