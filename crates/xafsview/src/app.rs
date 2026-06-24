@@ -469,56 +469,12 @@ impl XafsViewApp {
             .clone()
             .or_else(|| self.session.folders.data_dir.clone())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let (d, m) = (&plot.data, &plot.model);
-        write_chik(
-            &dir.join(format!("{stem}k.dat")),
-            stem,
-            &plot.data_k,
-            &plot.data_chi,
-        )?;
-        write_chik(
-            &dir.join(format!("{stem}k.fit")),
-            stem,
-            &plot.data_k,
-            &plot.model_chi,
-        )?;
-        write_complex4(
-            &dir.join(format!("{stem}r.dat")),
-            stem,
-            "R",
-            &d.r,
-            &d.chir_mag,
-            &d.chir_re,
-            &d.chir_im,
-        )?;
-        write_complex4(
-            &dir.join(format!("{stem}r.fit")),
-            stem,
-            "R",
-            &m.r,
-            &m.chir_mag,
-            &m.chir_re,
-            &m.chir_im,
-        )?;
-        write_complex4(
-            &dir.join(format!("{stem}q.dat")),
-            stem,
-            "q",
-            &d.q,
-            &d.chiq_mag,
-            &d.chiq_re,
-            &d.chiq_im,
-        )?;
-        write_complex4(
-            &dir.join(format!("{stem}q.fit")),
-            stem,
-            "q",
-            &m.q,
-            &m.chiq_mag,
-            &m.chiq_re,
-            &m.chiq_im,
-        )?;
-        Ok(6)
+        let files = plot.output_pairs(stem);
+        let n = files.len();
+        for (name, content) in files {
+            std::fs::write(dir.join(name), content)?;
+        }
+        Ok(n)
     }
 
     /// Run normalize → AUTOBK → FT on every loaded group with one shared set of
@@ -1543,6 +1499,7 @@ impl eframe::App for XafsViewApp {
         {
             Some(BatchAction::AddPath(idx)) => self.add_feff_path_to_batch(idx),
             Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
+            Some(BatchAction::SaveFeffitOutputs(files)) => self.write_saved_items(files),
             None => {}
         }
 
@@ -1645,14 +1602,7 @@ fn write_xmu(
 /// Serialize χ(k) as a two-column UWXAFS-style `.chi` file: `k` (Å⁻¹) and the
 /// unweighted `χ(k)` (k-weighting is applied at plot/FT time, not stored).
 fn write_chik(path: &std::path::Path, label: &str, k: &[f64], chi: &[f64]) -> std::io::Result<()> {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(k.len() * 32 + 64);
-    let _ = writeln!(s, "# {label}");
-    let _ = writeln!(s, "#  k                chi");
-    for (&kk, &cc) in k.iter().zip(chi) {
-        let _ = writeln!(s, "{kk:12.6}  {cc:18.10}");
-    }
-    std::fs::write(path, s)
+    std::fs::write(path, crate::chi_io::chik_string(label, k, chi))
 }
 
 /// Serialize a complex transform as a four-column file: the `axis` grid (`R` or
@@ -1667,20 +1617,10 @@ fn write_complex4(
     re: &[f64],
     im: &[f64],
 ) -> std::io::Result<()> {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(x.len() * 60 + 64);
-    let _ = writeln!(s, "# {label}");
-    let _ = writeln!(
-        s,
-        "#  {axis:<12}  |chi({axis})|        re                im"
-    );
-    for (i, &xx) in x.iter().enumerate() {
-        let m = mag.get(i).copied().unwrap_or(0.0);
-        let re_i = re.get(i).copied().unwrap_or(0.0);
-        let im_i = im.get(i).copied().unwrap_or(0.0);
-        let _ = writeln!(s, "{xx:12.6}  {m:16.8e}  {re_i:16.8e}  {im_i:16.8e}");
-    }
-    std::fs::write(path, s)
+    std::fs::write(
+        path,
+        crate::chi_io::complex4_string(label, axis, x, mag, re, im),
+    )
 }
 
 /// Serialize χ(R) as a four-column `.chi` file: `R` (Å), `|χ(R)|`, `Re χ(R)`,

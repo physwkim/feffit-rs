@@ -55,6 +55,10 @@ pub enum BatchAction {
     /// Write these `(filename, content)` pairs (one per selected Save-Items
     /// item); the app picks the destination folder and reports the outcome.
     SaveItems(Vec<(String, String)>),
+    /// Write these `(filename, content)` pairs — the per-group FEFFIT k/r/q
+    /// `.dat`/`.fit` transforms; the app writes them to the work folder (same
+    /// destination the single-fit `write_feffit_outputs` uses).
+    SaveFeffitOutputs(Vec<(String, String)>),
 }
 
 /// The multi-FEFFIT batch window: a per-group config list, a shared template
@@ -248,6 +252,22 @@ impl FeffitBatch {
         }
 
         ui.separator();
+        let any_fit = self.configs.iter().any(|c| c.ui.plot().is_some());
+        if ui
+            .add_enabled(any_fit, egui::Button::new("Save χ data+fit (all groups)"))
+            .on_hover_text(
+                "Write every fitted group's FEFFIT transforms to the work folder as \
+                 <label>{k,r,q}.dat (data) and <label>{k,r,q}.fit (model).",
+            )
+            .clicked()
+        {
+            let files = self.feffit_output_files();
+            if !files.is_empty() {
+                bubble = Some(BatchAction::SaveFeffitOutputs(files));
+            }
+        }
+
+        ui.separator();
         egui::CollapsingHeader::new("Save items")
             .default_open(false)
             .show(ui, |ui| {
@@ -334,6 +354,18 @@ impl FeffitBatch {
             self.plot.add_curve_with_legend(&x, &dy, BLUE, "data");
             self.plot.add_curve_with_legend(&x, &my, RED, "model");
         }
+    }
+
+    /// Collect the FEFFIT k/r/q `.dat`/`.fit` files for every group that has a
+    /// fit result, as `(filename, content)` pairs named from the group label.
+    /// The app writes them to the work folder (the same destination the
+    /// single-fit `write_feffit_outputs` uses).
+    fn feffit_output_files(&self) -> Vec<(String, String)> {
+        self.configs
+            .iter()
+            .filter_map(|cfg| cfg.ui.plot().map(|p| p.output_pairs(&cfg.label)))
+            .flatten()
+            .collect()
     }
 
     /// Build one output file per selected Save-Items item: rows are the fitted

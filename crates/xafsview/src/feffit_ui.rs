@@ -285,6 +285,42 @@ impl FeffitPlot {
             }
         }
     }
+
+    /// The six `(filename, content)` transforms the original's Plot Data reads,
+    /// named from `stem`: k/r/q-space data → `<stem>k.dat`/`r.dat`/`q.dat` and
+    /// the model → `<stem>k.fit`/`r.fit`/`q.fit`. Single owner of the
+    /// field→file mapping, shared by the single-fit on-disk writer and the
+    /// batch `(name, content)` builder so both stay byte-identical.
+    pub fn output_pairs(&self, stem: &str) -> Vec<(String, String)> {
+        use crate::chi_io::{chik_string, complex4_string};
+        let (d, m) = (&self.data, &self.model);
+        vec![
+            (
+                format!("{stem}k.dat"),
+                chik_string(stem, &self.data_k, &self.data_chi),
+            ),
+            (
+                format!("{stem}k.fit"),
+                chik_string(stem, &self.data_k, &self.model_chi),
+            ),
+            (
+                format!("{stem}r.dat"),
+                complex4_string(stem, "R", &d.r, &d.chir_mag, &d.chir_re, &d.chir_im),
+            ),
+            (
+                format!("{stem}r.fit"),
+                complex4_string(stem, "R", &m.r, &m.chir_mag, &m.chir_re, &m.chir_im),
+            ),
+            (
+                format!("{stem}q.dat"),
+                complex4_string(stem, "q", &d.q, &d.chiq_mag, &d.chiq_re, &d.chiq_im),
+            ),
+            (
+                format!("{stem}q.fit"),
+                complex4_string(stem, "q", &m.q, &m.chiq_mag, &m.chiq_re, &m.chiq_im),
+            ),
+        ]
+    }
 }
 
 /// Pick the data/model component arrays (and a y-label) for the chosen part,

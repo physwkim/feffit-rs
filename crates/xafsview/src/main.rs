@@ -9,6 +9,7 @@ mod analysis_ui;
 mod app;
 mod atoms_ui;
 mod calc_ui;
+mod chi_io;
 mod clean_ui;
 mod feffit_batch;
 mod feffit_ui;
