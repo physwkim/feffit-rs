@@ -6,11 +6,15 @@
 //! float independently. Save / zoom / legend come from the siplot toolbar; the
 //! data work (averaging, peak finding) is the headless [`xasdata::batch`] code.
 
+use std::path::PathBuf;
+
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
 use siplot::YAxis;
 use xasdata::{PreEdgeParams, XasGroup, average_curves, normalize, peak_in_range, x_at_y};
+
+use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_trace};
 
 /// Which reduction stage to overlay.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -208,6 +212,27 @@ pub struct PlotDataWindow {
     overlay: Option<FitOverlay>,
     /// Whether the sent fit takes over the plot (vs the group items).
     show_overlay: bool,
+
+    // --- file overlay (the original's file-based Plot Data) -----------------
+    /// The selected *File type* for browsing/loading files.
+    file_type: FileType,
+    /// The *Graph item* under `file_type` (its file-name suffix + plot recipe).
+    graph_item: GraphItem,
+    /// Files loaded for overlay, drawn additively with the group traces.
+    loaded: Vec<LoadedTrace>,
+    /// Whether the "Add / remove data files" picker is open.
+    picker_open: bool,
+    /// The folder the picker browses.
+    pick_dir: Option<PathBuf>,
+    /// Files in `pick_dir` matching the current graph item, minus `pick_add`.
+    available: Vec<PathBuf>,
+    /// Files staged in the picker to add on OK.
+    pick_add: Vec<PathBuf>,
+    /// Sort the available list alphabetically.
+    pick_sort: bool,
+    /// Outcome of the last load (shown in the Files section).
+    pick_status: String,
+
     /// Set whenever the overlay needs rebuilding (control change or new data).
     dirty: bool,
 }
@@ -238,6 +263,15 @@ impl PlotDataWindow {
             peaks: Vec::new(),
             overlay: None,
             show_overlay: false,
+            file_type: FileType::Chi,
+            graph_item: FileType::Chi.default_item(),
+            loaded: Vec::new(),
+            picker_open: false,
+            pick_dir: None,
+            available: Vec::new(),
+            pick_add: Vec::new(),
+            pick_sort: true,
+            pick_status: String::new(),
             dirty: true,
         }
     }
@@ -308,6 +342,8 @@ impl PlotDataWindow {
                     }
                     crate::plot::show(&mut self.plot, ui);
                 });
+                // The file picker floats over the window while open.
+                self.file_picker(ui);
             },
         );
         self.open = open;
@@ -350,13 +386,21 @@ impl PlotDataWindow {
                     }
                 }
             });
-        if matches!(self.item, PlotItem::Chik)
+        // k-weight is relevant to the group χ(k) view and to any loaded k-space
+        // file; changing it re-reads the loaded files (their χ is stored
+        // unweighted) so the overlay tracks the slider.
+        let kweight_relevant = matches!(self.item, PlotItem::Chik)
+            || self.loaded.iter().any(|t| t.item.applies_kweight());
+        if kweight_relevant
             && ui
                 .add(egui::Slider::new(&mut self.kweight, 0..=3).text("k-weight"))
                 .changed()
         {
+            self.reload_loaded();
             self.dirty = true;
         }
+
+        self.files_controls(ui);
 
         ui.separator();
         ui.horizontal(|ui| {
@@ -554,6 +598,235 @@ impl PlotDataWindow {
         }
     }
 
+    /// The "Files" control block: file-type / graph-item selectors, the picker
+    /// button, the loaded-file list, and Clear Graph (the original's file-based
+    /// Plot Data controls).
+    fn files_controls(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.strong("Files");
+
+        egui::ComboBox::from_label("File type")
+            .selected_text(self.file_type.label())
+            .show_ui(ui, |ui| {
+                for ft in FileType::ALL {
+                    if ui
+                        .selectable_value(&mut self.file_type, ft, ft.label())
+                        .changed()
+                    {
+                        self.graph_item = self.file_type.default_item();
+                        self.refresh_available();
+                    }
+                }
+            });
+        egui::ComboBox::from_label("Graph item")
+            .selected_text(self.graph_item.label())
+            .show_ui(ui, |ui| {
+                for &gi in self.file_type.items() {
+                    if ui
+                        .selectable_value(&mut self.graph_item, gi, gi.label())
+                        .changed()
+                    {
+                        self.refresh_available();
+                    }
+                }
+            });
+
+        if ui.button("ADD or DEL Data Files…").clicked() {
+            self.picker_open = true;
+            self.refresh_available();
+        }
+
+        if !self.loaded.is_empty() {
+            ui.add_space(2.0);
+            ui.label(format!("{} file(s) loaded:", self.loaded.len()));
+            let mut remove = None;
+            for (i, t) in self.loaded.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                    ui.label(&t.label).on_hover_text(t.item.label());
+                });
+            }
+            if let Some(i) = remove {
+                self.loaded.remove(i);
+                self.dirty = true;
+            }
+            if ui.button("Clear Graph").clicked() {
+                self.loaded.clear();
+                self.dirty = true;
+            }
+        }
+        if !self.pick_status.is_empty() {
+            ui.weak(&self.pick_status);
+        }
+    }
+
+    /// The "Add / remove data files" picker: browse a folder, stage files
+    /// matching the current graph item, and load them on OK. A subordinate
+    /// `egui::Window` inside the Plot Data viewport.
+    fn file_picker(&mut self, ui: &mut egui::Ui) {
+        if !self.picker_open {
+            return;
+        }
+        let mut win_open = true;
+        egui::Window::new("Add / remove data files")
+            .open(&mut win_open)
+            .resizable(true)
+            .default_size([520.0, 380.0])
+            .show(ui.ctx(), |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Browse folder…").clicked()
+                        && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                    {
+                        self.pick_dir = Some(dir);
+                        self.pick_add.clear();
+                        self.refresh_available();
+                    }
+                    if ui.checkbox(&mut self.pick_sort, "Sort").changed() {
+                        self.refresh_available();
+                    }
+                });
+                match &self.pick_dir {
+                    Some(dir) => ui.weak(dir.display().to_string()),
+                    None => ui.weak("Pick a folder to list its files."),
+                };
+                ui.label(format!(
+                    "Showing {} files matching “{}”.",
+                    self.file_type.label(),
+                    self.graph_item.label(),
+                ));
+                ui.separator();
+
+                let mut to_add = None;
+                let mut to_remove = None;
+                egui::Grid::new("picker_lists")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.strong("Available");
+                        ui.strong("Selected");
+                        ui.end_row();
+
+                        ui.vertical(|ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("avail")
+                                .max_height(240.0)
+                                .show(ui, |ui| {
+                                    for path in &self.available {
+                                        if ui.selectable_label(false, file_name_of(path)).clicked()
+                                        {
+                                            to_add = Some(path.clone());
+                                        }
+                                    }
+                                });
+                        });
+                        ui.vertical(|ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("staged")
+                                .max_height(240.0)
+                                .show(ui, |ui| {
+                                    for path in &self.pick_add {
+                                        if ui.selectable_label(false, file_name_of(path)).clicked()
+                                        {
+                                            to_remove = Some(path.clone());
+                                        }
+                                    }
+                                });
+                        });
+                        ui.end_row();
+                    });
+                if let Some(p) = to_add {
+                    self.pick_add.push(p);
+                    self.refresh_available();
+                }
+                if let Some(p) = to_remove {
+                    self.pick_add.retain(|x| x != &p);
+                    self.refresh_available();
+                }
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Clear all").clicked() {
+                        self.pick_add.clear();
+                        self.refresh_available();
+                    }
+                    if ui
+                        .add_enabled(!self.pick_add.is_empty(), egui::Button::new("Add to plot"))
+                        .clicked()
+                    {
+                        self.load_staged();
+                        self.picker_open = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.picker_open = false;
+                    }
+                });
+            });
+        // The window's [x] also closes the picker.
+        self.picker_open = self.picker_open && win_open;
+    }
+
+    /// List the files in `pick_dir` that match the current graph item, excluding
+    /// already-staged and already-loaded files. Sorted when "Sort" is on.
+    fn refresh_available(&mut self) {
+        self.available.clear();
+        let Some(dir) = self.pick_dir.clone() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = file_name_of(&path);
+            let taken = self.pick_add.contains(&path) || self.loaded.iter().any(|t| t.path == path);
+            if self.graph_item.matches(&name) && !taken {
+                self.available.push(path);
+            }
+        }
+        if self.pick_sort {
+            self.available.sort();
+        }
+    }
+
+    /// Load every staged file as the current graph item, reporting how many
+    /// loaded / failed in `pick_status`.
+    fn load_staged(&mut self) {
+        let (item, kw) = (self.graph_item, self.kweight);
+        let staged = std::mem::take(&mut self.pick_add);
+        let (mut ok, mut failed) = (0usize, 0usize);
+        for path in staged {
+            match load_trace(&path, item, kw) {
+                Ok(t) => {
+                    self.loaded.push(t);
+                    ok += 1;
+                }
+                Err(_) => failed += 1,
+            }
+        }
+        self.pick_status = if failed > 0 {
+            format!("Loaded {ok} file(s); {failed} could not be read.")
+        } else {
+            format!("Loaded {ok} file(s).")
+        };
+        self.refresh_available();
+        self.dirty = true;
+    }
+
+    /// Re-read every loaded file (e.g. after a k-weight change, since k-space
+    /// files store unweighted χ).
+    fn reload_loaded(&mut self) {
+        let kw = self.kweight;
+        for t in &mut self.loaded {
+            if let Ok(nt) = load_trace(&t.path, t.item, kw) {
+                *t = nt;
+            }
+        }
+    }
+
     /// Rebuild every plotted curve from the current selection and settings.
     fn rebuild(&mut self, groups: &[XasGroup]) {
         self.plot.clear();
@@ -585,8 +858,16 @@ impl PlotDataWindow {
             return;
         }
 
-        self.plot.set_graph_x_label(self.item.x_label());
-        self.plot.set_graph_y_label(self.item.label(), YAxis::Left);
+        // Axis labels follow the loaded files' graph item when any file is shown
+        // (Plot Data is primarily a file viewer); otherwise the group item.
+        if self.loaded.is_empty() {
+            self.plot.set_graph_x_label(self.item.x_label());
+            self.plot.set_graph_y_label(self.item.label(), YAxis::Left);
+        } else {
+            self.plot.set_graph_x_label(self.graph_item.x_label());
+            self.plot
+                .set_graph_y_label(self.graph_item.y_label(), YAxis::Left);
+        }
 
         // Selected (x, y) pairs in group order, with their colors. Bright curves
         // on the dark canvas; the muted tab10 on the white "Change BG" canvas,
@@ -605,6 +886,17 @@ impl PlotDataWindow {
                 let color = palette[traces.len() % palette.len()];
                 traces.push((g.label.clone(), x, y, color));
             }
+        }
+        // Loaded files overlay additively with the group traces, sharing the
+        // palette and the waterfall offset (the original's file-based view).
+        for t in &self.loaded {
+            let y = if self.smooth5 {
+                smooth5(&t.y)
+            } else {
+                t.y.clone()
+            };
+            let color = palette[traces.len() % palette.len()];
+            traces.push((t.label.clone(), t.x.clone(), y, color));
         }
 
         // The averaged trace is computed on the un-stacked data, before offsets.
@@ -638,6 +930,13 @@ impl PlotDataWindow {
                 .add_x_marker(*px, Color32::from_rgb(0x80, 0x80, 0x80));
         }
     }
+}
+
+/// The bare file name of `path`, for picker lists and legends.
+fn file_name_of(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// NEXAFS peak normalization: `(μ − pre-edge) / max(μ − pre-edge)`, so the

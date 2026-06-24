@@ -18,6 +18,7 @@ mod import;
 mod mback_ui;
 mod plot;
 mod plot_data;
+mod plot_files;
 mod reduce_ui;
 mod timeres_ui;
 mod wavelet;
