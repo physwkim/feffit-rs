@@ -34,10 +34,11 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
     // every plot reads out the value under the cursor without the user first
     // toggling the toolbar's crosshair button.
     plot.set_graph_cursor(true);
-    // House colour scheme: a white data area with dark axes (see [`set_theme`]),
-    // so curves and the in-axes legend read clearly over a light background
-    // regardless of the surrounding egui panel theme.
-    set_theme(&mut plot, true);
+    // House colour scheme: a cohesive dark canvas (see [`set_theme`]) — the plot
+    // chrome matches the egui dark panel so it blends in, with a slightly
+    // lighter data area, light-grey axes, and a faint grid, so curves and the
+    // in-axes legend read clearly without a jarring white box in the dark UI.
+    set_theme(&mut plot, false);
     plot
 }
 
@@ -45,24 +46,32 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
 /// background, the axis/frame foreground, and the grid, chosen so curves and
 /// labels read clearly *independent of the egui panel theme* (siplot otherwise
 /// derives the axis colour from `ui.visuals()`, which would render light axes
-/// on a light canvas under a dark UI theme). `light = true` is a white data
-/// area with dark axes (the house default); `false` is the dark canvas with
-/// light axes used by Plot Data's "Change BG color" toggle.
+/// on a light canvas under a dark UI theme). `light = false` is the cohesive
+/// dark canvas used as the house default for every plot; `true` is the white
+/// data area with dark axes selected by Plot Data's "Change BG color" toggle.
 pub fn set_theme(plot: &mut Plot1D, light: bool) {
-    let (bg, fg, grid) = if light {
+    // `(chrome, data, fg, grid)`: the surround behind the axes, the data area
+    // itself, the axis/frame/text colour, and the grid lines.
+    let (chrome, data, fg, grid) = if light {
         (
+            egui::Color32::WHITE,
             egui::Color32::WHITE,
             egui::Color32::from_gray(0x20),
             egui::Color32::from_gray(0xc8),
         )
     } else {
+        // Cohesive dark: chrome == the egui dark panel fill (`from_gray(27)`) so
+        // the plot blends into the surrounding panel, the data area one shade
+        // lighter so it still reads as a distinct region, light-grey axes, and a
+        // faint grid.
         (
-            egui::Color32::from_gray(0x12),
-            egui::Color32::from_gray(0xe0),
-            egui::Color32::from_gray(0x40),
+            egui::Color32::from_gray(0x1b),
+            egui::Color32::from_gray(0x24),
+            egui::Color32::from_gray(0xc8),
+            egui::Color32::from_gray(0x3c),
         )
     };
-    plot.set_background_colors(bg, bg);
+    plot.set_background_colors(chrome, data);
     plot.set_foreground_colors(fg, grid);
 }
 

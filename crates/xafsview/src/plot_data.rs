@@ -239,7 +239,9 @@ impl PlotDataWindow {
             stack: 0.0,
             show_average: false,
             smooth5: false,
-            dark_bg: false,
+            // Dark by default, matching the cohesive dark canvas every other
+            // plot uses (the checkbox still flips to the white "Change BG" mode).
+            dark_bg: true,
             norm: NormOptions::default(),
             peak_lo: 0.0,
             peak_hi: 0.0,
