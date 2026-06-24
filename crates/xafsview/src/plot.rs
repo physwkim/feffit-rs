@@ -121,6 +121,11 @@ pub const PALETTE_LIGHT: [egui::Color32; 8] = [
 pub struct Plot {
     inner: Plot1D,
     legend: Vec<(String, egui::Color32)>,
+    /// The legend overlay's position as a fraction `(x, y)` of the data-area
+    /// rectangle (its RIGHT_TOP pivot), so it keeps the same relative spot when
+    /// the plot is resized. `None` until first shown (defaults to top-right);
+    /// updated whenever the user drags the legend. See [`show`].
+    legend_frac: Option<egui::Pos2>,
 }
 
 impl std::ops::Deref for Plot {
@@ -143,6 +148,7 @@ impl Plot {
         Self {
             inner: new_plot1d(render_state, id),
             legend: Vec::new(),
+            legend_frac: None,
         }
     }
 
@@ -218,22 +224,34 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     // whether the canvas is light or dark.
     let data_bg = plot.inner.data_background_color();
 
-    // Float the legend over the canvas — by default in the data area's top-right
-    // corner, draggable from anywhere on it (no handle): a movable foreground
-    // `Area` holds the legend, and egui's hit test routes a *drag* to the movable
-    // Area while a *click* still reaches the rows beneath. siplot's rows sense
-    // click only, so `hit_test` reports click→row, drag→Area (egui hit_test.rs:
-    // "the top Button and the ScrollArea behind it"); the user grabs the labels
-    // themselves to move it. egui remembers the dragged spot (keyed by plot id)
-    // and `constrain_to` keeps it within the axes.
+    // Float the legend over the canvas, draggable from anywhere on it (no
+    // handle): a movable foreground `Area` holds the legend, and egui's hit test
+    // routes a *drag* to the movable Area while a *click* still reaches the rows
+    // beneath. siplot's rows sense click only, so `hit_test` reports click→row,
+    // drag→Area; the user grabs the labels themselves to move it. `constrain_to`
+    // keeps it within the axes.
+    //
+    // The position is held as a *fraction* of the data area (`legend_frac`) and
+    // re-applied each frame via `current_pos`, so on resize the legend keeps the
+    // same relative spot (moves proportionally) instead of staying at a fixed
+    // pixel offset. It defaults to the top-right corner (inset by PAD) and the
+    // fraction is re-derived from the Area's actual position after every frame,
+    // so a drag sticks and then scales with later resizes.
     const PAD: f32 = 6.0;
     let legend_id = egui::Id::new(plot.inner.backend().plot().id).with("legend_overlay");
     let ctx = ui.ctx().clone();
+    let target = match plot.legend_frac {
+        Some(f) => egui::pos2(
+            area.left() + f.x * area.width(),
+            area.top() + f.y * area.height(),
+        ),
+        None => area.right_top() + egui::vec2(-PAD, PAD),
+    };
     egui::Area::new(legend_id)
         .order(egui::Order::Foreground)
         .movable(true)
         .constrain_to(area)
-        .default_pos(area.right_top() + egui::vec2(-PAD, PAD))
+        .current_pos(target)
         .pivot(egui::Align2::RIGHT_TOP)
         .show(&ctx, |ui| {
             // A plain transparent box that only pads the legend off the axis
@@ -259,6 +277,20 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                     });
                 });
         });
+
+    // Re-derive the fraction from where the legend actually ended up this frame
+    // (after any drag and `constrain_to` clamping), so the next frame — and any
+    // resize — places it at the same relative spot.
+    if area.width() > 0.0
+        && area.height() > 0.0
+        && let Some(state) = egui::AreaState::load(&ctx, legend_id)
+        && let Some(pivot_pos) = state.pivot_pos
+    {
+        plot.legend_frac = Some(egui::pos2(
+            (pivot_pos.x - area.left()) / area.width(),
+            (pivot_pos.y - area.top()) / area.height(),
+        ));
+    }
 }
 
 /// Draw the plain in-axes legend: one row per entry — a short line swatch in the
