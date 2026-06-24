@@ -1227,7 +1227,7 @@ impl XafsViewApp {
                         });
                     });
                     ui.label(
-                    "Working directories used for file dialogs and output. Type a path or push.",
+                    "Working directories used for file dialogs and output. Type a path or Browse.",
                 );
                     ui.add_space(8.0);
 
@@ -1427,7 +1427,7 @@ fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBu
     if !text.is_empty() {
         resp.on_hover_text(text);
     }
-    if crate::widgets::action(ui, "push", crate::widgets::PUSH_BTN).clicked()
+    if crate::widgets::action(ui, "Browse…", crate::widgets::BROWSE_BTN).clicked()
         && let Some(picked) = rfd::FileDialog::new().pick_folder()
     {
         *dir = Some(picked);

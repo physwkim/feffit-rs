@@ -10,8 +10,9 @@ use eframe::egui::{self, Color32, Response, Vec2};
 pub const ROW_BTN: Vec2 = Vec2::new(112.0, 28.0);
 /// Chunky button size for the Autobk 2×2 cluster (그림 1-2-1-1).
 pub const CHUNKY_BTN: Vec2 = Vec2::new(124.0, 40.0);
-/// Small "push" button size for the Folders rows (그림 1-2-6).
-pub const PUSH_BTN: Vec2 = Vec2::new(52.0, 22.0);
+/// "Browse…" button size for the Folders rows (그림 1-2-6 labelled these "push";
+/// relabelled to the conventional Browse verb so the action reads clearly).
+pub const BROWSE_BTN: Vec2 = Vec2::new(76.0, 22.0);
 
 /// Reddish "Exit" fill, matching the original Exit buttons.
 const EXIT_FILL: Color32 = Color32::from_rgb(0x9c, 0x4a, 0x4a);
