@@ -538,9 +538,18 @@ impl PlotDataWindow {
         }
 
         ui.separator();
-        if ui.button("Replot").clicked() {
-            self.dirty = true;
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Replot").clicked() {
+                self.dirty = true;
+            }
+            if ui
+                .button("Save in single file…")
+                .on_hover_text("Write every displayed curve (stacked) to one file")
+                .clicked()
+            {
+                self.save_composite(groups);
+            }
+        });
     }
 
     /// The `(x, y)` arrays to plot for `g` under the current item, applying the
@@ -827,6 +836,93 @@ impl PlotDataWindow {
         }
     }
 
+    /// The current x/y axis labels: the loaded files' graph item when files are
+    /// shown, otherwise the group item.
+    fn axis_labels(&self) -> (&'static str, &'static str) {
+        if self.loaded.is_empty() {
+            (self.item.x_label(), self.item.label())
+        } else {
+            (self.graph_item.x_label(), self.graph_item.y_label())
+        }
+    }
+
+    /// Build the displayed traces — selected groups then loaded files — with
+    /// their palette colours and 5-point smoothing applied, before any stacking
+    /// offset. One source of truth for both drawing and saving.
+    fn built_traces(&self, groups: &[XasGroup]) -> Vec<(String, Vec<f64>, Vec<f64>, Color32)> {
+        // Bright curves on the dark canvas; the muted tab10 on the white "Change
+        // BG" canvas, where the bright palette would wash out.
+        let palette = if self.dark_bg {
+            crate::plot::PALETTE
+        } else {
+            crate::plot::PALETTE_LIGHT
+        };
+        let mut traces: Vec<(String, Vec<f64>, Vec<f64>, Color32)> = Vec::new();
+        for (i, g) in groups.iter().enumerate() {
+            if !self.selected.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            if let Some((x, y)) = self.displayed_series(g) {
+                let color = palette[traces.len() % palette.len()];
+                traces.push((g.label.clone(), x, y, color));
+            }
+        }
+        // Loaded files overlay additively with the group traces.
+        for t in &self.loaded {
+            let y = if self.smooth5 {
+                smooth5(&t.y)
+            } else {
+                t.y.clone()
+            };
+            let color = palette[traces.len() % palette.len()];
+            traces.push((t.label.clone(), t.x.clone(), y, color));
+        }
+        traces
+    }
+
+    /// Every displayed curve with its stacking offset applied — exactly what is
+    /// drawn (minus the average overlay). Feeds "Save in single file".
+    fn displayed_composite(&self, groups: &[XasGroup]) -> Vec<(String, Vec<f64>, Vec<f64>)> {
+        self.built_traces(groups)
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (label, x, y, _color))| {
+                let off = idx as f64 * self.stack;
+                let ys = if off != 0.0 {
+                    y.iter().map(|v| v + off).collect()
+                } else {
+                    y
+                };
+                (label, x, ys)
+            })
+            .collect()
+    }
+
+    /// "Save in single file": write every displayed (stacked) curve to one file
+    /// the user picks.
+    fn save_composite(&mut self, groups: &[XasGroup]) {
+        let traces = self.displayed_composite(groups);
+        if traces.is_empty() {
+            self.pick_status = "Nothing to save — select a group or load a file.".to_owned();
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("plotdata.dat")
+            .save_file()
+        else {
+            return;
+        };
+        let (xlabel, ylabel) = self.axis_labels();
+        self.pick_status = match write_composite(&path, &traces, xlabel, ylabel) {
+            Ok(()) => format!(
+                "Saved {} curve(s) to {}.",
+                traces.len(),
+                file_name_of(&path)
+            ),
+            Err(e) => format!("Save failed: {e}"),
+        };
+    }
+
     /// Rebuild every plotted curve from the current selection and settings.
     fn rebuild(&mut self, groups: &[XasGroup]) {
         self.plot.clear();
@@ -860,44 +956,13 @@ impl PlotDataWindow {
 
         // Axis labels follow the loaded files' graph item when any file is shown
         // (Plot Data is primarily a file viewer); otherwise the group item.
-        if self.loaded.is_empty() {
-            self.plot.set_graph_x_label(self.item.x_label());
-            self.plot.set_graph_y_label(self.item.label(), YAxis::Left);
-        } else {
-            self.plot.set_graph_x_label(self.graph_item.x_label());
-            self.plot
-                .set_graph_y_label(self.graph_item.y_label(), YAxis::Left);
-        }
+        let (xlabel, ylabel) = self.axis_labels();
+        self.plot.set_graph_x_label(xlabel);
+        self.plot.set_graph_y_label(ylabel, YAxis::Left);
 
-        // Selected (x, y) pairs in group order, with their colors. Bright curves
-        // on the dark canvas; the muted tab10 on the white "Change BG" canvas,
-        // where the bright palette would wash out.
-        let palette = if self.dark_bg {
-            crate::plot::PALETTE
-        } else {
-            crate::plot::PALETTE_LIGHT
-        };
-        let mut traces: Vec<(String, Vec<f64>, Vec<f64>, Color32)> = Vec::new();
-        for (i, g) in groups.iter().enumerate() {
-            if !self.selected.get(i).copied().unwrap_or(false) {
-                continue;
-            }
-            if let Some((x, y)) = self.displayed_series(g) {
-                let color = palette[traces.len() % palette.len()];
-                traces.push((g.label.clone(), x, y, color));
-            }
-        }
-        // Loaded files overlay additively with the group traces, sharing the
-        // palette and the waterfall offset (the original's file-based view).
-        for t in &self.loaded {
-            let y = if self.smooth5 {
-                smooth5(&t.y)
-            } else {
-                t.y.clone()
-            };
-            let color = palette[traces.len() % palette.len()];
-            traces.push((t.label.clone(), t.x.clone(), y, color));
-        }
+        // Selected groups then loaded files, with palette colours and smoothing,
+        // before any stacking offset (shared with the "Save in single file" path).
+        let traces = self.built_traces(groups);
 
         // The averaged trace is computed on the un-stacked data, before offsets.
         let avg = if self.show_average && traces.len() > 1 {
@@ -937,6 +1002,31 @@ fn file_name_of(path: &std::path::Path) -> String {
     path.file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// Write the displayed curves to one file as labelled two-column (`x  y`)
+/// blocks separated by a blank line, so each block parses independently even
+/// when the curves are on different x grids.
+fn write_composite(
+    path: &std::path::Path,
+    traces: &[(String, Vec<f64>, Vec<f64>)],
+    xlabel: &str,
+    ylabel: &str,
+) -> std::io::Result<()> {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    let _ = writeln!(s, "# XAFSView Plot Data — {} curve(s)", traces.len());
+    for (i, (label, x, y)) in traces.iter().enumerate() {
+        if i > 0 {
+            s.push('\n');
+        }
+        let _ = writeln!(s, "# curve {}: {label}", i + 1);
+        let _ = writeln!(s, "#  {xlabel:<14}  {ylabel}");
+        for (xx, yy) in x.iter().zip(y) {
+            let _ = writeln!(s, "{xx:14.6}  {yy:18.10}");
+        }
+    }
+    std::fs::write(path, s)
 }
 
 /// NEXAFS peak normalization: `(μ − pre-edge) / max(μ − pre-edge)`, so the
@@ -1033,5 +1123,31 @@ mod tests {
         assert!((got - 2.5).abs() < 1e-9, "got {got}");
         // The same target outside the restricted window is not found.
         assert_eq!(x_at_y_in_range(&x, &y, 2.5, 3.0, 4.0), None);
+    }
+
+    #[test]
+    fn write_composite_blocks_parse_back_independently() {
+        use xasdata::ColumnFile;
+        let p = std::env::temp_dir().join(format!("xafsview_composite_{}.dat", std::process::id()));
+        let traces = vec![
+            ("a".to_owned(), vec![0.0, 1.0, 2.0], vec![1.0, 2.0, 3.0]),
+            ("b".to_owned(), vec![0.0, 0.5], vec![9.0, 8.0]),
+        ];
+        write_composite(&p, &traces, "x", "y").expect("write composite");
+
+        let text = std::fs::read_to_string(&p).expect("read back");
+        assert!(text.contains("2 curve(s)"), "header: {text}");
+        // The blank line separates the two curves into independently parseable
+        // two-column blocks (different lengths and grids).
+        let blocks: Vec<&str> = text.split("\n\n").collect();
+        assert_eq!(blocks.len(), 2, "one blank line between two blocks");
+        let b0 = ColumnFile::from_text(blocks[0]).expect("first block");
+        assert_eq!(b0.ncols(), 2);
+        assert_eq!(b0.column(0).unwrap(), &[0.0, 1.0, 2.0]);
+        assert_eq!(b0.column(1).unwrap(), &[1.0, 2.0, 3.0]);
+        let b1 = ColumnFile::from_text(blocks[1]).expect("second block");
+        assert_eq!(b1.column(0).unwrap(), &[0.0, 0.5]);
+        assert_eq!(b1.column(1).unwrap(), &[9.0, 8.0]);
+        let _ = std::fs::remove_file(&p);
     }
 }
