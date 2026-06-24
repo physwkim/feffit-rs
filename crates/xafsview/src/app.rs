@@ -524,6 +524,35 @@ impl XafsViewApp {
         }
     }
 
+    /// Save the last wavelet `|W(k,R)|` result as a CSV matrix via a save dialog,
+    /// reporting the outcome. No-op (with a status hint) when nothing has been
+    /// computed yet or the user cancels the dialog.
+    fn export_wavelet_csv(&mut self) {
+        let Some(csv) = self.wavelet.result_csv() else {
+            self.status = "No wavelet result to export — Compute first.".to_owned();
+            return;
+        };
+        let mut dlg = rfd::FileDialog::new()
+            .add_filter("CSV", &["csv"])
+            .set_file_name("wavelet.csv");
+        if let Some(dir) = self
+            .session
+            .folders
+            .work_dir
+            .clone()
+            .or_else(|| self.session.folders.data_dir.clone())
+        {
+            dlg = dlg.set_directory(dir);
+        }
+        let Some(path) = dlg.save_file() else {
+            return;
+        };
+        match std::fs::write(&path, csv) {
+            Ok(()) => self.status = format!("Wavelet CSV saved to {}.", path.display()),
+            Err(e) => self.status = format!("Wavelet CSV save failed: {e}"),
+        }
+    }
+
     /// Apply a cleanup edit (or undo) to the current group, recording an undo
     /// snapshot for edits that actually changed the spectrum.
     fn apply_clean_action(&mut self, action: CleanAction) {
@@ -1310,8 +1339,10 @@ impl eframe::App for XafsViewApp {
             .session
             .current_group()
             .is_some_and(|g| g.k.is_some() && g.chi.is_some());
-        if let Some(WaveletAction::Compute) = self.wavelet.show(ui.ctx(), has_chi) {
-            self.run_wavelet();
+        match self.wavelet.show(ui.ctx(), has_chi) {
+            Some(WaveletAction::Compute) => self.run_wavelet(),
+            Some(WaveletAction::ExportCsv) => self.export_wavelet_csv(),
+            None => {}
         }
 
         // The Plot Data window overlays several groups; it owns its own plot and

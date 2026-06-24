@@ -31,6 +31,37 @@ pub struct WaveletTransform {
     pub max: f64,
 }
 
+impl WaveletTransform {
+    /// Serialize the `|W(k,R)|` grid as a labelled CSV matrix: a header row of
+    /// the `k` values, then one row per `R` (in stored top-down order — row 0 is
+    /// `rmax`), each prefixed with its `R` value. Loads directly as a labelled
+    /// matrix in numpy/pandas/Excel:
+    ///
+    /// ```text
+    /// R\k,k0,k1,…,k_{n-1}
+    /// r0,|W|,…
+    /// r1,|W|,…
+    /// ```
+    ///
+    /// Axis values use 4 decimals; magnitudes use scientific notation so the
+    /// map's full dynamic range survives the round-trip.
+    pub fn to_csv(&self) -> String {
+        let mut s = String::from("R\\k");
+        for k in &self.k {
+            s.push_str(&format!(",{k:.4}"));
+        }
+        s.push('\n');
+        for (row, mags) in self.magnitude.iter().enumerate() {
+            s.push_str(&format!("{:.4}", self.r[row]));
+            for m in mags {
+                s.push_str(&format!(",{m:.6e}"));
+            }
+            s.push('\n');
+        }
+        s
+    }
+}
+
 /// Compute the Morlet continuous wavelet transform of k-weighted `χ(k)`.
 ///
 /// `k` is a uniform grid of step `kstep`; `chi` is co-indexed. `p` carries the
@@ -124,6 +155,9 @@ pub fn morlet_cwt(
 pub enum WaveletAction {
     /// Recompute the transform from the current group's `χ(k)`.
     Compute,
+    /// Save the last `|W(k,R)|` result to a CSV file (the app runs the save
+    /// dialog and writes [`WaveletWindow::result_csv`]).
+    ExportCsv,
 }
 
 /// The floating wavelet-transform window: parameters, a Compute button, and the
@@ -169,6 +203,13 @@ impl WaveletWindow {
         }
     }
 
+    /// The last result serialized as CSV (see [`WaveletTransform::to_csv`]), or
+    /// `None` when nothing has been computed yet. The app calls this to fill the
+    /// Export-CSV save dialog.
+    pub fn result_csv(&self) -> Option<String> {
+        self.wt.as_ref().map(WaveletTransform::to_csv)
+    }
+
     /// Store a freshly computed transform (or `None` if it could not be
     /// computed), invalidating the cached texture so it rebuilds on next show.
     pub fn set_result(&mut self, wt: Option<WaveletTransform>, info: String) {
@@ -211,12 +252,21 @@ impl WaveletWindow {
                 ui.add(egui::Slider::new(&mut self.rmax, 1.0..=10.0).text("R max (Å)"));
                 ui.add(egui::Slider::new(&mut self.nr, 32..=512).text("R samples"));
 
-                if ui
-                    .add_enabled(has_chi, egui::Button::new("Compute"))
-                    .clicked()
-                {
-                    action = Some(WaveletAction::Compute);
-                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(has_chi, egui::Button::new("Compute"))
+                        .clicked()
+                    {
+                        action = Some(WaveletAction::Compute);
+                    }
+                    if ui
+                        .add_enabled(self.wt.is_some(), egui::Button::new("Export CSV…"))
+                        .on_hover_text("Save |W(k,R)| as a CSV matrix (k columns, R rows)")
+                        .clicked()
+                    {
+                        action = Some(WaveletAction::ExportCsv);
+                    }
+                });
                 if !self.info.is_empty() {
                     ui.weak(&self.info);
                 }
@@ -358,6 +408,26 @@ mod tests {
         assert!(morlet_cwt(&k, &chi, 0.05, &WaveletParams { rmin: 4.0, ..base }).is_none());
         // rmax beyond Nyquist: fs=20 → Nyq f=10 → R=π·10≈31.4; ask R=40
         assert!(morlet_cwt(&k, &chi, 0.05, &WaveletParams { rmax: 40.0, ..base }).is_none());
+    }
+
+    #[test]
+    fn to_csv_labels_k_header_and_r_rows() {
+        let wt = WaveletTransform {
+            k: vec![0.0, 0.05],
+            r: vec![3.0, 1.0],
+            magnitude: vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            max: 4.0,
+        };
+        let csv = wt.to_csv();
+        let lines: Vec<&str> = csv.lines().collect();
+        // Header + one row per R.
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "R\\k,0.0000,0.0500");
+        // Each data row: its R value, then one |W| per k column.
+        assert!(lines[1].starts_with("3.0000,"));
+        assert!(lines[2].starts_with("1.0000,"));
+        assert_eq!(lines[1].split(',').count(), 3);
+        assert_eq!(lines[2].split(',').count(), 3);
     }
 
     #[test]
