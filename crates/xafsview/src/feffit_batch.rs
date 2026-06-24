@@ -15,14 +15,11 @@ use std::fmt::Write as _;
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use egui::Color32;
 use siplot::YAxis;
 use xasdata::XasGroup;
 
 use crate::feffit_ui::{FeffitAction, FeffitUi, SavedPath};
-
-const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
-const RED: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
+use crate::plot::{BLUE, RED};
 
 /// The eight savable "items" of the original Save-Items dialog, each as
 /// `(display/file name, FeffitResult path-parameter key)`. An empty key marks

@@ -3,7 +3,6 @@
 //! Phase 0 wires the skeleton and makes the **Folders** tab functional.
 
 use eframe::egui;
-use egui::Color32;
 use xasdata::{ColumnFile, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
@@ -151,7 +150,7 @@ impl XafsViewApp {
                 0.5 + 0.5 * ((e - 8979.0) / 8.0).tanh()
             })
             .collect();
-        plot.add_curve_with_legend(&x, &y, Color32::from_rgb(0x1f, 0x77, 0xb4), "demo edge");
+        plot.add_curve_with_legend(&x, &y, crate::plot::BLUE, "demo edge");
 
         let plot_data = PlotDataWindow::new(render_state);
         let feffit_batch = FeffitBatch::new(render_state);
@@ -589,8 +588,7 @@ impl XafsViewApp {
     /// Redraw the shared plot for the active group according to the selected
     /// [`GraphType`]. Curves that need a stage not yet computed are skipped.
     fn replot_graph(&mut self) {
-        const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
-        const ORANGE: Color32 = Color32::from_rgb(0xff, 0x7f, 0x0e);
+        use crate::plot::{BLUE, ORANGE};
 
         self.plot.clear_curves();
         let graph = self.reduction.graph;

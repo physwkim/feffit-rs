@@ -12,16 +12,11 @@
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use egui::Color32;
 use siplot::YAxis;
 use xasdata::{XasGroup, arctan_step, centroid, peak, valley, x_at_y};
 
 use crate::analysis_ui::array_xy;
-
-const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
-const ORANGE: Color32 = Color32::from_rgb(0xff, 0x7f, 0x0e);
-const GREEN: Color32 = Color32::from_rgb(0x2c, 0xa0, 0x2c);
-const PURPLE: Color32 = Color32::from_rgb(0x94, 0x67, 0xbd);
+use crate::plot::{BLUE, GREEN, ORANGE, PURPLE};
 
 /// One cursor readout: a label, the energy it marks, and an optional value.
 struct Readout {

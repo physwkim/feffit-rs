@@ -111,22 +111,10 @@ impl PeakMode {
     }
 }
 
-/// A tab10-style palette cycled across the overlaid traces.
-const PALETTE: [Color32; 8] = [
-    Color32::from_rgb(0x1f, 0x77, 0xb4),
-    Color32::from_rgb(0xff, 0x7f, 0x0e),
-    Color32::from_rgb(0x2c, 0xa0, 0x2c),
-    Color32::from_rgb(0xd6, 0x27, 0x28),
-    Color32::from_rgb(0x94, 0x67, 0xbd),
-    Color32::from_rgb(0x8c, 0x56, 0x4b),
-    Color32::from_rgb(0xe3, 0x77, 0xc2),
-    Color32::from_rgb(0x17, 0xbe, 0xcf),
-];
-
 /// Feffit data vs model curve colours, shared by the Feffit tab's own plot
 /// ([`replot_feffit`](crate::app)) and this window's "Send to Plot Data" overlay.
-pub(crate) const FIT_DATA: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
-pub(crate) const FIT_MODEL: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
+pub(crate) const FIT_DATA: Color32 = crate::plot::BLUE;
+pub(crate) const FIT_MODEL: Color32 = crate::plot::RED;
 
 /// A Feffit fit handed over from the Feffit tab's "Send to Plot Data": its data
 /// and model curves in the chosen space, with that space's axis labels. When
@@ -600,14 +588,21 @@ impl PlotDataWindow {
         self.plot.set_graph_x_label(self.item.x_label());
         self.plot.set_graph_y_label(self.item.label(), YAxis::Left);
 
-        // Selected (x, y) pairs in group order, with their colors.
+        // Selected (x, y) pairs in group order, with their colors. Bright curves
+        // on the dark canvas; the muted tab10 on the white "Change BG" canvas,
+        // where the bright palette would wash out.
+        let palette = if self.dark_bg {
+            crate::plot::PALETTE
+        } else {
+            crate::plot::PALETTE_LIGHT
+        };
         let mut traces: Vec<(String, Vec<f64>, Vec<f64>, Color32)> = Vec::new();
         for (i, g) in groups.iter().enumerate() {
             if !self.selected.get(i).copied().unwrap_or(false) {
                 continue;
             }
             if let Some((x, y)) = self.displayed_series(g) {
-                let color = PALETTE[traces.len() % PALETTE.len()];
+                let color = palette[traces.len() % palette.len()];
                 traces.push((g.label.clone(), x, y, color));
             }
         }

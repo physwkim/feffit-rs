@@ -12,10 +12,9 @@
 //! no [`siplot`] handle.
 
 use eframe::egui;
-use egui::Color32;
 use xraydb::{CrossSectionKind, XrayDb};
 
-const RED: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
+use crate::plot::RED;
 
 /// Element symbols indexed by `Z - 1` (Z = 1..=118).
 #[rustfmt::skip]

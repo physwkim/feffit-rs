@@ -16,13 +16,11 @@ use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use egui::Color32;
 use feffdat::FeffDatFile;
 use feffinp::{Crystal, Edge, FeffInp, Lattice, Site};
 use siplot::{Colormap, ColormapName, PointMarker, Scatter3D, Scene3dGeometry, SceneWidget, Vec3};
 
-const RED: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
-const GREEN: Color32 = Color32::from_rgb(0x2c, 0xa0, 0x2c);
+use crate::plot::{GREEN, RED};
 
 /// The four selectable edges, paired with their labels.
 const EDGES: [(Edge, &str); 4] = [

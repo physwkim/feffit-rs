@@ -10,14 +10,11 @@
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use egui::Color32;
 use siplot::YAxis;
 use xasdata::{Edge, MbackNorm, MbackNormParams, XasGroup, mback_norm};
 use xraydb::XrayDb;
 
-const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
-const ORANGE: Color32 = Color32::from_rgb(0xff, 0x7f, 0x0e);
-const RED: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
+use crate::plot::{BLUE, ORANGE, RED};
 
 /// Selectable absorption edges (those MBACK handles).
 #[derive(Clone, Copy, PartialEq, Eq)]

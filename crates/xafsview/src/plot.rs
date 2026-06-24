@@ -75,6 +75,36 @@ pub fn set_theme(plot: &mut Plot1D, light: bool) {
     plot.set_foreground_colors(fg, grid);
 }
 
+/// Bright, dark-background-friendly curve colours, defined once here so every
+/// plot-bearing tab draws from the same vivid palette. Matplotlib's tab10 is
+/// muted and reads dimly on the dark data area set by [`set_theme`], so these
+/// are lifted in luminance and saturation while keeping each hue's identity.
+pub const BLUE: egui::Color32 = egui::Color32::from_rgb(0x4f, 0x9b, 0xff);
+pub const ORANGE: egui::Color32 = egui::Color32::from_rgb(0xff, 0xa5, 0x3c);
+pub const GREEN: egui::Color32 = egui::Color32::from_rgb(0x4a, 0xde, 0x80);
+pub const RED: egui::Color32 = egui::Color32::from_rgb(0xff, 0x5d, 0x5d);
+pub const PURPLE: egui::Color32 = egui::Color32::from_rgb(0xc0, 0x8c, 0xff);
+pub const CYAN: egui::Color32 = egui::Color32::from_rgb(0x34, 0xd6, 0xe6);
+pub const BROWN: egui::Color32 = egui::Color32::from_rgb(0xd2, 0x92, 0x6b);
+pub const PINK: egui::Color32 = egui::Color32::from_rgb(0xf5, 0x8f, 0xd6);
+
+/// Cyclic palette (tab10 order, brightened) for plots that draw an arbitrary
+/// number of curves on the dark canvas. Index with `PALETTE[i % PALETTE.len()]`.
+pub const PALETTE: [egui::Color32; 8] = [BLUE, ORANGE, GREEN, RED, PURPLE, BROWN, PINK, CYAN];
+
+/// The muted matplotlib tab10 palette, for the white "Change BG" canvas where
+/// the bright [`PALETTE`] would wash out (tab10 is tuned for a light background).
+pub const PALETTE_LIGHT: [egui::Color32; 8] = [
+    egui::Color32::from_rgb(0x1f, 0x77, 0xb4),
+    egui::Color32::from_rgb(0xff, 0x7f, 0x0e),
+    egui::Color32::from_rgb(0x2c, 0xa0, 0x2c),
+    egui::Color32::from_rgb(0xd6, 0x27, 0x28),
+    egui::Color32::from_rgb(0x94, 0x67, 0xbd),
+    egui::Color32::from_rgb(0x8c, 0x56, 0x4b),
+    egui::Color32::from_rgb(0xe3, 0x77, 0xc2),
+    egui::Color32::from_rgb(0x17, 0xbe, 0xcf),
+];
+
 /// A [`Plot1D`] bundled with the legend entries for the curves currently on it.
 ///
 /// siplot exposes no per-item colour, and its own `show_legend` draws a

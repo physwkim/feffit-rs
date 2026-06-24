@@ -14,17 +14,10 @@ use egui::Color32;
 use siplot::YAxis;
 use xasdata::{PcaModel, XasGroup, groups2matrix, interp_cubic, lincombo_fit, pca_fit, pca_train};
 
-const BLUE: Color32 = Color32::from_rgb(0x1f, 0x77, 0xb4);
-const RED: Color32 = Color32::from_rgb(0xd6, 0x27, 0x28);
-const GREEN: Color32 = Color32::from_rgb(0x2c, 0xa0, 0x2c);
-const PALETTE: [Color32; 6] = [
-    Color32::from_rgb(0x1f, 0x77, 0xb4),
-    Color32::from_rgb(0xff, 0x7f, 0x0e),
-    Color32::from_rgb(0x2c, 0xa0, 0x2c),
-    Color32::from_rgb(0xd6, 0x27, 0x28),
-    Color32::from_rgb(0x94, 0x67, 0xbd),
-    Color32::from_rgb(0x17, 0xbe, 0xcf),
-];
+use crate::plot::{BLUE, CYAN, GREEN, ORANGE, PURPLE, RED};
+
+/// Tab10-order palette (brightened, shared) cycled across the fit components.
+const PALETTE: [Color32; 6] = [BLUE, ORANGE, GREEN, RED, PURPLE, CYAN];
 
 /// The spectrum (energy, array) for a group as normalized or flattened μ(E), or
 /// `None` if it hasn't been normalized.
