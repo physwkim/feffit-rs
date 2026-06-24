@@ -10,7 +10,7 @@ use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindo
 use crate::calc_ui::{IonChamberWindow, KeConvertWindow, PeriodicTableWindow, PowderWindow};
 use crate::clean_ui::{CleanAction, EditXmuState};
 use crate::feffit_batch::{BatchAction, FeffitBatch};
-use crate::feffit_ui::{FeffitAction, FeffitUi};
+use crate::feffit_ui::{FeffitAction, FeffitPlot, FeffitUi};
 use crate::import::{ImportAction, ImportState};
 use crate::mback_ui::MbackWindow;
 use crate::plot_data::PlotDataWindow;
@@ -451,6 +451,74 @@ impl XafsViewApp {
             g.chir_im.as_deref().unwrap_or(&[]),
         )?;
         Ok((k_path, r_path))
+    }
+
+    /// Write the FEFFIT transforms the original's Plot Data reads: the data in
+    /// k/r/q space → `<stem>k.dat`/`<stem>r.dat`/`<stem>q.dat` and the model →
+    /// `<stem>k.fit`/`<stem>r.fit`/`<stem>q.fit`, into the work folder (falling
+    /// back to the data folder). Returns the number of files written (6).
+    fn write_feffit_outputs(&self, plot: &FeffitPlot, stem: &str) -> std::io::Result<usize> {
+        let stem = match stem.trim() {
+            "" => "feffit",
+            s => s,
+        };
+        let dir = self
+            .session
+            .folders
+            .work_dir
+            .clone()
+            .or_else(|| self.session.folders.data_dir.clone())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let (d, m) = (&plot.data, &plot.model);
+        write_chik(
+            &dir.join(format!("{stem}k.dat")),
+            stem,
+            &plot.data_k,
+            &plot.data_chi,
+        )?;
+        write_chik(
+            &dir.join(format!("{stem}k.fit")),
+            stem,
+            &plot.data_k,
+            &plot.model_chi,
+        )?;
+        write_complex4(
+            &dir.join(format!("{stem}r.dat")),
+            stem,
+            "R",
+            &d.r,
+            &d.chir_mag,
+            &d.chir_re,
+            &d.chir_im,
+        )?;
+        write_complex4(
+            &dir.join(format!("{stem}r.fit")),
+            stem,
+            "R",
+            &m.r,
+            &m.chir_mag,
+            &m.chir_re,
+            &m.chir_im,
+        )?;
+        write_complex4(
+            &dir.join(format!("{stem}q.dat")),
+            stem,
+            "q",
+            &d.q,
+            &d.chiq_mag,
+            &d.chiq_re,
+            &d.chiq_im,
+        )?;
+        write_complex4(
+            &dir.join(format!("{stem}q.fit")),
+            stem,
+            "q",
+            &m.q,
+            &m.chiq_mag,
+            &m.chiq_re,
+            &m.chiq_im,
+        )?;
+        Ok(6)
     }
 
     /// Run normalize → AUTOBK → FT on every loaded group with one shared set of
@@ -958,8 +1026,17 @@ impl XafsViewApp {
         };
         match self.feffit.run(&k, &chi) {
             Ok(msg) => {
-                self.feffit_fit_group = Some(label);
-                self.status = msg;
+                self.feffit_fit_group = Some(label.clone());
+                // Persist the fit transforms as the original's *.dat/*.fit files
+                // (so Plot Data can overlay them).
+                let saved = match self.feffit.plot() {
+                    Some(plot) => match self.write_feffit_outputs(plot, &label) {
+                        Ok(n) => format!(" · saved {n} .dat/.fit files"),
+                        Err(e) => format!(" · .dat/.fit not written: {e}"),
+                    },
+                    None => String::new(),
+                };
+                self.status = format!("{msg}{saved}");
                 self.replot_feffit();
             }
             Err(e) => self.status = e,
@@ -1578,6 +1655,34 @@ fn write_chik(path: &std::path::Path, label: &str, k: &[f64], chi: &[f64]) -> st
     std::fs::write(path, s)
 }
 
+/// Serialize a complex transform as a four-column file: the `axis` grid (`R` or
+/// `q`), `|chi|`, `re`, `im`, all on the same grid. The first-column header
+/// names the axis so `r`- and `q`-space files are labelled correctly.
+fn write_complex4(
+    path: &std::path::Path,
+    label: &str,
+    axis: &str,
+    x: &[f64],
+    mag: &[f64],
+    re: &[f64],
+    im: &[f64],
+) -> std::io::Result<()> {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(x.len() * 60 + 64);
+    let _ = writeln!(s, "# {label}");
+    let _ = writeln!(
+        s,
+        "#  {axis:<12}  |chi({axis})|        re                im"
+    );
+    for (i, &xx) in x.iter().enumerate() {
+        let m = mag.get(i).copied().unwrap_or(0.0);
+        let re_i = re.get(i).copied().unwrap_or(0.0);
+        let im_i = im.get(i).copied().unwrap_or(0.0);
+        let _ = writeln!(s, "{xx:12.6}  {m:16.8e}  {re_i:16.8e}  {im_i:16.8e}");
+    }
+    std::fs::write(path, s)
+}
+
 /// Serialize χ(R) as a four-column `.chi` file: `R` (Å), `|χ(R)|`, `Re χ(R)`,
 /// `Im χ(R)`, all on the same `R` grid.
 fn write_chir(
@@ -1588,20 +1693,7 @@ fn write_chir(
     re: &[f64],
     im: &[f64],
 ) -> std::io::Result<()> {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(r.len() * 60 + 64);
-    let _ = writeln!(s, "# {label}");
-    let _ = writeln!(
-        s,
-        "#  R              |chi(R)|          re                im"
-    );
-    for (i, &rr) in r.iter().enumerate() {
-        let m = mag.get(i).copied().unwrap_or(0.0);
-        let re_i = re.get(i).copied().unwrap_or(0.0);
-        let im_i = im.get(i).copied().unwrap_or(0.0);
-        let _ = writeln!(s, "{rr:12.6}  {m:16.8e}  {re_i:16.8e}  {im_i:16.8e}");
-    }
-    std::fs::write(path, s)
+    write_complex4(path, label, "R", r, mag, re, im)
 }
 
 /// The file-name portion of a path as an owned string (for status messages).
