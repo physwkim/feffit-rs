@@ -51,24 +51,28 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
 /// data area with dark axes selected by Plot Data's "Change BG color" toggle.
 pub fn set_theme(plot: &mut Plot1D, light: bool) {
     // `(chrome, data, fg, grid)`: the surround behind the axes, the data area
-    // itself, the axis/frame/text colour, and the grid lines.
+    // itself, the axis/frame/text colour, and the grid lines. `grid` is passed
+    // *translucent* on purpose: siplot applies an override grid colour at full
+    // opacity (chrome.rs `with_overrides`), so a solid grey would draw crisp
+    // lines that fight the curve — a low-alpha tint composites to a faint grid
+    // over either canvas, matching siplot's own `with_alpha(text, 28)` default.
     let (chrome, data, fg, grid) = if light {
         (
             egui::Color32::WHITE,
             egui::Color32::WHITE,
             egui::Color32::from_gray(0x20),
-            egui::Color32::from_gray(0xc8),
+            egui::Color32::from_black_alpha(0x16),
         )
     } else {
         // Cohesive dark: chrome == the egui dark panel fill (`from_gray(27)`) so
         // the plot blends into the surrounding panel, the data area one shade
         // lighter so it still reads as a distinct region, light-grey axes, and a
-        // faint grid.
+        // faint translucent grid.
         (
             egui::Color32::from_gray(0x1b),
             egui::Color32::from_gray(0x24),
             egui::Color32::from_gray(0xc8),
-            egui::Color32::from_gray(0x3c),
+            egui::Color32::from_white_alpha(0x12),
         )
     };
     plot.set_background_colors(chrome, data);
