@@ -29,12 +29,13 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
         y_min: DATA_MARGIN,
         y_max: DATA_MARGIN,
     });
-    // Crosshair-lines toggle state. siplot fuses the crosshair guide lines and
+    // Coordinate-readout toggle state. siplot fuses the crosshair guide lines and
     // the coordinate readout behind this single `graph_cursor` flag (drawing both
-    // or neither); xafsview instead draws the cursor overlay itself so the
-    // readout is *always* shown and only the crosshair lines toggle — see
-    // [`show`] and [`draw_cursor_overlay`]. Here the flag only seeds the default
-    // and backs the toolbar's cursor button: crosshair lines on by default.
+    // or neither); xafsview instead draws the cursor overlay itself and splits the
+    // two controls — `graph_cursor` now backs only the toolbar's "Show cursor
+    // coordinates" button as the *readout* toggle, while a separate
+    // `Plot::crosshair` field backs our own crosshair-lines toggle (see [`show`],
+    // [`toolbar`], and [`draw_cursor_overlay`]). The readout is on by default.
     plot.set_graph_cursor(true);
     // House colour scheme: a cohesive dark canvas (see [`set_theme`]) — the plot
     // chrome matches the egui dark panel so it blends in, with a slightly
@@ -128,6 +129,11 @@ pub struct Plot {
     /// the plot is resized. `None` until first shown (defaults to top-right);
     /// updated whenever the user drags the legend. See [`show`].
     legend_frac: Option<egui::Pos2>,
+    /// Whether the crosshair guide lines are drawn under the pointer. Toggled by
+    /// the toolbar's own crosshair button ([`crosshair_button`]); independent of
+    /// the coordinate readout, which is gated by siplot's `graph_cursor` flag.
+    /// On by default. See [`show`] and [`draw_cursor_overlay`].
+    crosshair: bool,
 }
 
 impl std::ops::Deref for Plot {
@@ -151,6 +157,7 @@ impl Plot {
             inner: new_plot1d(render_state, id),
             legend: Vec::new(),
             legend_frac: None,
+            crosshair: true,
         }
     }
 
@@ -186,20 +193,22 @@ impl Plot {
 }
 
 /// Draw `plot`'s standard toolbar plus the house extras on one row, then leave
-/// the plot itself to a following `plot.show(ui)`. Every plot-bearing tab/window
-/// draws its toolbar through this (instead of `plot.show_toolbar` directly) so
-/// they all expose the same controls — currently siplot's `symbol_tool_button`,
-/// a "Symbol" menu that toggles data-point markers (size + shape) on every
-/// curve, which the bare toolbar omits.
+/// the plot itself to a following [`show`]. Every plot-bearing tab/window draws
+/// its toolbar through this (instead of `plot.show_toolbar` directly) so they all
+/// expose the same controls beyond siplot's built-ins:
 ///
-/// siplot's ready-made `symbol_tool_button` is a `Plot2D` (image) method, so for
-/// the curve `Plot1D` the same control is built here on top of the underlying
-/// `PlotWidget::set_all_symbols` / `set_all_symbol_sizes`.
-pub fn toolbar(plot: &mut Plot1D, ui: &mut egui::Ui) {
+/// - a [`crosshair_button`] that toggles the crosshair guide lines (siplot's own
+///   cursor button is repurposed as the coordinate-readout toggle, see [`show`]);
+/// - a "Symbol" menu that toggles data-point markers (size + shape) on every
+///   curve, which the bare toolbar omits. siplot's ready-made `symbol_tool_button`
+///   is a `Plot2D` (image) method, so for the curve `Plot1D` the same control is
+///   built here on top of `PlotWidget::set_all_symbols` / `set_all_symbol_sizes`.
+pub fn toolbar(plot: &mut Plot, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        plot.show_toolbar(ui);
-        symbol_menu(plot, ui);
+        plot.inner.show_toolbar(ui);
+        crosshair_button(&mut plot.crosshair, ui);
+        symbol_menu(&mut plot.inner, ui);
     });
 }
 
@@ -212,19 +221,21 @@ pub fn toolbar(plot: &mut Plot1D, ui: &mut egui::Ui) {
 /// the curve names never appear. The legend floats over the canvas (an egui
 /// `Area`) instead of taking a separate column, so it no longer steals width.
 pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
-    toolbar(&mut plot.inner, ui);
+    toolbar(plot, ui);
 
     // siplot fuses the crosshair guide lines and the coordinate readout behind a
-    // single `graph_cursor` flag, drawing both or neither. The GUI wants the
-    // readout *always* visible and only the crosshair lines toggle-able (via the
-    // toolbar's cursor button), so xafsview draws the cursor overlay itself: read
-    // the user's crosshair toggle off the flag, suppress siplot's own (fused)
-    // cursor for this frame's render, then restore the flag so the toolbar button
-    // keeps its state. `set_graph_cursor` only flips a bool, so this is cheap.
-    let crosshair_on = plot.inner.graph_cursor();
+    // single `graph_cursor` flag, drawing both or neither. The GUI splits them so
+    // each has its own toolbar toggle: `graph_cursor` (the toolbar's "Show cursor
+    // coordinates" button) gates the *readout*, and `Plot::crosshair` (our own
+    // toolbar button) gates the *lines*. xafsview draws the overlay itself: read
+    // the readout toggle off the flag, suppress siplot's own (fused) cursor for
+    // this frame's render, then restore the flag so the toolbar button keeps its
+    // state. `set_graph_cursor` only flips a bool, so this is cheap.
+    let readout_on = plot.inner.graph_cursor();
     plot.inner.set_graph_cursor(false);
     let resp = plot.inner.show(ui);
-    plot.inner.set_graph_cursor(crosshair_on);
+    plot.inner.set_graph_cursor(readout_on);
+    let crosshair_on = plot.crosshair;
     // `PlotResponse::transform` carries the data-area rectangle (screen points)
     // that we anchor the legend overlay to and map the pointer through.
     let transform = resp.transform;
@@ -235,13 +246,15 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     // legible whether the canvas is light or dark.
     let data_bg = plot.inner.data_background_color();
 
-    // Coordinate readout (always) plus the crosshair guide lines (only while the
-    // toolbar's cursor toggle is on), following the pointer over the data area.
-    if let Some(pos) = resp.response.hover_pos()
+    // Cursor overlay following the pointer over the data area: the coordinate
+    // readout when its toggle is on, and the crosshair guide lines when theirs
+    // is. Skip the hit-test entirely when both are off.
+    if (readout_on || crosshair_on)
+        && let Some(pos) = resp.response.hover_pos()
         && area.contains(pos)
     {
         let data = transform.pixel_to_data(pos);
-        draw_cursor_overlay(ui, area, pos, data, crosshair_on, data_bg);
+        draw_cursor_overlay(ui, area, pos, data, readout_on, crosshair_on, data_bg);
     }
 
     // No labelled curve — nothing to put in the legend, so skip the overlay.
@@ -354,12 +367,12 @@ fn draw_legend(ui: &mut egui::Ui, entries: &[(String, egui::Color32)], data_bg: 
     }
 }
 
-/// Draw the cursor overlay over the data area `area`: the `(x, y)` coordinate
-/// readout — *always*, in a small box near the pointer `pos` — and, when
-/// `crosshair` is on, thin guide lines through the pointer spanning the data
-/// area. xafsview draws this itself rather than using siplot's `graph_cursor`,
-/// which fuses the lines and the readout behind one flag; the GUI wants the
-/// readout always visible and only the crosshair toggle-able (see [`show`]).
+/// Draw the cursor overlay over the data area `area` while the pointer is at
+/// `pos`: the `(x, y)` coordinate readout in a small box near the pointer when
+/// `readout` is on, and thin guide lines through the pointer spanning the data
+/// area when `crosshair` is on. xafsview draws this itself rather than using
+/// siplot's `graph_cursor`, which fuses the lines and the readout behind one
+/// flag; splitting it lets each get its own toolbar toggle (see [`show`]).
 ///
 /// `data` is the pointer's data-space coordinate (`Transform::pixel_to_data`);
 /// the caller passes it pre-computed and only calls this while `pos` is inside
@@ -373,6 +386,7 @@ fn draw_cursor_overlay(
     area: egui::Rect,
     pos: egui::Pos2,
     data: (f64, f64),
+    readout: bool,
     crosshair: bool,
     data_bg: egui::Color32,
 ) {
@@ -393,35 +407,82 @@ fn draw_cursor_overlay(
         painter.hline(area.x_range(), pos.y, line);
     }
 
-    let label = format!(
-        "{}, {}",
-        siplot::format_value(data.0),
-        siplot::format_value(data.1)
-    );
-    let font = egui::FontId::proportional(11.0);
-    let galley = painter.layout_no_wrap(label, font, fg);
-    let pad = egui::vec2(4.0, 2.0);
-    let size = galley.size() + pad * 2.0;
-    // Prefer the lower-right of the cursor; flip to stay inside the data area.
-    let mut min = pos + egui::vec2(10.0, 10.0);
-    if min.x + size.x > area.right() {
-        min.x = pos.x - 10.0 - size.x;
+    if readout {
+        let label = format!(
+            "{}, {}",
+            siplot::format_value(data.0),
+            siplot::format_value(data.1)
+        );
+        let font = egui::FontId::proportional(11.0);
+        let galley = painter.layout_no_wrap(label, font, fg);
+        let pad = egui::vec2(4.0, 2.0);
+        let size = galley.size() + pad * 2.0;
+        // Prefer the lower-right of the cursor; flip to stay inside the data area.
+        let mut min = pos + egui::vec2(10.0, 10.0);
+        if min.x + size.x > area.right() {
+            min.x = pos.x - 10.0 - size.x;
+        }
+        if min.y + size.y > area.bottom() {
+            min.y = pos.y - 10.0 - size.y;
+        }
+        // A near-opaque box in the opposite tone so the value reads over any curve.
+        let box_bg = if dark_canvas {
+            egui::Color32::from_black_alpha(0xc8)
+        } else {
+            egui::Color32::from_white_alpha(0xc8)
+        };
+        painter.rect_filled(
+            egui::Rect::from_min_size(min, size),
+            egui::CornerRadius::same(2),
+            box_bg,
+        );
+        painter.galley(min + pad, galley, fg);
     }
-    if min.y + size.y > area.bottom() {
-        min.y = pos.y - 10.0 - size.y;
+}
+
+/// A toolbar toggle button for the crosshair guide lines drawn by
+/// [`draw_cursor_overlay`]. siplot's built-in cursor button (a
+/// crosshair-with-circle icon) is repurposed as the coordinate-*readout* toggle,
+/// so this separate button owns the *lines*. It is styled to match siplot's own
+/// icon buttons (same 28×24 footprint, hover/selected fill + stroke, 1.6px icon
+/// stroke inset by 5px) and draws a plain crosshair — no circle — to read
+/// distinctly from siplot's cursor icon. `on` is [`Plot::crosshair`].
+fn crosshair_button(on: &mut bool, ui: &mut egui::Ui) {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 24.0), egui::Sense::click());
+    let response = response.on_hover_text("Toggle crosshair");
+    if response.clicked() {
+        *on = !*on;
     }
-    // A near-opaque box in the opposite tone so the value reads over any curve.
-    let box_bg = if dark_canvas {
-        egui::Color32::from_black_alpha(0xc8)
-    } else {
-        egui::Color32::from_white_alpha(0xc8)
-    };
-    painter.rect_filled(
-        egui::Rect::from_min_size(min, size),
-        egui::CornerRadius::same(2),
-        box_bg,
-    );
-    painter.galley(min + pad, galley, fg);
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, *on);
+        let color = if *on {
+            ui.visuals().selection.stroke.color
+        } else {
+            visuals.fg_stroke.color
+        };
+        let painter = ui.painter();
+        let button_rect = rect.shrink(1.0);
+        if *on || response.hovered() || response.has_focus() {
+            painter.rect_filled(button_rect, 2.0, visuals.weak_bg_fill);
+            painter.rect_stroke(
+                button_rect,
+                2.0,
+                visuals.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        let icon = rect.shrink(5.0);
+        let c = icon.center();
+        let stroke = egui::Stroke::new(1.6, color);
+        painter.line_segment(
+            [egui::pos2(icon.left(), c.y), egui::pos2(icon.right(), c.y)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(c.x, icon.top()), egui::pos2(c.x, icon.bottom())],
+            stroke,
+        );
+    }
 }
 
 /// A "Symbol" menu that toggles data-point markers (shape + size) on every curve
