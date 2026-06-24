@@ -569,14 +569,15 @@ impl PlotDataWindow {
         self.plot.clear();
 
         // Background colour (the "Change BG color" swap): a dark canvas or the
-        // default light one, on both the window and the data area. `fg` is the
-        // overlay (average) colour, kept legible against the chosen background.
-        let (bg, fg) = if self.dark_bg {
-            (Color32::from_gray(0x12), Color32::from_gray(0xe0))
+        // default light one, applied via the shared `set_theme` so the axes and
+        // grid track the background too. `fg` is the overlay (average) colour,
+        // kept legible against the chosen background.
+        let fg = if self.dark_bg {
+            Color32::from_gray(0xe0)
         } else {
-            (Color32::WHITE, Color32::from_rgb(0x20, 0x20, 0x20))
+            Color32::from_rgb(0x20, 0x20, 0x20)
         };
-        self.plot.set_background_colors(bg, bg);
+        crate::plot::set_theme(&mut self.plot, !self.dark_bg);
 
         // A sent Feffit fit takes over the plot (its space/axes differ from the
         // group items), so draw it alone and skip the group traces.

@@ -34,7 +34,36 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
     // every plot reads out the value under the cursor without the user first
     // toggling the toolbar's crosshair button.
     plot.set_graph_cursor(true);
+    // House colour scheme: a white data area with dark axes (see [`set_theme`]),
+    // so curves and the in-axes legend read clearly over a light background
+    // regardless of the surrounding egui panel theme.
+    set_theme(&mut plot, true);
     plot
+}
+
+/// Apply a self-consistent colour scheme to `plot`: the chrome + data-area
+/// background, the axis/frame foreground, and the grid, chosen so curves and
+/// labels read clearly *independent of the egui panel theme* (siplot otherwise
+/// derives the axis colour from `ui.visuals()`, which would render light axes
+/// on a light canvas under a dark UI theme). `light = true` is a white data
+/// area with dark axes (the house default); `false` is the dark canvas with
+/// light axes used by Plot Data's "Change BG color" toggle.
+pub fn set_theme(plot: &mut Plot1D, light: bool) {
+    let (bg, fg, grid) = if light {
+        (
+            egui::Color32::WHITE,
+            egui::Color32::from_gray(0x20),
+            egui::Color32::from_gray(0xc8),
+        )
+    } else {
+        (
+            egui::Color32::from_gray(0x12),
+            egui::Color32::from_gray(0xe0),
+            egui::Color32::from_gray(0x40),
+        )
+    };
+    plot.set_background_colors(bg, bg);
+    plot.set_foreground_colors(fg, grid);
 }
 
 /// A [`Plot1D`] bundled with the legend entries for the curves currently on it.
@@ -141,6 +170,10 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     if plot.legend.is_empty() {
         return;
     }
+    // The legend text colour contrasts with the plot's data-area background
+    // (set by `set_theme`), not the egui panel theme, so labels stay legible
+    // whether the canvas is light or dark.
+    let data_bg = plot.inner.data_background_color();
 
     // Float the legend over the canvas — by default in the data area's top-right
     // corner, draggable from anywhere on it (no handle): a movable foreground
@@ -178,7 +211,7 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                                 ..Default::default()
                             })
                             .show(ui, |ui| {
-                                draw_legend(ui, &plot.legend);
+                                draw_legend(ui, &plot.legend, data_bg);
                             });
                     });
                 });
@@ -190,9 +223,18 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
 /// siplot's `show_legend`, which the GUI deliberately bypasses); just the colour
 /// key over the transparent overlay. Rows are non-interactive so a drag anywhere
 /// on the legend moves the enclosing `Area` rather than being captured.
-fn draw_legend(ui: &mut egui::Ui, entries: &[(String, egui::Color32)]) {
+fn draw_legend(ui: &mut egui::Ui, entries: &[(String, egui::Color32)], data_bg: egui::Color32) {
     const SWATCH_W: f32 = 22.0;
     const SWATCH_H: f32 = 12.0;
+    // Pick a label colour that contrasts with the data-area background (dark
+    // text on a light canvas, light text on a dark one) rather than inheriting
+    // the egui theme's text colour, which need not match the canvas.
+    let luma = 0.299 * data_bg.r() as f32 + 0.587 * data_bg.g() as f32 + 0.114 * data_bg.b() as f32;
+    let text = if luma > 128.0 {
+        egui::Color32::from_gray(0x20)
+    } else {
+        egui::Color32::from_gray(0xe0)
+    };
     ui.spacing_mut().item_spacing.y = 2.0;
     for (label, color) in entries {
         ui.horizontal(|ui| {
@@ -207,7 +249,7 @@ fn draw_legend(ui: &mut egui::Ui, entries: &[(String, egui::Color32)]) {
                 egui::Stroke::new(2.0, *color),
             );
             ui.add_space(4.0);
-            ui.label(label.as_str());
+            ui.colored_label(text, label.as_str());
         });
     }
 }
