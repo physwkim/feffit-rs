@@ -307,7 +307,12 @@ impl XafsViewApp {
                 };
                 // Seed the Autobk "Output file" chi base from the loaded name.
                 self.reduction.output_file = format!("{label}.chi");
-                self.session.add_group(XasGroup::from_mu(label, energy, mu));
+                // Record the source path on the group (as `open_chi_dat` does),
+                // so the "Data File" field shows it and AUTOBK's χ-file writer can
+                // fall back to the source folder instead of the launch directory.
+                let mut g = XasGroup::from_mu(label, energy, mu);
+                g.filename = input_path;
+                self.session.add_group(g);
                 self.status = format!("Built μ(E): {n} points{xmu}");
                 self.reduction.graph = GraphType::MuBkg;
                 // New spectrum: drop stale undo history and re-seed the editor.
@@ -549,9 +554,12 @@ impl XafsViewApp {
             .enumerate()
         {
             match result {
-                Ok(group) => {
+                Ok(mut group) => {
                     let index = number.then_some(i + 1);
                     let input = files.get(i).and_then(|f| f.path.as_deref());
+                    // Record the source path (as the single-file paths do) so each
+                    // group's later χ-file write falls back to its own folder.
+                    group.filename = input.map(std::path::Path::to_path_buf);
                     match self.write_xmu_output(
                         input,
                         &group.label,
