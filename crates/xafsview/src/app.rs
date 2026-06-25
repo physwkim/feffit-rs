@@ -195,6 +195,17 @@ impl XafsViewApp {
     }
 
     /// Open a beamline column file via a native dialog and start an import.
+    /// Point the Folders "Data folder" at the folder a just-opened data file
+    /// came from. This is where the file dialogs default and where AUTOBK/FEFFIT
+    /// outputs land when no Work folder is set, so loading a file makes the
+    /// output location explicit in the Folders tab instead of silently falling
+    /// back to the launch directory. A Work folder, if set, still takes priority.
+    fn set_data_dir_from(&mut self, path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            self.session.folders.data_dir = Some(parent.to_path_buf());
+        }
+    }
+
     fn open_file(&mut self) {
         let mut dlg = rfd::FileDialog::new();
         if let Some(dir) = &self.session.folders.data_dir {
@@ -203,6 +214,7 @@ impl XafsViewApp {
         let Some(path) = dlg.pick_file() else {
             return;
         };
+        self.set_data_dir_from(&path);
         match ColumnFile::from_path(&path) {
             Ok(cf) => {
                 self.status = format!(
@@ -236,6 +248,7 @@ impl XafsViewApp {
         let Some(path) = dlg.pick_file() else {
             return;
         };
+        self.set_data_dir_from(&path);
         match xasdata::read_chi_dat(&path) {
             Ok((k, chi)) => {
                 let label = path
