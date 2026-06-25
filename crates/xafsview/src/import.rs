@@ -68,11 +68,15 @@ impl ImportState {
         } else {
             ImportMode::Transmission
         };
+        // When the labels don't name a role, seed the canonical transmission
+        // layout — Energy=col1, I0=col2, It=col3 — clamped to the file's width,
+        // instead of collapsing every role onto column 1.
+        let last = ncols - 1;
         Self {
             mode,
             energy: roles.energy.unwrap_or(0),
-            i0: roles.i0.unwrap_or(0),
-            it: roles.it.or(roles.mu).unwrap_or(0),
+            i0: roles.i0.unwrap_or(1).min(last),
+            it: roles.it.or(roles.mu).unwrap_or(2).min(last),
             iref: roles.iref.unwrap_or(0),
             mu_col: roles.mu.unwrap_or(0),
             channels,
@@ -242,6 +246,21 @@ mod tests {
              10 1 0.5 -0.69\n20 2 0.9 -0.80\n",
         )
         .unwrap();
+        let st = ImportState::new(cf);
+        assert!(matches!(st.mode, ImportMode::Transmission));
+        match st.to_spec() {
+            MuSpec::Transmission { energy, i0, it } => {
+                assert_eq!((energy, i0, it), (0, 1, 2));
+            }
+            _ => panic!("expected Transmission spec"),
+        }
+    }
+
+    #[test]
+    fn unlabeled_file_seeds_positional_energy_i0_it() {
+        // No column name matches a role keyword, so the seed falls back to the
+        // canonical transmission layout: Energy=col1, I0=col2, It=col3.
+        let cf = ColumnFile::from_text("# a b c\n10 1 0.5\n20 2 0.9\n").unwrap();
         let st = ImportState::new(cf);
         assert!(matches!(st.mode, ImportMode::Transmission));
         match st.to_spec() {
