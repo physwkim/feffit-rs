@@ -5,3 +5,6 @@ Cargo.lock
 __pycache__/
 *.pyc
 /.venv
+
+# XAFSView reduction output written next to the working dir (k/r .chi pairs).
+*.chi
