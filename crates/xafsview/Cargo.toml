@@ -48,3 +48,6 @@ fcwt = "0.1.3"
 # Atomic / X-ray data for the Phase-8 calculators (periodic table, atom data,
 # ion-chamber/gas absorption, powder weight) and Chantler f2 for MBACK norm.
 xraydb = { workspace = true }
+
+# Run the per-group Feffit batch fits in parallel (each fit is independent).
+rayon = { workspace = true }

@@ -15,6 +15,7 @@ use std::fmt::Write as _;
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
+use rayon::prelude::*;
 use siplot::YAxis;
 use xasdata::XasGroup;
 
@@ -45,6 +46,22 @@ struct GroupFit {
     /// Outcome of the most recent run (`Ok(summary)` / `Err(message)`), or
     /// `None` if not yet run.
     status: Option<Result<String, String>>,
+}
+
+/// Fit one config against its group's `chi(k)`, recording the status. No-op-ish
+/// (records an error status) if the group or its `chi(k)` is missing. Free of
+/// `&self` so "Run all" can drive many of these concurrently across configs —
+/// each call mutates only its own `cfg` and reads the shared `groups`.
+fn run_config(cfg: &mut GroupFit, groups: &[XasGroup]) {
+    match groups.get(cfg.group_idx) {
+        Some(g) => match (&g.k, &g.chi) {
+            (Some(k), Some(chi)) => cfg.status = Some(cfg.ui.run(k, chi)),
+            _ => {
+                cfg.status = Some(Err("no chi(k) — run AUTOBK on this group first".to_owned()));
+            }
+        },
+        None => cfg.status = Some(Err("group no longer exists".to_owned())),
+    }
 }
 
 /// What the batch window needs the app to do this frame.
@@ -132,17 +149,8 @@ impl FeffitBatch {
     /// Run the config at `pos` against its group's `chi(k)`, recording the
     /// status. No-op if the group or its `chi(k)` is missing.
     fn run_one(&mut self, pos: usize, groups: &[XasGroup]) {
-        let Some(cfg) = self.configs.get_mut(pos) else {
-            return;
-        };
-        match groups.get(cfg.group_idx) {
-            Some(g) => match (&g.k, &g.chi) {
-                (Some(k), Some(chi)) => cfg.status = Some(cfg.ui.run(k, chi)),
-                _ => {
-                    cfg.status = Some(Err("no chi(k) — run AUTOBK on this group first".to_owned()));
-                }
-            },
-            None => cfg.status = Some(Err("group no longer exists".to_owned())),
+        if let Some(cfg) = self.configs.get_mut(pos) {
+            run_config(cfg, groups);
         }
     }
 
@@ -240,9 +248,12 @@ impl FeffitBatch {
                 .add_enabled(!self.configs.is_empty(), egui::Button::new("Run all"))
                 .clicked()
             {
-                for pos in 0..self.configs.len() {
-                    self.run_one(pos, groups);
-                }
+                // Each group's fit is independent (own config, own FFT planner,
+                // reading only the shared `groups`), so fan the slow fits across
+                // cores instead of running them one at a time.
+                self.configs
+                    .par_iter_mut()
+                    .for_each(|cfg| run_config(cfg, groups));
                 self.dirty = true;
             }
         });
