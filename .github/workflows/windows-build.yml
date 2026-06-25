@@ -1,10 +1,16 @@
 name: Windows build
 
-# Build the self-contained Windows GUI exe. The .cargo/config.toml in the repo
-# statically links the MSVC CRT for this target, so the artifact runs on a clean
-# Windows 10/11 with nothing to install. Runs on every push to main (CI signal),
-# on release tags like `0.1.0` (also attached to the GitHub Release), and on
-# demand from the Actions tab.
+# Build the Windows GUI exe. xafsview's engine bundles the in-process FEFF10
+# backend (feff10 -> feff10-sys), which is Fortran and links only under the
+# GNU/MinGW toolchain -- the MSVC linker cannot consume libgfortran. So this
+# builds the x86_64-pc-windows-gnu target inside MSYS2 (MINGW64): feff10-sys
+# auto-downloads its prebuilt libfeff10-windows-x86_64.a and links it
+# dynamically against MinGW's libgfortran. The exe is then packaged with the
+# MinGW runtime DLLs it loads, giving a no-install folder -- unzip and run on a
+# clean Windows 10/11, nothing to install.
+#
+# Runs on every push to main (CI signal), on release tags like `0.1.0` (the zip
+# is also attached to the GitHub Release), and on demand from the Actions tab.
 on:
   push:
     branches: [main]
@@ -12,36 +18,72 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # attach the exe to the GitHub Release on tag builds
+  contents: write # attach the zip to the GitHub Release on tag builds
 
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust (stable, MSVC)
+      - name: Install Rust (stable, GNU target)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install MSYS2 + gfortran runtime
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc-fortran curl
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # .cargo/config.toml applies `-C target-feature=+crt-static` to this
-      # target, so the exe needs no Visual C++ Redistributable on the user's PC.
+      # rustup's gnu cargo links through /mingw64 (where libgfortran lives), so
+      # both must precede the MSYS2 shell defaults on PATH. feff10-sys fetches
+      # the prebuilt libfeff10-windows-x86_64.a via curl on first build.
       - name: Build release exe
-        run: cargo build --release -p xafsview
+        shell: msys2 {0}
+        run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:$PATH"
+          cargo build --release --target x86_64-pc-windows-gnu -p xafsview
 
-      - name: Upload exe artifact
+      # gfortran is linked dynamically on Windows, so the exe loads MinGW DLLs at
+      # runtime. Copy the core four (always) plus anything else ldd resolves under
+      # /mingw64, so the folder runs on a machine without MSYS2.
+      - name: Bundle exe + MinGW runtime DLLs
+        shell: msys2 {0}
+        run: |
+          export PATH="/mingw64/bin:$PATH"
+          exe=target/x86_64-pc-windows-gnu/release/xafsview.exe
+          mkdir -p dist
+          cp "$exe" dist/
+          for dll in libgfortran-5.dll libquadmath-0.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+            src=$(find /mingw64/bin -name "$dll" -print -quit)
+            [ -n "$src" ] && cp -v "$src" dist/
+          done
+          ldd "$exe" 2>/dev/null | awk '/\/mingw64\// {print $3}' | sort -u | while read -r dll; do
+            [ -f "$dll" ] && cp -n "$dll" dist/
+          done
+          echo "--- dist contents ---"
+          ls -la dist
+
+      - name: Zip the distribution
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath xafsview-windows-x86_64.zip -Force
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: xafsview-windows-x86_64
-          path: target/release/xafsview.exe
+          path: dist/
           if-no-files-found: error
 
-      - name: Attach exe to the GitHub Release
+      - name: Attach zip to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/xafsview.exe
+          files: xafsview-windows-x86_64.zip
