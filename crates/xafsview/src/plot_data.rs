@@ -395,7 +395,10 @@ impl PlotDataWindow {
             let mut remove = None;
             for (i, t) in self.loaded.iter().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                    if crate::widgets::delete_box(ui)
+                        .on_hover_text("Remove")
+                        .clicked()
+                    {
                         remove = Some(i);
                     }
                     ui.label(&t.label).on_hover_text(t.item.label());

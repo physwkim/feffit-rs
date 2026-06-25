@@ -41,3 +41,26 @@ pub fn primary(ui: &mut egui::Ui, text: &str, size: Vec2, enabled: bool) -> Resp
 pub fn exit(ui: &mut egui::Ui, size: Vec2) -> Response {
     ui.add(egui::Button::new("Exit").fill(EXIT_FILL).min_size(size))
 }
+
+/// A small square "remove" button: a bordered box with an ✕ painted inside.
+/// Painted rather than set from a glyph because the default UI fonts lack ✕
+/// (U+2715) and every box-with-✕ codepoint (☒/⊠/╳), which would render as a
+/// missing-glyph tofu box. Use for any "remove this row" affordance.
+pub fn delete_box(ui: &mut egui::Ui) -> Response {
+    let side = ui.spacing().interact_size.y.min(18.0);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let stroke = ui.style().interact(&resp).fg_stroke;
+        let painter = ui.painter();
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(2),
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+        let x = rect.shrink(side * 0.3);
+        painter.line_segment([x.left_top(), x.right_bottom()], stroke);
+        painter.line_segment([x.right_top(), x.left_bottom()], stroke);
+    }
+    resp
+}

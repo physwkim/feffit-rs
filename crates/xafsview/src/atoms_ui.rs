@@ -189,7 +189,7 @@ impl AtomsTab {
                                 .speed(0.001)
                                 .range(-1.0..=2.0),
                         );
-                        if ui.button("✕").clicked() {
+                        if crate::widgets::delete_box(ui).clicked() {
                             remove = Some(i);
                         }
                         ui.end_row();

@@ -729,7 +729,7 @@ impl FeffitUi {
                     ui.add(egui::DragValue::new(&mut self.selected_path).range(0..=n - 1));
                     let idx = self.selected_path;
                     ui.checkbox(&mut self.paths[idx].enabled, "enable");
-                    if ui.small_button("✕").clicked() {
+                    if crate::widgets::delete_box(ui).clicked() {
                         remove_path = Some(idx);
                     }
                     if ui
@@ -807,7 +807,7 @@ impl FeffitUi {
                             ui.add(egui::TextEdit::singleline(&mut row.expr).desired_width(120.0));
                         }
                     }
-                    if ui.small_button("✕").clicked() {
+                    if crate::widgets::delete_box(ui).clicked() {
                         remove_param = Some(i);
                     }
                 });

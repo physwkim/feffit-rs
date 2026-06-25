@@ -1172,7 +1172,7 @@ impl XafsViewApp {
                                     match &theory_name {
                                         Some(name) => {
                                             ui.monospace(name.as_str());
-                                            if ui.small_button("✕").clicked() {
+                                            if crate::widgets::delete_box(ui).clicked() {
                                                 theory_clear = true;
                                             }
                                         }
