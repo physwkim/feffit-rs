@@ -1,0 +1,11 @@
+# Windows distribution: statically link the MSVC C runtime so the release binary
+# needs no Visual C++ Redistributable on the target machine — it runs on a clean
+# Windows 10/11 with nothing to install (fonts, xraydb, the window/exe icon, and
+# the in-process FEFF10 backend are already embedded in the exe).
+#
+# Scoped to the x86_64-pc-windows-msvc target only, so macOS/Linux builds are
+# unaffected. With this in place, a plain `cargo build --release -p xafsview` on
+# Windows produces the self-contained exe (verify with
+# `dumpbin /dependents` — vcruntime140.dll/msvcp140.dll must NOT be listed).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
