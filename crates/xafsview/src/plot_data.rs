@@ -10,6 +10,7 @@
 //! work (averaging, peak finding) is the headless [`xasdata`] code. A Feffit fit
 //! can also be sent here for a quick data-vs-model look ([`set_fit_overlay`]).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -103,10 +104,12 @@ pub struct PlotDataWindow {
     pick_dir: Option<PathBuf>,
     /// Files in `pick_dir` matching the current graph item, minus `pick_add`.
     available: Vec<PathBuf>,
-    /// Files staged in the picker to add on OK.
+    /// Files staged in the picker (the "Selected Data" pane), loaded on OK.
     pick_add: Vec<PathBuf>,
-    /// Sort the available list alphabetically.
-    pick_sort: bool,
+    /// Multi-selection highlight in the "Available Data" pane.
+    avail_hi: HashSet<PathBuf>,
+    /// Multi-selection highlight in the "Selected Data" pane.
+    sel_hi: HashSet<PathBuf>,
     /// Outcome of the last load (shown in the Files section).
     pick_status: String,
 
@@ -144,7 +147,8 @@ impl PlotDataWindow {
             pick_dir: None,
             available: Vec::new(),
             pick_add: Vec::new(),
-            pick_sort: true,
+            avail_hi: HashSet::new(),
+            sel_hi: HashSet::new(),
             pick_status: String::new(),
             dirty: true,
         }
@@ -371,32 +375,13 @@ impl PlotDataWindow {
         ui.separator();
         ui.strong("Files");
 
-        egui::ComboBox::from_label("File type")
-            .selected_text(self.file_type.label())
-            .show_ui(ui, |ui| {
-                for ft in FileType::ALL {
-                    if ui
-                        .selectable_value(&mut self.file_type, ft, ft.label())
-                        .changed()
-                    {
-                        self.graph_item = self.file_type.default_item();
-                        self.refresh_available();
-                    }
-                }
-            });
-        egui::ComboBox::from_label("Graph item")
-            .selected_text(self.graph_item.label())
-            .show_ui(ui, |ui| {
-                for &gi in self.file_type.items() {
-                    if ui
-                        .selectable_value(&mut self.graph_item, gi, gi.label())
-                        .changed()
-                    {
-                        self.refresh_available();
-                    }
-                }
-            });
-
+        // The file type / graph item are chosen in the File-selection window
+        // (the original keeps the *.DAT picker there); show the current pick here.
+        ui.label(format!(
+            "Type {} · item {}",
+            self.file_type.label(),
+            self.graph_item.label()
+        ));
         if ui.button("ADD or DEL Data Files…").clicked() {
             self.picker_open = true;
             self.refresh_available();
@@ -430,105 +415,211 @@ impl PlotDataWindow {
         }
     }
 
-    /// The "Add / remove data files" picker: browse a folder, stage files
-    /// matching the current graph item, and load them on OK. A subordinate
-    /// `egui::Window` inside the Plot Data viewport.
+    /// The original **File selection** window: a two-pane transfer list. The left
+    /// "Available Data" pane lists the folder's files of the chosen type/item; the
+    /// right "Selected Data" pane holds the staged picks. `=>` / `<=` move the
+    /// highlighted rows between panes (multi-select by clicking), `OK` loads the
+    /// selection. A subordinate `egui::Window` inside the Plot Data viewport.
     fn file_picker(&mut self, ui: &mut egui::Ui) {
         if !self.picker_open {
             return;
         }
         let mut win_open = true;
-        egui::Window::new("Add / remove data files")
+        egui::Window::new("File selection")
             .open(&mut win_open)
             .resizable(true)
-            .default_size([520.0, 380.0])
+            .default_size([640.0, 440.0])
             .show(ui.ctx(), |ui| {
+                // Folder path bar.
                 ui.horizontal(|ui| {
-                    if ui.button("Browse folder…").clicked()
+                    if ui.button("📁 Browse…").clicked()
                         && let Some(dir) = rfd::FileDialog::new().pick_folder()
                     {
                         self.pick_dir = Some(dir);
                         self.pick_add.clear();
+                        self.avail_hi.clear();
+                        self.sel_hi.clear();
                         self.refresh_available();
                     }
-                    if ui.checkbox(&mut self.pick_sort, "Sort").changed() {
-                        self.refresh_available();
+                    match &self.pick_dir {
+                        Some(dir) => {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(dir.display().to_string()).weak(),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        None => {
+                            ui.weak("(pick a folder)");
+                        }
                     }
                 });
-                match &self.pick_dir {
-                    Some(dir) => ui.weak(dir.display().to_string()),
-                    None => ui.weak("Pick a folder to list its files."),
-                };
-                ui.label(format!(
-                    "Showing {} files matching “{}”.",
-                    self.file_type.label(),
-                    self.graph_item.label(),
-                ));
                 ui.separator();
 
-                let mut to_add = None;
-                let mut to_remove = None;
-                egui::Grid::new("picker_lists")
-                    .num_columns(2)
-                    .show(ui, |ui| {
-                        ui.strong("Available");
-                        ui.strong("Selected");
-                        ui.end_row();
+                let mut do_add = false;
+                let mut do_remove = false;
+                let mut do_ok = false;
+                let mut do_sort = false;
+                let mut do_clear = false;
 
-                        ui.vertical(|ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt("avail")
-                                .max_height(240.0)
-                                .show(ui, |ui| {
-                                    for path in &self.available {
-                                        if ui.selectable_label(false, file_name_of(path)).clicked()
-                                        {
-                                            to_add = Some(path.clone());
-                                        }
-                                    }
-                                });
+                let pane_w = ((ui.available_width() - 72.0) * 0.5).max(150.0);
+                let list_h = (ui.available_height() - 36.0).max(160.0);
+
+                ui.horizontal_top(|ui| {
+                    // LEFT — Available Data, with the file-type / graph-item filters.
+                    ui.vertical(|ui| {
+                        ui.set_width(pane_w);
+                        ui.horizontal(|ui| {
+                            ui.strong("Available Data");
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    egui::ComboBox::from_id_salt("pd_ftype")
+                                        .selected_text(self.file_type.label())
+                                        .show_ui(ui, |ui| {
+                                            for ft in FileType::ALL {
+                                                if ui
+                                                    .selectable_value(
+                                                        &mut self.file_type,
+                                                        ft,
+                                                        ft.label(),
+                                                    )
+                                                    .changed()
+                                                {
+                                                    self.graph_item = self.file_type.default_item();
+                                                    self.avail_hi.clear();
+                                                    self.refresh_available();
+                                                }
+                                            }
+                                        });
+                                },
+                            );
                         });
-                        ui.vertical(|ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt("staged")
-                                .max_height(240.0)
-                                .show(ui, |ui| {
-                                    for path in &self.pick_add {
-                                        if ui.selectable_label(false, file_name_of(path)).clicked()
-                                        {
-                                            to_remove = Some(path.clone());
-                                        }
+                        egui::ComboBox::from_id_salt("pd_gitem")
+                            .selected_text(self.graph_item.label())
+                            .show_ui(ui, |ui| {
+                                for &gi in self.file_type.items() {
+                                    if ui
+                                        .selectable_value(&mut self.graph_item, gi, gi.label())
+                                        .changed()
+                                    {
+                                        self.avail_hi.clear();
+                                        self.refresh_available();
                                     }
-                                });
-                        });
-                        ui.end_row();
+                                }
+                            });
+                        egui::ScrollArea::vertical()
+                            .id_salt("avail_list")
+                            .max_height(list_h)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.set_min_width(pane_w);
+                                for path in self.available.clone() {
+                                    let hi = self.avail_hi.contains(&path);
+                                    if ui.selectable_label(hi, file_name_of(&path)).clicked()
+                                        && !self.avail_hi.remove(&path)
+                                    {
+                                        self.avail_hi.insert(path);
+                                    }
+                                }
+                            });
                     });
-                if let Some(p) = to_add {
-                    self.pick_add.push(p);
-                    self.refresh_available();
-                }
-                if let Some(p) = to_remove {
-                    self.pick_add.retain(|x| x != &p);
-                    self.refresh_available();
-                }
 
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Clear all").clicked() {
-                        self.pick_add.clear();
-                        self.refresh_available();
-                    }
-                    if ui
-                        .add_enabled(!self.pick_add.is_empty(), egui::Button::new("Add to plot"))
-                        .clicked()
-                    {
-                        self.load_staged();
-                        self.picker_open = false;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.picker_open = false;
-                    }
+                    // MIDDLE — transfer buttons.
+                    ui.vertical(|ui| {
+                        ui.add_space(28.0);
+                        if ui
+                            .button("=>")
+                            .on_hover_text("Move highlighted to Selected")
+                            .clicked()
+                        {
+                            do_add = true;
+                        }
+                        if ui
+                            .button("<=")
+                            .on_hover_text("Remove highlighted from Selected")
+                            .clicked()
+                        {
+                            do_remove = true;
+                        }
+                        ui.add_space(10.0);
+                        if ui.button("OK").clicked() {
+                            do_ok = true;
+                        }
+                    });
+
+                    // RIGHT — Selected Data, with Sort / Clear all.
+                    ui.vertical(|ui| {
+                        ui.set_width(pane_w);
+                        ui.horizontal(|ui| {
+                            ui.strong("Selected Data");
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("Clear all").clicked() {
+                                        do_clear = true;
+                                    }
+                                    if ui.button("Sort").clicked() {
+                                        do_sort = true;
+                                    }
+                                },
+                            );
+                        });
+                        // Pad to align the list top with the left pane (two header rows).
+                        ui.add_space(ui.spacing().interact_size.y + ui.spacing().item_spacing.y);
+                        egui::ScrollArea::vertical()
+                            .id_salt("sel_list")
+                            .max_height(list_h)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.set_min_width(pane_w);
+                                for path in self.pick_add.clone() {
+                                    let hi = self.sel_hi.contains(&path);
+                                    if ui.selectable_label(hi, file_name_of(&path)).clicked()
+                                        && !self.sel_hi.remove(&path)
+                                    {
+                                        self.sel_hi.insert(path);
+                                    }
+                                }
+                            });
+                    });
                 });
+
+                if do_add {
+                    let moving: Vec<PathBuf> = self
+                        .available
+                        .iter()
+                        .filter(|p| self.avail_hi.contains(*p))
+                        .cloned()
+                        .collect();
+                    for p in moving {
+                        if !self.pick_add.contains(&p) {
+                            self.pick_add.push(p);
+                        }
+                    }
+                    self.avail_hi.clear();
+                    self.refresh_available();
+                }
+                if do_remove {
+                    self.pick_add.retain(|p| !self.sel_hi.contains(p));
+                    self.sel_hi.clear();
+                    self.refresh_available();
+                }
+                if do_sort {
+                    self.pick_add.sort();
+                }
+                if do_clear {
+                    self.pick_add.clear();
+                    self.sel_hi.clear();
+                    self.refresh_available();
+                }
+                if do_ok {
+                    self.load_staged();
+                    self.avail_hi.clear();
+                    self.sel_hi.clear();
+                    self.picker_open = false;
+                }
             });
         // The window's [x] also closes the picker.
         self.picker_open = self.picker_open && win_open;
@@ -555,9 +646,7 @@ impl PlotDataWindow {
                 self.available.push(path);
             }
         }
-        if self.pick_sort {
-            self.available.sort();
-        }
+        self.available.sort();
     }
 
     /// Load every staged file as the current graph item, reporting how many
@@ -595,9 +684,12 @@ impl PlotDataWindow {
         }
     }
 
-    /// The current x/y axis labels — the loaded files' graph item.
+    /// The current x/y axis labels — taken from the loaded files' own graph item
+    /// so they track the data even if the picker's selector has since moved to a
+    /// different space; falls back to the selector when nothing is loaded.
     fn axis_labels(&self) -> (&'static str, &'static str) {
-        (self.graph_item.x_label(), self.graph_item.y_label())
+        let item = self.loaded.first().map_or(self.graph_item, |t| t.item);
+        (item.x_label(), item.y_label())
     }
 
     /// Build the displayed traces from the loaded files — palette colours and
