@@ -539,6 +539,11 @@ impl XafsViewApp {
             return;
         };
         let mut dlg = rfd::FileDialog::new();
+        // Batch make-μ takes raw scan files, whose extension is the scan number
+        // (.000–.999). The .xmu / .chi we write back into the same folder are
+        // outputs, so restrict the picker to numeric extensions and hide them.
+        let scan_exts: Vec<String> = (0..1000).map(|n| format!("{n:03}")).collect();
+        dlg = dlg.add_filter("Scan data (.000–.999)", &scan_exts);
         if let Some(dir) = &self.session.folders.data_dir {
             dlg = dlg.set_directory(dir);
         }
