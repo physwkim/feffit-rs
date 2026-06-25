@@ -1,10 +1,14 @@
-//! The standalone **Plot Data** window: overlay any reduction stage of several
-//! loaded groups on one plot, with vertical stacking, an averaged trace, and a
-//! peak readout. Mirrors XAFSView's *Plot Data* window.
+//! The standalone **Plot Data** window: a *file viewer*. Browse a folder, pick
+//! processed output files by *File type* (`*.xmu` / `*.chi` / `*.dat` / `*.fit`)
+//! and *Graph item*, and overlay them on one plot — with vertical stacking, an
+//! averaged trace, display smoothing, and a multi-peak readout. Mirrors
+//! XAFSView's *Plot Data* window, which shows data read from files rather than
+//! the in-memory session groups.
 //!
-//! It owns its own plot (separate from the tabs' shared plot) so it can
-//! float independently. Save / zoom / legend come from the siplot toolbar; the
-//! data work (averaging, peak finding) is the headless [`xasdata::batch`] code.
+//! It owns its own plot (separate from the tabs' shared plot) so it can float
+//! independently. Save / zoom / legend come from the siplot toolbar; the data
+//! work (averaging, peak finding) is the headless [`xasdata`] code. A Feffit fit
+//! can also be sent here for a quick data-vs-model look ([`set_fit_overlay`]).
 
 use std::path::PathBuf;
 
@@ -12,82 +16,9 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
 use siplot::YAxis;
-use xasdata::{PreEdgeParams, XasGroup, average_curves, normalize, peak_in_range, x_at_y};
+use xasdata::{average_curves, peak_in_range, x_at_y};
 
 use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_trace};
-
-/// Which reduction stage to overlay.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PlotItem {
-    /// Raw `μ(E)`.
-    Mu,
-    /// Edge-step normalized `μ(E)`.
-    Norm,
-    /// Flattened normalized `μ(E)`.
-    Flat,
-    /// Derivative `dμ/dE`.
-    Deriv,
-    /// k-weighted `χ(k)`.
-    Chik,
-    /// `|χ(R)|`.
-    ChiR,
-}
-
-impl PlotItem {
-    const ALL: [PlotItem; 6] = [
-        PlotItem::Mu,
-        PlotItem::Norm,
-        PlotItem::Flat,
-        PlotItem::Deriv,
-        PlotItem::Chik,
-        PlotItem::ChiR,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            PlotItem::Mu => "μ(E)",
-            PlotItem::Norm => "normalized μ(E)",
-            PlotItem::Flat => "flattened μ(E)",
-            PlotItem::Deriv => "dμ/dE",
-            PlotItem::Chik => "kʷ·χ(k)",
-            PlotItem::ChiR => "|χ(R)|",
-        }
-    }
-
-    fn x_label(self) -> &'static str {
-        match self {
-            PlotItem::Mu | PlotItem::Norm | PlotItem::Flat | PlotItem::Deriv => "Energy (eV)",
-            PlotItem::Chik => "k (Å⁻¹)",
-            PlotItem::ChiR => "R (Å)",
-        }
-    }
-
-    /// The `(x, y)` arrays for this item from a group, applying k-weighting for
-    /// the `χ(k)` view. `None` when the group hasn't reached this stage yet.
-    fn xy(self, g: &XasGroup, kweight: i32) -> Option<(Vec<f64>, Vec<f64>)> {
-        match self {
-            PlotItem::Mu => (!g.energy.is_empty()).then(|| (g.energy.clone(), g.mu.clone())),
-            PlotItem::Norm => g.norm.as_ref().map(|v| (g.energy.clone(), v.clone())),
-            PlotItem::Flat => g.flat.as_ref().map(|v| (g.energy.clone(), v.clone())),
-            PlotItem::Deriv => g.dmude.as_ref().map(|v| (g.energy.clone(), v.clone())),
-            PlotItem::Chik => match (&g.k, &g.chi) {
-                (Some(k), Some(chi)) => {
-                    let y = k
-                        .iter()
-                        .zip(chi)
-                        .map(|(&kk, &c)| c * kk.powi(kweight))
-                        .collect();
-                    Some((k.clone(), y))
-                }
-                _ => None,
-            },
-            PlotItem::ChiR => match (&g.r, &g.chir_mag) {
-                (Some(r), Some(mag)) => Some((r.clone(), mag.clone())),
-                _ => None,
-            },
-        }
-    }
-}
 
 /// The "Items" of the Multiple peaks catching window: which feature to locate
 /// in the search range. (The original's derivative-based "Peak @ x" needs the
@@ -122,7 +53,7 @@ pub(crate) const FIT_MODEL: Color32 = crate::plot::RED;
 
 /// A Feffit fit handed over from the Feffit tab's "Send to Plot Data": its data
 /// and model curves in the chosen space, with that space's axis labels. When
-/// shown it takes over the plot (its axes differ from the group items).
+/// shown it takes over the plot (its axes differ from the file items).
 struct FitOverlay {
     label: String,
     xlabel: &'static str,
@@ -132,65 +63,13 @@ struct FitOverlay {
     model: Vec<f64>,
 }
 
-/// The Plot Data "Normalize options" (그림 1-5-1): override the reduction's
-/// pre/post-edge normalization for the Norm/Flat/dμ view, with an optional
-/// NEXAFS peak-normalization. Display-only — the session groups are untouched.
-struct NormOptions {
-    /// Apply this override instead of each group's reduction normalization.
-    on: bool,
-    /// Let `pre_edge` find E₀ (vs the explicit `e0`).
-    e0_auto: bool,
-    e0: f64,
-    pre1: f64,
-    pre2: f64,
-    norm1: f64,
-    norm2: f64,
-    /// NEXAFS: normalize so the largest peak is 1, instead of the edge step.
-    maxpoint: bool,
-}
-
-impl Default for NormOptions {
-    fn default() -> Self {
-        // larch's pre/post-edge ranges (eV relative to E₀).
-        Self {
-            on: false,
-            e0_auto: true,
-            e0: 0.0,
-            pre1: -150.0,
-            pre2: -30.0,
-            norm1: 150.0,
-            norm2: 800.0,
-            maxpoint: false,
-        }
-    }
-}
-
-impl NormOptions {
-    /// Build the [`PreEdgeParams`] for these options (mirrors the Autobk tab's
-    /// `pre_params`).
-    fn params(&self) -> PreEdgeParams {
-        let mut p = PreEdgeParams::default();
-        if !self.e0_auto {
-            p.e0 = Some(self.e0);
-        }
-        p.pre1 = Some(self.pre1);
-        p.pre2 = Some(self.pre2);
-        p.norm1 = Some(self.norm1);
-        p.norm2 = Some(self.norm2);
-        p
-    }
-}
-
 /// The Plot Data window state and its own plot.
 pub struct PlotDataWindow {
     /// Whether the window is shown.
     pub open: bool,
     plot: crate::plot::Plot,
-    item: PlotItem,
+    /// k-weight applied to any loaded k-space file (their χ is stored unweighted).
     kweight: i32,
-    /// Per-group "show this trace" flags, kept the same length as the session's
-    /// group list.
-    selected: Vec<bool>,
     /// Vertical offset added to trace `i` (`i · stack`), in data units.
     stack: f64,
     show_average: bool,
@@ -198,27 +77,25 @@ pub struct PlotDataWindow {
     smooth5: bool,
     /// "Change BG color": dark plot background (the original's black/white swap).
     dark_bg: bool,
-    /// "Normalize options" (그림 1-5-1).
-    norm: NormOptions,
     peak_lo: f64,
     peak_hi: f64,
     /// Which feature the Multiple peaks catching window locates.
     peak_mode: PeakMode,
     /// Target y for the "x at y" mode (0.5 = normalized half-step).
     peak_target: f64,
-    /// One `(group label, x, y)` row per selected group from the last catch.
+    /// One `(file label, x, y)` row per loaded file from the last catch.
     peaks: Vec<(String, f64, f64)>,
     /// A Feffit fit sent here via "Send to Plot Data", if any.
     overlay: Option<FitOverlay>,
-    /// Whether the sent fit takes over the plot (vs the group items).
+    /// Whether the sent fit takes over the plot (vs the loaded files).
     show_overlay: bool,
 
-    // --- file overlay (the original's file-based Plot Data) -----------------
+    // --- file viewer --------------------------------------------------------
     /// The selected *File type* for browsing/loading files.
     file_type: FileType,
     /// The *Graph item* under `file_type` (its file-name suffix + plot recipe).
     graph_item: GraphItem,
-    /// Files loaded for overlay, drawn additively with the group traces.
+    /// Files loaded for display.
     loaded: Vec<LoadedTrace>,
     /// Whether the "Add / remove data files" picker is open.
     picker_open: bool,
@@ -233,7 +110,7 @@ pub struct PlotDataWindow {
     /// Outcome of the last load (shown in the Files section).
     pick_status: String,
 
-    /// Set whenever the overlay needs rebuilding (control change or new data).
+    /// Set whenever the overlay needs rebuilding (control change or new files).
     dirty: bool,
 }
 
@@ -246,16 +123,13 @@ impl PlotDataWindow {
         Self {
             open: false,
             plot,
-            item: PlotItem::Norm,
             kweight: 2,
-            selected: Vec::new(),
             stack: 0.0,
             show_average: false,
             smooth5: false,
             // Dark by default, matching the cohesive dark canvas every other
             // plot uses (the checkbox still flips to the white "Change BG" mode).
             dark_bg: true,
-            norm: NormOptions::default(),
             peak_lo: 0.0,
             peak_hi: 0.0,
             peak_mode: PeakMode::Max,
@@ -276,15 +150,14 @@ impl PlotDataWindow {
         }
     }
 
-    /// Request a rebuild on the next show — call after the loaded groups or their
-    /// reduction stages change (e.g. after a batch AUTOBK).
+    /// Request a rebuild on the next show.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
     /// Take a Feffit fit's data + model curves (the Feffit form's "Send to plot
     /// data"). The window opens showing the fit; untick "Show Feffit fit" or
-    /// "Clear fit" to return to the group plot.
+    /// "Clear fit" to return to the loaded files.
     pub fn set_fit_overlay(
         &mut self,
         label: String,
@@ -307,14 +180,8 @@ impl PlotDataWindow {
         self.dirty = true;
     }
 
-    /// Render the window over `groups` (the session's spectra).
-    pub fn show(&mut self, ctx: &egui::Context, groups: &[XasGroup]) {
-        // Keep the selection vector aligned with the group list; brand-new groups
-        // start selected so they appear without a click.
-        if self.selected.len() != groups.len() {
-            self.selected.resize(groups.len(), true);
-            self.dirty = true;
-        }
+    /// Render the window.
+    pub fn show(&mut self, ctx: &egui::Context) {
         if !self.open {
             return;
         }
@@ -332,12 +199,12 @@ impl PlotDataWindow {
                     .default_size(240.0)
                     .show_inside(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            self.controls(ui, groups);
+                            self.controls(ui);
                         });
                     });
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     if self.dirty {
-                        self.rebuild(groups);
+                        self.rebuild();
                         self.dirty = false;
                     }
                     crate::plot::show(&mut self.plot, ui);
@@ -349,12 +216,12 @@ impl PlotDataWindow {
         self.open = open;
     }
 
-    /// The left-hand control column: item selector, group checkboxes, stacking,
-    /// averaging, and peak search.
-    fn controls(&mut self, ui: &mut egui::Ui, groups: &[XasGroup]) {
+    /// The left-hand control column: the file selectors, stacking, averaging,
+    /// and peak search.
+    fn controls(&mut self, ui: &mut egui::Ui) {
         ui.heading("Plot Data");
 
-        // A Feffit fit sent here overrides the group items while shown.
+        // A Feffit fit sent here overrides the file plot while shown.
         if let Some(ov) = &self.overlay {
             let label = ov.label.clone();
             ui.separator();
@@ -374,23 +241,11 @@ impl PlotDataWindow {
             ui.separator();
         }
 
-        egui::ComboBox::from_label("Array")
-            .selected_text(self.item.label())
-            .show_ui(ui, |ui| {
-                for it in PlotItem::ALL {
-                    if ui
-                        .selectable_value(&mut self.item, it, it.label())
-                        .changed()
-                    {
-                        self.dirty = true;
-                    }
-                }
-            });
-        // k-weight is relevant to the group χ(k) view and to any loaded k-space
-        // file; changing it re-reads the loaded files (their χ is stored
+        self.files_controls(ui);
+
+        // k-weight re-reads any loaded k-space file (their χ is stored
         // unweighted) so the overlay tracks the slider.
-        let kweight_relevant = matches!(self.item, PlotItem::Chik)
-            || self.loaded.iter().any(|t| t.item.applies_kweight());
+        let kweight_relevant = self.loaded.iter().any(|t| t.item.applies_kweight());
         if kweight_relevant
             && ui
                 .add(egui::Slider::new(&mut self.kweight, 0..=3).text("k-weight"))
@@ -398,29 +253,6 @@ impl PlotDataWindow {
         {
             self.reload_loaded();
             self.dirty = true;
-        }
-
-        self.files_controls(ui);
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label("Groups");
-            if ui.small_button("all").clicked() {
-                self.selected.iter_mut().for_each(|s| *s = true);
-                self.dirty = true;
-            }
-            if ui.small_button("none").clicked() {
-                self.selected.iter_mut().for_each(|s| *s = false);
-                self.dirty = true;
-            }
-        });
-        if groups.is_empty() {
-            ui.weak("No groups loaded.");
-        }
-        for (i, g) in groups.iter().enumerate() {
-            if ui.checkbox(&mut self.selected[i], &g.label).changed() {
-                self.dirty = true;
-            }
         }
 
         ui.separator();
@@ -431,7 +263,7 @@ impl PlotDataWindow {
             self.dirty = true;
         }
         if ui
-            .checkbox(&mut self.show_average, "Average of selected")
+            .checkbox(&mut self.show_average, "Average of loaded")
             .changed()
         {
             self.dirty = true;
@@ -449,56 +281,6 @@ impl PlotDataWindow {
         {
             self.dirty = true;
         }
-
-        ui.separator();
-        egui::CollapsingHeader::new("Normalize options")
-            .default_open(false)
-            .show(ui, |ui| {
-                let mut changed = ui
-                    .checkbox(&mut self.norm.on, "Apply (override reduction)")
-                    .on_hover_text(
-                        "Re-normalize the Norm/Flat/dμ view from these settings, \
-                         leaving the loaded groups unchanged",
-                    )
-                    .changed();
-                changed |= ui.checkbox(&mut self.norm.e0_auto, "auto E₀").changed();
-                if !self.norm.e0_auto {
-                    ui.horizontal(|ui| {
-                        ui.label("E₀");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut self.norm.e0).speed(0.5))
-                            .changed();
-                    });
-                }
-                egui::Grid::new("plot_norm_ranges")
-                    .num_columns(2)
-                    .show(ui, |ui| {
-                        ui.label("pre1");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut self.norm.pre1).speed(1.0))
-                            .changed();
-                        ui.label("pre2");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut self.norm.pre2).speed(1.0))
-                            .changed();
-                        ui.end_row();
-                        ui.label("norm1");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut self.norm.norm1).speed(1.0))
-                            .changed();
-                        ui.label("norm2");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut self.norm.norm2).speed(1.0))
-                            .changed();
-                        ui.end_row();
-                    });
-                changed |= ui
-                    .checkbox(&mut self.norm.maxpoint, "NEXAFS: normalize to max peak")
-                    .changed();
-                if changed {
-                    self.dirty = true;
-                }
-            });
 
         ui.separator();
         ui.label("Multiple peak catching");
@@ -521,8 +303,8 @@ impl PlotDataWindow {
                 ui.add(egui::DragValue::new(&mut self.peak_target).speed(0.01));
             });
         }
-        if ui.button("Catch peaks (selected)").clicked() {
-            self.catch_peaks(groups);
+        if ui.button("Catch peaks (loaded)").clicked() {
+            self.catch_peaks();
             self.dirty = true;
         }
         if self.peaks.is_empty() {
@@ -547,51 +329,27 @@ impl PlotDataWindow {
                 .on_hover_text("Write every displayed curve (stacked) to one file")
                 .clicked()
             {
-                self.save_composite(groups);
+                self.save_composite();
             }
         });
     }
 
-    /// The `(x, y)` arrays to plot for `g` under the current item, applying the
-    /// "Normalize options" override (Norm/Flat/dμ recomputed from a throwaway
-    /// clone) when active; otherwise the group's own reduction arrays.
-    fn series_for(&self, g: &XasGroup) -> Option<(Vec<f64>, Vec<f64>)> {
-        if self.norm.on
-            && matches!(self.item, PlotItem::Norm | PlotItem::Flat | PlotItem::Deriv)
-            && !g.energy.is_empty()
-        {
-            let mut tmp = g.clone();
-            normalize(&mut tmp, &self.norm.params());
-            if self.norm.maxpoint && self.item == PlotItem::Norm {
-                return Some((tmp.energy.clone(), peak_normalized(&tmp)));
-            }
-            return self.item.xy(&tmp, self.kweight);
-        }
-        self.item.xy(g, self.kweight)
-    }
-
-    /// The `(x, y)` actually drawn for `g`: [`series_for`](Self::series_for) plus
-    /// the optional 5-point display smoothing. The single source both the trace
-    /// loop and [`catch_peaks`](Self::catch_peaks) read, so a caught peak (and its
-    /// marker) lands on the same curve the user sees.
-    fn displayed_series(&self, g: &XasGroup) -> Option<(Vec<f64>, Vec<f64>)> {
-        let (x, y) = self.series_for(g)?;
-        let y = if self.smooth5 { smooth5(&y) } else { y };
-        Some((x, y))
-    }
-
-    /// Apply the chosen finder to every selected group over `[peak_lo, peak_hi]`,
-    /// collecting one `(label, x, y)` row per group — the original "Multiple peaks
+    /// Apply the chosen finder to every loaded file over `[peak_lo, peak_hi]`,
+    /// collecting one `(label, x, y)` row per file — the original "Multiple peaks
     /// catching", which tabulates a peak position across all plotted spectra. A
     /// marker is drawn at each caught x on rebuild.
-    fn catch_peaks(&mut self, groups: &[XasGroup]) {
+    fn catch_peaks(&mut self) {
         self.peaks.clear();
-        for (i, g) in groups.iter().enumerate() {
-            if !self.selected.get(i).copied().unwrap_or(false) {
-                continue;
-            }
-            let Some((x, y)) = self.displayed_series(g) else {
-                continue;
+        for idx in 0..self.loaded.len() {
+            // Borrow one file briefly: clone what the search needs so the push
+            // below does not overlap the `self.loaded` borrow.
+            let t = &self.loaded[idx];
+            let label = t.label.clone();
+            let x = t.x.clone();
+            let y = if self.smooth5 {
+                smooth5(&t.y)
+            } else {
+                t.y.clone()
             };
             let found = match self.peak_mode {
                 PeakMode::Max => peak_in_range(&x, &y, self.peak_lo, self.peak_hi),
@@ -602,14 +360,13 @@ impl PlotDataWindow {
                 }
             };
             if let Some((px, py)) = found {
-                self.peaks.push((g.label.clone(), px, py));
+                self.peaks.push((label, px, py));
             }
         }
     }
 
     /// The "Files" control block: file-type / graph-item selectors, the picker
-    /// button, the loaded-file list, and Clear Graph (the original's file-based
-    /// Plot Data controls).
+    /// button, the loaded-file list, and Clear Graph.
     fn files_controls(&mut self, ui: &mut egui::Ui) {
         ui.separator();
         ui.strong("Files");
@@ -645,7 +402,9 @@ impl PlotDataWindow {
             self.refresh_available();
         }
 
-        if !self.loaded.is_empty() {
+        if self.loaded.is_empty() {
+            ui.weak("No files loaded — ADD Data Files to plot.");
+        } else {
             ui.add_space(2.0);
             ui.label(format!("{} file(s) loaded:", self.loaded.len()));
             let mut remove = None;
@@ -836,20 +595,15 @@ impl PlotDataWindow {
         }
     }
 
-    /// The current x/y axis labels: the loaded files' graph item when files are
-    /// shown, otherwise the group item.
+    /// The current x/y axis labels — the loaded files' graph item.
     fn axis_labels(&self) -> (&'static str, &'static str) {
-        if self.loaded.is_empty() {
-            (self.item.x_label(), self.item.label())
-        } else {
-            (self.graph_item.x_label(), self.graph_item.y_label())
-        }
+        (self.graph_item.x_label(), self.graph_item.y_label())
     }
 
-    /// Build the displayed traces — selected groups then loaded files — with
-    /// their palette colours and 5-point smoothing applied, before any stacking
-    /// offset. One source of truth for both drawing and saving.
-    fn built_traces(&self, groups: &[XasGroup]) -> Vec<(String, Vec<f64>, Vec<f64>, Color32)> {
+    /// Build the displayed traces from the loaded files — palette colours and
+    /// 5-point smoothing applied, before any stacking offset. One source of
+    /// truth for both drawing and saving.
+    fn built_traces(&self) -> Vec<(String, Vec<f64>, Vec<f64>, Color32)> {
         // Bright curves on the dark canvas; the muted tab10 on the white "Change
         // BG" canvas, where the bright palette would wash out.
         let palette = if self.dark_bg {
@@ -858,16 +612,6 @@ impl PlotDataWindow {
             crate::plot::PALETTE_LIGHT
         };
         let mut traces: Vec<(String, Vec<f64>, Vec<f64>, Color32)> = Vec::new();
-        for (i, g) in groups.iter().enumerate() {
-            if !self.selected.get(i).copied().unwrap_or(false) {
-                continue;
-            }
-            if let Some((x, y)) = self.displayed_series(g) {
-                let color = palette[traces.len() % palette.len()];
-                traces.push((g.label.clone(), x, y, color));
-            }
-        }
-        // Loaded files overlay additively with the group traces.
         for t in &self.loaded {
             let y = if self.smooth5 {
                 smooth5(&t.y)
@@ -882,8 +626,8 @@ impl PlotDataWindow {
 
     /// Every displayed curve with its stacking offset applied — exactly what is
     /// drawn (minus the average overlay). Feeds "Save in single file".
-    fn displayed_composite(&self, groups: &[XasGroup]) -> Vec<(String, Vec<f64>, Vec<f64>)> {
-        self.built_traces(groups)
+    fn displayed_composite(&self) -> Vec<(String, Vec<f64>, Vec<f64>)> {
+        self.built_traces()
             .into_iter()
             .enumerate()
             .map(|(idx, (label, x, y, _color))| {
@@ -900,10 +644,10 @@ impl PlotDataWindow {
 
     /// "Save in single file": write every displayed (stacked) curve to one file
     /// the user picks.
-    fn save_composite(&mut self, groups: &[XasGroup]) {
-        let traces = self.displayed_composite(groups);
+    fn save_composite(&mut self) {
+        let traces = self.displayed_composite();
         if traces.is_empty() {
-            self.pick_status = "Nothing to save — select a group or load a file.".to_owned();
+            self.pick_status = "Nothing to save — load a file first.".to_owned();
             return;
         }
         let Some(path) = rfd::FileDialog::new()
@@ -923,8 +667,8 @@ impl PlotDataWindow {
         };
     }
 
-    /// Rebuild every plotted curve from the current selection and settings.
-    fn rebuild(&mut self, groups: &[XasGroup]) {
+    /// Rebuild every plotted curve from the loaded files and current settings.
+    fn rebuild(&mut self) {
         self.plot.clear();
 
         // Background colour (the "Change BG color" swap): a dark canvas or the
@@ -939,7 +683,7 @@ impl PlotDataWindow {
         crate::plot::set_theme(&mut self.plot, !self.dark_bg);
 
         // A sent Feffit fit takes over the plot (its space/axes differ from the
-        // group items), so draw it alone and skip the group traces.
+        // file items), so draw it alone and skip the file traces.
         if self.show_overlay
             && let Some(ov) = &self.overlay
         {
@@ -954,15 +698,13 @@ impl PlotDataWindow {
             return;
         }
 
-        // Axis labels follow the loaded files' graph item when any file is shown
-        // (Plot Data is primarily a file viewer); otherwise the group item.
         let (xlabel, ylabel) = self.axis_labels();
         self.plot.set_graph_x_label(xlabel);
         self.plot.set_graph_y_label(ylabel, YAxis::Left);
 
-        // Selected groups then loaded files, with palette colours and smoothing,
-        // before any stacking offset (shared with the "Save in single file" path).
-        let traces = self.built_traces(groups);
+        // Palette colours and smoothing, before any stacking offset (shared with
+        // the "Save in single file" path).
+        let traces = self.built_traces();
 
         // The averaged trace is computed on the un-stacked data, before offsets.
         let avg = if self.show_average && traces.len() > 1 {
@@ -1027,19 +769,6 @@ fn write_composite(
         }
     }
     std::fs::write(path, s)
-}
-
-/// NEXAFS peak normalization: `(μ − pre-edge) / max(μ − pre-edge)`, so the
-/// largest peak sits at 1 (the original's "normalize to the max point"). Expects
-/// `g.pre_edge` filled (call [`normalize`] first).
-fn peak_normalized(g: &XasGroup) -> Vec<f64> {
-    let pre = g.pre_edge.as_deref().unwrap_or(&[]);
-    let diff: Vec<f64> = g.mu.iter().zip(pre).map(|(&m, &p)| m - p).collect();
-    let peak = diff.iter().copied().fold(f64::MIN, f64::max);
-    if peak.abs() < 1e-300 {
-        return diff;
-    }
-    diff.iter().map(|d| d / peak).collect()
 }
 
 /// A 5-point centered moving average (the original's "Average (5 points)"), with
