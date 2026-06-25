@@ -6,7 +6,7 @@ members = ["crates/feffit", "crates/xafsview"]
 edition = "2024"
 license = "MIT"
 rust-version = "1.89"
-repository = "https://github.com/pls-controls/feffit-rs"
+repository = "https://github.com/physwkim/feffit-rs"
 
 [workspace.dependencies]
 num-complex = "0.4"
