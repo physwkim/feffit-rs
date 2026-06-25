@@ -1280,12 +1280,14 @@ impl XafsViewApp {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Multiple AUTOBK (reduce all loaded)").clicked() {
-                    run_multi_autobk = true;
-                    ui.close();
-                }
+                // Workflow order: build μ(E) for the files first, then reduce
+                // every loaded group.
                 if ui.button("Make μ(E) from files…").clicked() {
                     make_xmu_files = true;
+                    ui.close();
+                }
+                if ui.button("Multiple AUTOBK (reduce all loaded)").clicked() {
+                    run_multi_autobk = true;
                     ui.close();
                 }
                 ui.separator();
