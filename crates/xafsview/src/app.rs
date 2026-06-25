@@ -1391,15 +1391,36 @@ impl XafsViewApp {
                     // Only the folders this app actually uses (functional fields only):
                     // the original's Base / Sub base / Autobk / Feffit_txt / IE Explorer
                     // / Results folders have no engine mapping here.
+                    // Size the path field from the *panel* width here (full width,
+                    // since the scroll area's horizontal auto-shrink is off), not
+                    // from inside the grid cell where the available width is tiny.
+                    // Reserve room for the label + Browse columns, clamp so a narrow
+                    // window still shows a usable field and a wide one doesn't sprawl.
+                    let field_w = (ui.available_width() - 300.0).clamp(360.0, 760.0);
                     egui::Grid::new("folders_grid")
                         .num_columns(3)
                         .spacing([8.0, 8.0])
                         .show(ui, |ui| {
-                            folder_row(ui, "Data folder", &mut self.session.folders.data_dir);
+                            folder_row(
+                                ui,
+                                "Data folder",
+                                &mut self.session.folders.data_dir,
+                                field_w,
+                            );
                             ui.end_row();
-                            folder_row(ui, "Work folder", &mut self.session.folders.work_dir);
+                            folder_row(
+                                ui,
+                                "Work folder",
+                                &mut self.session.folders.work_dir,
+                                field_w,
+                            );
                             ui.end_row();
-                            folder_row(ui, "FEFF folder", &mut self.session.folders.feff_dir);
+                            folder_row(
+                                ui,
+                                "FEFF folder",
+                                &mut self.session.folders.feff_dir,
+                                field_w,
+                            );
                             ui.end_row();
                         });
 
@@ -1559,8 +1580,10 @@ impl eframe::App for XafsViewApp {
 }
 
 /// One labelled folder row: the current path (or "(not set)") and a Browse
-/// button that opens a native folder picker.
-fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBuf>) {
+/// button that opens a native folder picker. `field_w` is the path field's
+/// forced width — see [`folders_panel`] for why it is forced rather than
+/// requested.
+fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBuf>, field_w: f32) {
     ui.label(label);
     // Editable path text (mirrors the original's typeable folder field), kept in
     // sync with the PathBuf; an empty string clears it.
@@ -1568,10 +1591,13 @@ fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBu
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
-    let resp = ui.add(
-        egui::TextEdit::singleline(&mut text)
-            .desired_width(380.0)
-            .hint_text("(not set)"),
+    // `add_sized` forces the width: a singleline `TextEdit::desired_width` is only
+    // a *request* that egui clamps to `ui.available_width()` (builder.rs:471-475),
+    // and inside an `egui::Grid` the cell's available width is tiny — which
+    // collapsed the field to a sliver. `add_sized` allocates `field_w` outright.
+    let resp = ui.add_sized(
+        [field_w, ui.spacing().interact_size.y],
+        egui::TextEdit::singleline(&mut text).hint_text("(not set)"),
     );
     if resp.changed() {
         *dir = if text.trim().is_empty() {
