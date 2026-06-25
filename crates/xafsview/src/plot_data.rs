@@ -110,6 +110,11 @@ pub struct PlotDataWindow {
     avail_hi: HashSet<PathBuf>,
     /// Multi-selection highlight in the "Selected Data" pane.
     sel_hi: HashSet<PathBuf>,
+    /// Anchor row (the last plain click) in each pane; a shift-click selects the
+    /// whole inclusive range between it and the clicked row. `None` until the
+    /// first plain click, and reset whenever the list contents change.
+    avail_anchor: Option<usize>,
+    sel_anchor: Option<usize>,
     /// Outcome of the last load (shown in the Files section).
     pick_status: String,
 
@@ -149,6 +154,8 @@ impl PlotDataWindow {
             pick_add: Vec::new(),
             avail_hi: HashSet::new(),
             sel_hi: HashSet::new(),
+            avail_anchor: None,
+            sel_anchor: None,
             pick_status: String::new(),
             dirty: true,
         }
@@ -530,14 +537,13 @@ impl PlotDataWindow {
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.set_min_width(pane_w);
-                                    for path in self.available.clone() {
-                                        let hi = self.avail_hi.contains(&path);
-                                        if ui.selectable_label(hi, file_name_of(&path)).clicked()
-                                            && !self.avail_hi.remove(&path)
-                                        {
-                                            self.avail_hi.insert(path);
-                                        }
-                                    }
+                                    let avail = self.available.clone();
+                                    select_list(
+                                        ui,
+                                        &avail,
+                                        &mut self.avail_hi,
+                                        &mut self.avail_anchor,
+                                    );
                                 });
                         });
 
@@ -591,14 +597,13 @@ impl PlotDataWindow {
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.set_min_width(pane_w);
-                                    for path in self.pick_add.clone() {
-                                        let hi = self.sel_hi.contains(&path);
-                                        if ui.selectable_label(hi, file_name_of(&path)).clicked()
-                                            && !self.sel_hi.remove(&path)
-                                        {
-                                            self.sel_hi.insert(path);
-                                        }
-                                    }
+                                    let staged = self.pick_add.clone();
+                                    select_list(
+                                        ui,
+                                        &staged,
+                                        &mut self.sel_hi,
+                                        &mut self.sel_anchor,
+                                    );
                                 });
                         });
                     });
@@ -625,6 +630,7 @@ impl PlotDataWindow {
                     }
                     if do_sort {
                         self.pick_add.sort();
+                        self.sel_anchor = None;
                     }
                     if do_clear {
                         self.pick_add.clear();
@@ -648,6 +654,9 @@ impl PlotDataWindow {
     /// the ones already staged in "Selected Data" (which holds the loaded set
     /// while the picker is open). Sorted by name.
     fn refresh_available(&mut self) {
+        // The lists are about to change, so any anchored row index is stale.
+        self.avail_anchor = None;
+        self.sel_anchor = None;
         self.available.clear();
         let Some(dir) = self.pick_dir.clone() else {
             return;
@@ -854,6 +863,40 @@ impl PlotDataWindow {
         for (_, px, _) in &self.peaks {
             self.plot
                 .add_x_marker(*px, Color32::from_rgb(0x80, 0x80, 0x80));
+        }
+    }
+}
+
+/// Render a click-selectable file list with toggle + shift-range multi-select.
+///
+/// A plain click toggles one row and becomes the new anchor. A shift-click (when
+/// an anchor exists) adds every row in the inclusive range between the anchor
+/// and the clicked row — the standard "click one, shift-click another, select
+/// everything between" behaviour — without moving the anchor, so successive
+/// shift-clicks all extend from the same origin.
+fn select_list(
+    ui: &mut egui::Ui,
+    list: &[PathBuf],
+    hi: &mut HashSet<PathBuf>,
+    anchor: &mut Option<usize>,
+) {
+    let shift = ui.input(|i| i.modifiers.shift);
+    for (idx, path) in list.iter().enumerate() {
+        let selected = hi.contains(path);
+        if ui.selectable_label(selected, file_name_of(path)).clicked() {
+            match (shift, *anchor) {
+                (true, Some(a)) => {
+                    for p in &list[a.min(idx)..=a.max(idx)] {
+                        hi.insert(p.clone());
+                    }
+                }
+                _ => {
+                    if !hi.remove(path) {
+                        hi.insert(path.clone());
+                    }
+                    *anchor = Some(idx);
+                }
+            }
         }
     }
 }
