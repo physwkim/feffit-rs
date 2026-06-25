@@ -384,6 +384,11 @@ impl PlotDataWindow {
         ));
         if ui.button("ADD or DEL Data Files…").clicked() {
             self.picker_open = true;
+            // Seed "Selected Data" with the currently-loaded (plotted) files so
+            // they can be removed here: OK reconciles the loaded set to whatever
+            // remains selected, so `<=` actually un-plots a file.
+            self.pick_add = self.loaded.iter().map(|t| t.path.clone()).collect();
+            self.sel_hi.clear();
             self.refresh_available();
         }
 
@@ -439,7 +444,8 @@ impl PlotDataWindow {
                         && let Some(dir) = rfd::FileDialog::new().pick_folder()
                     {
                         self.pick_dir = Some(dir);
-                        self.pick_add.clear();
+                        // Keep the current selection (it may span folders); only
+                        // the Available list and highlights follow the new folder.
                         self.avail_hi.clear();
                         self.sel_hi.clear();
                         self.refresh_available();
@@ -629,7 +635,8 @@ impl PlotDataWindow {
     }
 
     /// List the files in `pick_dir` that match the current graph item, excluding
-    /// already-staged and already-loaded files. Sorted when "Sort" is on.
+    /// the ones already staged in "Selected Data" (which holds the loaded set
+    /// while the picker is open). Sorted by name.
     fn refresh_available(&mut self) {
         self.available.clear();
         let Some(dir) = self.pick_dir.clone() else {
@@ -644,7 +651,7 @@ impl PlotDataWindow {
                 continue;
             }
             let name = file_name_of(&path);
-            let taken = self.pick_add.contains(&path) || self.loaded.iter().any(|t| t.path == path);
+            let taken = self.pick_add.contains(&path);
             if self.graph_item.matches(&name) && !taken {
                 self.available.push(path);
             }
@@ -652,25 +659,32 @@ impl PlotDataWindow {
         self.available.sort();
     }
 
-    /// Load every staged file as the current graph item, reporting how many
-    /// loaded / failed in `pick_status`.
+    /// Reconcile the loaded set to the staged selection (`pick_add`): reuse the
+    /// traces still selected (no re-read, so their original graph item is kept),
+    /// load the newly-staged files as the current graph item, and drop the ones
+    /// removed in the picker. Display order follows the staged list.
     fn load_staged(&mut self) {
         let (item, kw) = (self.graph_item, self.kweight);
         let staged = std::mem::take(&mut self.pick_add);
-        let (mut ok, mut failed) = (0usize, 0usize);
+        // Move the current traces aside; still-selected files are reused from
+        // here, anything left over is dropped (un-plotted).
+        let mut prev = std::mem::take(&mut self.loaded);
+        let mut failed = 0usize;
         for path in staged {
-            match load_trace(&path, item, kw) {
-                Ok(t) => {
-                    self.loaded.push(t);
-                    ok += 1;
+            if let Some(pos) = prev.iter().position(|t| t.path == path) {
+                self.loaded.push(prev.remove(pos));
+            } else {
+                match load_trace(&path, item, kw) {
+                    Ok(t) => self.loaded.push(t),
+                    Err(_) => failed += 1,
                 }
-                Err(_) => failed += 1,
             }
         }
+        let n = self.loaded.len();
         self.pick_status = if failed > 0 {
-            format!("Loaded {ok} file(s); {failed} could not be read.")
+            format!("Showing {n} file(s); {failed} could not be read.")
         } else {
-            format!("Loaded {ok} file(s).")
+            format!("Showing {n} file(s).")
         };
         self.refresh_available();
         self.dirty = true;
