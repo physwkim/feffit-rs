@@ -47,6 +47,14 @@ jobs:
       # the prebuilt libfeff10-windows-x86_64.a via curl on first build.
       - name: Build release exe
         shell: msys2 {0}
+        env:
+          # Pin the prebuilt libfeff10-windows-x86_64.a to a vetted hash. With
+          # this set, feff10-sys verifies the download against this constant
+          # instead of the sha256sums.txt it would otherwise fetch from the same
+          # release (which only catches a tampered .a, not an upstream that
+          # swaps both). An upstream asset swap then fails the build instead of
+          # being trusted. Update this when the feff10 dependency is bumped.
+          FEFF10_LIB_SHA256: b575f0a92aaa8862b24a7326210a1c8fb42faed24cd2338bf67b547f8c8354a7
         run: |
           export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:$PATH"
           cargo build --release --target x86_64-pc-windows-gnu -p xafsview
