@@ -670,6 +670,12 @@ impl PlotDataWindow {
                 continue;
             }
             let name = file_name_of(&path);
+            // Skip hidden/metadata files: dotfiles like macOS AppleDouble "._*"
+            // sidecars (created when copying to FAT/exFAT/SMB, visible on Windows)
+            // and ".DS_Store" are not data and only clutter the list.
+            if name.starts_with('.') {
+                continue;
+            }
             let taken = self.pick_add.contains(&path);
             if self.graph_item.matches(&name) && !taken {
                 self.available.push(path);
