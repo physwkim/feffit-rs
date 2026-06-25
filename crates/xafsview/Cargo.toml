@@ -1,6 +1,6 @@
 [package]
 name = "xafsview"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -21,7 +21,7 @@ path = "src/main.rs"
 # FEFFIT fit driver, and the Atoms/Feff input + run support (feffinp/feffrun).
 # `spacegroup` pulls in pure-Rust space-group symmetry expansion for the Atoms
 # tab; the in-process FEFF10 backend (`feff10`) is on by feffit's default.
-feffit = { path = "../feffit", version = "0.1.0", features = ["spacegroup"] }
+feffit = { path = "../feffit", version = "0.1.1", features = ["spacegroup"] }
 
 # GUI stack. Pinned to 0.34 to match siplot's egui/egui-wgpu pins; the wgpu
 # renderer is required (Plot1D paints through an egui-wgpu callback).
