@@ -11,6 +11,10 @@ repository = "https://github.com/pls-controls/feffit-rs"
 [workspace.dependencies]
 num-complex = "0.4"
 rustfft = "6"
+# Data parallelism for the batch drivers (Multiple AUTOBK, batch make-μ, Feffit
+# batch): each group/file/fit is independent, so a parallel iterator over them
+# scales the slow reductions and fits across cores.
+rayon = "1"
 # Pure-Rust atomic/X-ray database (edges, lines, cross-sections, Chantler f1/f2,
 # ion-chamber, materials) — mirrors Python xraydb. GUI-only (the P8 calculators).
 xraydb = "0.1.2"

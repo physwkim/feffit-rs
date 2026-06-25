@@ -10,6 +10,8 @@
 //! - [`average_curves`] — the mean of several curves on a common grid.
 //! - [`peak_in_range`] — the maximum of a curve within an x window.
 
+use rayon::prelude::*;
+
 use crate::group::XasGroup;
 use crate::reader::ColumnFile;
 use crate::reduce::{FtParams, autobk_group, normalize, xftf_group};
@@ -23,8 +25,11 @@ use xasproc::{AutobkParams, PreEdgeParams};
 /// the spec yields `Err(XmuError)` without aborting the rest. Each built group is
 /// labelled from the file stem and remembers its source path.
 pub fn make_xmu_batch(files: &[ColumnFile], spec: &MuSpec) -> Vec<Result<XasGroup, XmuError>> {
+    // Each file is independent; `par_iter().collect()` preserves input order, so
+    // the caller's `files[i]` ↔ `result[i]` pairing (used for output numbering)
+    // still holds.
     files
-        .iter()
+        .par_iter()
         .map(|cf| {
             let (energy, mu) = build_mu(cf, spec)?;
             let label = cf
@@ -50,17 +55,19 @@ pub fn reduce_all(
     ft: &FtParams,
     err_sigma: f64,
 ) -> usize {
-    let mut n = 0;
-    for g in groups.iter_mut() {
-        if g.mu.is_empty() {
-            continue;
-        }
-        normalize(g, pre);
-        autobk_group(g, bk, err_sigma);
-        xftf_group(g, ft);
-        n += 1;
-    }
-    n
+    // Every group reduces independently (each call mutates only its own group and
+    // builds its own FFT planner — no shared state), so fan the slow
+    // normalize → AUTOBK → FT chain across cores. `count()` drives the `map`
+    // side effects and returns the number of groups actually reduced.
+    groups
+        .par_iter_mut()
+        .filter(|g| !g.mu.is_empty())
+        .map(|g| {
+            normalize(g, pre);
+            autobk_group(g, bk, err_sigma);
+            xftf_group(g, ft);
+        })
+        .count()
 }
 
 /// The point-wise mean of several `(x, y)` curves on a common grid.
