@@ -13,12 +13,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use feffdat::FeffPath;
+use feffit::feffdat::FeffPath;
+use feffit::params::Parameters;
+use feffit::xafsft::Window;
 use feffit::{
     DataSet, FeffitResult, FitDataSet, FitSpace, PathSpec, Spec, Transform, XafsOutput, feffit,
 };
-use params::Parameters;
-use xafsft::Window;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data")
@@ -781,7 +781,7 @@ fn feffit_sigma2_eins_matches_larch() {
 /// (eins-synthesized, noisy) data with `sigma2 = sigma2_debye(temp, thetad)`,
 /// then confirm the feffit-reported σ² stderr equals an INDEPENDENT first-order
 /// propagation — `|d sigma2_debye/d thetad|` (central difference of
-/// `feffdat::sigma2_debye` directly) times `stderr(thetad)` — since σ² depends
+/// `feffit::feffdat::sigma2_debye` directly) times `stderr(thetad)` — since σ² depends
 /// on `thetad` alone. This validates the `sigma2_debye` dispatch in the fit loop
 /// and the numerical propagation wiring without a larch reference.
 #[test]
@@ -826,13 +826,13 @@ fn feffit_sigma2_debye_propagation_consistent() {
         .unwrap();
 
     // value: reported σ² must equal sigma2_debye at the best thetad
-    let val_exp = feffdat::sigma2_debye(300.0, thetad.value, fdat.rnorman, &fdat.geom);
+    let val_exp = feffit::feffdat::sigma2_debye(300.0, thetad.value, fdat.rnorman, &fdat.geom);
     assert!(rel(sigma2.value, val_exp) < 1e-9, "debye σ² value");
 
     // stderr: independent single-variable propagation
     let h = 1.0e-3;
-    let sp = feffdat::sigma2_debye(300.0, thetad.value + h, fdat.rnorman, &fdat.geom);
-    let sm = feffdat::sigma2_debye(300.0, thetad.value - h, fdat.rnorman, &fdat.geom);
+    let sp = feffit::feffdat::sigma2_debye(300.0, thetad.value + h, fdat.rnorman, &fdat.geom);
+    let sm = feffit::feffdat::sigma2_debye(300.0, thetad.value - h, fdat.rnorman, &fdat.geom);
     let stderr_exp = ((sp - sm) / (2.0 * h)).abs() * thetad.stderr;
     println!(
         "debye σ²: value={:.8e} thetad={:.4}±{:.4} | stderr got={:.6e} expect={:.6e} (rel {:.2e})",

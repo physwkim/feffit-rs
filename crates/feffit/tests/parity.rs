@@ -8,9 +8,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use feffdat::FeffPath;
+use feffit::feffdat::FeffPath;
+use feffit::xafsft::Window;
 use feffit::{DataSet, FitSpace, Transform};
-use xafsft::Window;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data")

@@ -3,16 +3,18 @@
 //!
 //! Both reduce to: pick spectra from the session, build the analysis matrix on
 //! the reference spectrum's native energy grid over a fit range
-//! ([`xasdata::groups2matrix`], cubic interpolation — matching larch), and call
-//! the headless engine ([`xasdata::lincombo_fit`] / [`xasdata::pca_train`] +
-//! [`xasdata::pca_fit`]). Each window owns its own plot. Spectra are taken
+//! ([`feffit::xasdata::groups2matrix`], cubic interpolation — matching larch), and call
+//! the headless engine ([`feffit::xasdata::lincombo_fit`] / [`feffit::xasdata::pca_train`] +
+//! [`feffit::xasdata::pca_fit`]). Each window owns its own plot. Spectra are taken
 //! as normalized or flattened μ(E); a group must have been normalized first.
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
+use feffit::xasdata::{
+    PcaModel, XasGroup, groups2matrix, interp_cubic, lincombo_fit, pca_fit, pca_train,
+};
 use siplot::YAxis;
-use xasdata::{PcaModel, XasGroup, groups2matrix, interp_cubic, lincombo_fit, pca_fit, pca_train};
 
 use crate::plot::{BLUE, CYAN, GREEN, ORANGE, PURPLE, RED};
 

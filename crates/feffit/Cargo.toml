@@ -5,17 +5,25 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "EXAFS path-sum fitting (feffit) core — a pure-Rust port of larch.xafs.feffit"
+description = "Pure-Rust EXAFS toolkit — data reduction (pre-edge/normalize/AUTOBK), Fourier transforms, FEFF path fitting (feffit), and feff.inp build/run; a port of larch.xafs"
 
 [dependencies]
-num-complex.workspace = true
-feffdat = { path = "../feffdat" }
-xafsft = { path = "../xafsft" }
-params = { path = "../params" }
-lm = { path = "../lm" }
+num-complex = { workspace = true }
+rustfft = { workspace = true }
+rayon = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusty-fitpack = "0.1.2"
+nalgebra = "0.35"
+# Optional pure-Rust space-group symmetry expansion (asymmetric unit + space
+# group → full cell) used by the `feffinp` module's Atoms support, behind the
+# `spacegroup` feature.
+crystallographic-group = { version = "0.3.1", optional = true }
+# In-process FEFF10 backend for the `feffrun` module, behind the `feff10`
+# feature (on by default, matching the former standalone `feffrun` crate).
+feff10 = { version = "0.2.2", optional = true }
 
-[dev-dependencies]
-# End-to-end capstone test only: drive FEFF8L (subprocess) to generate the
-# feffNNNN.dat that the fit consumes. feffrun does not depend on feffit, so this
-# is acyclic.
-feffrun = { path = "../feffrun" }
+[features]
+default = ["feff10"]
+feff10 = ["dep:feff10"]
+spacegroup = ["dep:crystallographic-group"]

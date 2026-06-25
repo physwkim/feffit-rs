@@ -2,13 +2,13 @@
 //!
 //! After a [`ColumnFile`] is read, [`ImportState`] holds the user's choice of
 //! energy column, measurement mode, and monitor columns (seeded from the file's
-//! own [`RoleGuess`](xasdata::RoleGuess)). Its [`ui`](ImportState::ui) renders
+//! own [`RoleGuess`](feffit::xasdata::RoleGuess)). Its [`ui`](ImportState::ui) renders
 //! the chooser and returns [`ImportAction::CalcXmu`] when the user is ready to
 //! build `mu(E)`; [`to_spec`](ImportState::to_spec) turns the choices into a
-//! [`MuSpec`] for [`xasdata::build_mu`].
+//! [`MuSpec`] for [`feffit::xasdata::build_mu`].
 
 use eframe::egui;
-use xasdata::{ColumnFile, MuSpec};
+use feffit::xasdata::{ColumnFile, MuSpec};
 
 /// The measurement geometry the user selects.
 #[derive(Clone, Copy, PartialEq, Eq)]

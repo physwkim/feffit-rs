@@ -9,13 +9,13 @@
 //! [`FeffitUi::run`], which the app calls with the group's `k`/`chi`.
 
 use eframe::egui;
-use feffdat::FeffPath;
+use feffit::feffdat::FeffPath;
+use feffit::params::Parameters;
+use feffit::xasdata::Window;
 use feffit::{
     DataSet, FeffitResult, FitDataSet, FitSpace, PATH_PNAMES, PathSpec, Spec, Transform,
     XafsOutput, feffit,
 };
-use params::Parameters;
-use xasdata::Window;
 
 /// What the FEFFIT controls need the app to do this frame.
 pub enum FeffitAction {
@@ -1003,14 +1003,14 @@ mod tests {
         assert_eq!(sp.item("e0"), (0.0, 0.0));
     }
 
-    use feffdat::FeffDatFile;
-    use xasdata::{
+    use feffit::feffdat::FeffDatFile;
+    use feffit::xasdata::{
         AutobkParams, ColumnFile, MuSpec, PreEdgeParams, XasGroup, autobk_group, build_mu,
         normalize,
     };
 
     // Workspace fixtures: a real Cu mu(E) and the two first-shell Cu Feff paths.
-    const CU_XMU: &str = include_str!("../../xasdata/tests/data/cu.xmu");
+    const CU_XMU: &str = include_str!("../../feffit/tests/data/cu.xmu");
     const FEFF0001: &str = include_str!("../../feffit/tests/data/feff0001.dat");
     const FEFF0002: &str = include_str!("../../feffit/tests/data/feff0002.dat");
 

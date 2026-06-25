@@ -6,14 +6,14 @@
 //! a folder. This module maps each (file type, graph item) pair to the file-name
 //! suffix it selects and the recipe for turning the file's columns into an
 //! `(x, y)` curve, and reads one file into a [`LoadedTrace`] via
-//! [`xasdata::ColumnFile`].
+//! [`feffit::xasdata::ColumnFile`].
 //!
 //! Colours are assigned at draw time (in `plot_data::rebuild`), not stored here,
 //! so a [`LoadedTrace`] is just the labelled data.
 
 use std::path::{Path, PathBuf};
 
-use xasdata::ColumnFile;
+use feffit::xasdata::ColumnFile;
 
 /// The four file-overlay types of the original's *File type* selector. (The
 /// analysis-mode types — `Normalize`, `*.result`, `res. all`, `*_Dearctan.dat`,

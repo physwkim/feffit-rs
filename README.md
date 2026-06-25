@@ -97,38 +97,24 @@ independently of the main window.
 ## Layout
 
 ```
-crates/feffdat/        # parse feffNNNN.dat + compute chi(k)
-  src/constants.rs     # KTOE/ETOK, bit-identical to larch xafsutils
-  src/parser.rs        # FeffDatFile._read port (incl. path geometry + rmass)
-  src/interp.rs        # numpy.interp (exact) + not-a-knot cubic spline
-  src/path.rs          # _calc_chi / path2chi / ff2chi
-  src/mass.rs          # atomic masses by Z (generated from xraydb)
-  src/sigma2.rs        # sigma2_eins / sigma2_debye Debye-Waller models
-  tests/parity.rs      # parser + linear-chi parity tests
-  tests/sigma2_parity.rs  # rmass / sigma2_eins / sigma2_debye vs larch
-  tests/data/          # example .dat files + generated references
-crates/xafsft/         # XAFS Fourier transforms (xftf/xftr) + FT windows
-  src/bessel.rs        # Cephes I0 (parity with scipy.special.i0)
-  src/window.rs        # ftwindow (hanning/kaiser/parzen/welch/…)
-  src/transform.rs     # xftf/xftr/*_fast (rustfft)
-crates/feffit/         # path-sum fitting core
+crates/feffit/         # the whole EXAFS engine as ONE library (formerly 9 crates,
+                       # now modules; only feffit + xafsview are published)
+  src/lib.rs           # fit API re-exports + module declarations
   src/transform.rs     # TransformGroup: k/R windows, fftf/fftr
   src/dataset.rs       # FeffitDataSet: prepare_fit, residual, epsilon estimation
   src/fit.rs           # feffit(): params + path exprs + LM + statistics
   src/outputs.rs       # save_outputs/_xafsft: data/model/path chi(R) + chi(q)
   src/bkg.rs           # refine_bkg cubic B-spline: FITPACK splev + knot vector
-crates/params/         # lmfit-style parameters with constraint expressions
-  src/expr.rs          # asteval-subset parser/evaluator (+ AD, FuncCtx hook)
-  src/parameters.rs    # Parameters: vary/fixed/expr, dependency-ordered resolve
-crates/lm/             # Levenberg-Marquardt least squares (MINPACK lmdif port)
-  src/lmdif.rs         # enorm/fdjac2/qrfac/qrsolv/lmpar/lmdif + covariance
-crates/feffrun/        # drive FEFF8L (feff8l_* subprocess) feff.inp -> feffNNNN.dat
-  src/lib.rs           # Feff8l runner: pipeline, exe discovery (FEFF8L_DIR/PATH)
-  tests/data/feff.inp  # real Cu feff.inp fixture (from feff85exafs)
-crates/feffinp/        # crystal cell -> feff.inp + parse feff.inp (input side of the FEFF boundary)
-  src/lib.rs           # Crystal::cluster (cell -> FEFF cluster) + feff.inp parser
-crates/xasproc/        # larch.xafs reduction: pre_edge/normalize, AUTOBK, rebin, deconvolve (vs larch)
-crates/xasdata/        # XAS session model: XasGroup (mu(E)->norm->AUTOBK->FT), Session/Folders, beamline I/O, batch drivers
+  src/feffdat/         # parse feffNNNN.dat + compute chi(k); atomic masses; sigma2 models
+  src/xafsft/          # XAFS Fourier transforms (xftf/xftr), FT windows, Cephes I0
+  src/params/          # lmfit-style parameters + constraint expressions (asteval-subset + AD)
+  src/lm/              # Levenberg-Marquardt least squares (MINPACK lmdif port)
+  src/feffrun/         # FEFF8L subprocess / in-process FEFF10 (feature `feff10`): feff.inp -> feffNNNN.dat
+  src/feffinp/         # crystal cell -> feff.inp + parse feff.inp (feature `spacegroup`)
+  src/xasproc/         # larch.xafs reduction: pre_edge/normalize, AUTOBK, rebin, deconvolve, LCF/PCA, MBACK
+  src/xasdata/         # XAS session model: XasGroup, Session/Folders, beamline I/O, batch drivers
+  tests/               # parity tests, prefixed by source area (feffdat_*, xasproc_*, lm_*, …)
+  scripts/             # larch/scipy reference generators for the reduction parity tests
 crates/xafsview/       # the XAFSView desktop GUI (egui/eframe + siplot)
   src/app.rs           # app shell: tabs, menu bar, shared plot, window wiring
   src/reduce_ui.rs     # Autobk tab: import + pre-edge/normalize + AUTOBK
@@ -150,22 +136,22 @@ scripts/ref_feffit_bkg.py     # larch feffit reference for a refine_bkg fit
 scripts/ref_splev.py          # scipy FITPACK splev reference for the bkg spline
 scripts/ref_feffit_sigma2.py  # larch feffit reference for a sigma2_eins fit
 scripts/ref_sigma2.py  # larch rmass / sigma2_eins / sigma2_debye reference
-scripts/gen_atomic_mass.py # emit crates/feffdat/src/mass.rs from xraydb
+scripts/gen_atomic_mass.py # emit crates/feffit/src/feffdat/mass.rs from xraydb
 scripts/ref_lmdif.py   # scipy.optimize.leastsq reference for the lm minimiser
 ```
 
 ## Build & test
 
 ```sh
-cargo nextest run -p feffdat      # or: cargo test -p feffdat
-cargo clippy -p feffdat --all-targets -- -D warnings
+cargo nextest run -p feffit       # the engine + all parity tests
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 ## Regenerating references
 
 ```sh
-python3 scripts/ref_chi.py crates/feffdat/tests/data/feff0001.dat \
-        crates/feffdat/tests/data/ref_cu_default.txt
+python3 scripts/ref_chi.py crates/feffit/tests/data/feff0001.dat \
+        crates/feffit/tests/data/ref_cu_default.txt
 ```
 
 When scipy is installed, `ref_chi.py` additionally emits a `chi_cubic` column

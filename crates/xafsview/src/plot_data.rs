@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
+use feffit::xasdata::{average_curves, peak_in_range, x_at_y};
 use siplot::YAxis;
-use xasdata::{average_curves, peak_in_range, x_at_y};
 
 use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_trace};
 
@@ -975,7 +975,7 @@ mod tests {
 
     #[test]
     fn write_composite_blocks_parse_back_independently() {
-        use xasdata::ColumnFile;
+        use feffit::xasdata::ColumnFile;
         let p = std::env::temp_dir().join(format!("xafsview_composite_{}.dat", std::process::id()));
         let traces = vec![
             ("a".to_owned(), vec![0.0, 1.0, 2.0], vec![1.0, 2.0, 3.0]),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate `crates/feffdat/src/mass.rs` from xraydb's `atomic_mass`.
+"""Generate `crates/feffit/src/feffdat/mass.rs` from xraydb's `atomic_mass`.
 
 larch builds each path-geometry atom's mass with `xraydb.atomic_mass(iz)`
 (`larch/xafs/feffdat.py`). To reproduce larch's `rmass`, `sigma2_eins`, and
@@ -47,9 +47,9 @@ def main():
     lines.append("}")
     lines.append("")
 
-    with open("crates/feffdat/src/mass.rs", "w") as fh:
+    with open("crates/feffit/src/feffdat/mass.rs", "w") as fh:
         fh.write("\n".join(lines))
-    print(f"wrote crates/feffdat/src/mass.rs ({ZMAX} elements)")
+    print(f"wrote crates/feffit/src/feffdat/mass.rs ({ZMAX} elements)")
 
 
 if __name__ == "__main__":

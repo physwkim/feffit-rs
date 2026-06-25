@@ -7,7 +7,7 @@ undefined name and raises, so a `gnxas(...)` path expression evaluates to None.
 The module-level `gnxas(r0, sigma, beta, path)` is the documented, working
 implementation and is numerically identical, so it is the reference here.
 
-Writes `crates/feffdat/tests/data/ref_gnxas.txt`.
+Writes `crates/feffit/tests/data/ref_gnxas.txt`.
 
 Run from the repo root with the project venv:
     .venv/bin/python scripts/ref_gnxas.py

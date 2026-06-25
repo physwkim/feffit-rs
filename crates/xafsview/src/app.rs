@@ -3,7 +3,7 @@
 //! Phase 0 wires the skeleton and makes the **Folders** tab functional.
 
 use eframe::egui;
-use xasdata::{ColumnFile, Session, XasGroup};
+use feffit::xasdata::{ColumnFile, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
 use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindow};
@@ -268,7 +268,7 @@ impl XafsViewApp {
             return;
         };
         self.set_data_dir_from(&path);
-        match xasdata::read_chi_dat(&path) {
+        match feffit::xasdata::read_chi_dat(&path) {
             Ok((k, chi)) => {
                 let label = path
                     .file_stem()
@@ -300,7 +300,7 @@ impl XafsViewApp {
         let Some(path) = dlg.pick_file() else {
             return;
         };
-        match xasdata::read_chi_dat(&path) {
+        match feffit::xasdata::read_chi_dat(&path) {
             Ok((k, chi)) => {
                 let n = k.len();
                 self.reduction.theory = Some(TheoryStd { path, k, chi });
@@ -317,7 +317,7 @@ impl XafsViewApp {
         };
         let spec = import.to_spec();
         let input_path = import.file.path.clone();
-        match xasdata::build_mu(&import.file, &spec) {
+        match feffit::xasdata::build_mu(&import.file, &spec) {
             Ok((energy, mu)) => {
                 let label = input_path
                     .as_ref()
@@ -412,9 +412,9 @@ impl XafsViewApp {
             if g.mu.is_empty() {
                 return;
             }
-            xasdata::normalize(g, &pre);
-            xasdata::autobk_group(g, &bk, 1.0);
-            xasdata::xftf_group(g, &ft);
+            feffit::xasdata::normalize(g, &pre);
+            feffit::xasdata::autobk_group(g, &bk, 1.0);
+            feffit::xasdata::xftf_group(g, &ft);
             (g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len()))
         };
         // Original Autobk "Output file" behaviour: persist χ(k) → <stem>k.chi and
@@ -524,7 +524,7 @@ impl XafsViewApp {
         let pre = self.reduction.pre_params();
         let bk = self.reduction.autobk_params();
         let ft = self.reduction.ft_params();
-        let n = xasdata::reduce_all(&mut self.session.groups, &pre, &bk, &ft, 1.0);
+        let n = feffit::xasdata::reduce_all(&mut self.session.groups, &pre, &bk, &ft, 1.0);
         // Per-group χ outputs, the original Multiple-autobk behaviour: each group
         // writes its own <label>k.chi / <label>r.chi (its label, not the shared
         // "Output file", so batch outputs stay distinct).
@@ -570,7 +570,7 @@ impl XafsViewApp {
         let mut files = Vec::with_capacity(paths.len());
         let mut read_errors = 0usize;
         for path in paths {
-            match xasdata::ColumnFile::from_path(&path) {
+            match feffit::xasdata::ColumnFile::from_path(&path) {
                 Ok(cf) => files.push(cf),
                 Err(_) => read_errors += 1,
             }
@@ -583,7 +583,7 @@ impl XafsViewApp {
         let mut build_errors = 0usize;
         let mut written = 0usize;
         let mut write_failed = 0usize;
-        for (i, result) in xasdata::make_xmu_batch(&files, &spec)
+        for (i, result) in feffit::xasdata::make_xmu_batch(&files, &spec)
             .into_iter()
             .enumerate()
         {
@@ -737,19 +737,19 @@ impl XafsViewApp {
         let snapshot = g.clone();
         let (changed, msg) = match action {
             CleanAction::DeglitchPoint(e) => {
-                let n = xasdata::deglitch_point(g, e);
+                let n = feffit::xasdata::deglitch_point(g, e);
                 (n > 0, format!("Deglitch: removed {n} point(s)"))
             }
             CleanAction::DeglitchRange(side, e1, e2) => {
-                let n = xasdata::deglitch_range(g, side, e1, e2);
+                let n = feffit::xasdata::deglitch_range(g, side, e1, e2);
                 (n > 0, format!("Deglitch range: removed {n} point(s)"))
             }
             CleanAction::Trim(lo, hi) => {
-                let n = xasdata::trim(g, lo, hi);
+                let n = feffit::xasdata::trim(g, lo, hi);
                 (n > 0, format!("Trim: removed {n} point(s)"))
             }
             CleanAction::Smooth(sigma, form) => {
-                let ok = xasdata::smooth_mu(g, sigma, form);
+                let ok = feffit::xasdata::smooth_mu(g, sigma, form);
                 let m = if ok {
                     format!("Smoothed μ(E) (σ = {sigma:.2} eV)")
                 } else {
@@ -935,7 +935,7 @@ impl XafsViewApp {
         };
         let mut added = 0usize;
         for path in paths {
-            match feffdat::FeffPath::from_path(&path) {
+            match feffit::feffdat::FeffPath::from_path(&path) {
                 Ok(fp) => {
                     let label = path
                         .file_name()
@@ -963,7 +963,7 @@ impl XafsViewApp {
         };
         let mut added = 0usize;
         for path in paths {
-            match feffdat::FeffPath::from_path(&path) {
+            match feffit::feffdat::FeffPath::from_path(&path) {
                 Ok(fp) => {
                     let label = path
                         .file_name()

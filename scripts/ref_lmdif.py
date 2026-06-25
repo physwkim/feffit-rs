@@ -15,7 +15,7 @@ import math
 import numpy as np
 from scipy.optimize import leastsq
 
-OUT = "crates/lm/tests/data"
+OUT = "crates/feffit/tests/data"
 
 # ---- problems ---------------------------------------------------------------
 # Residual grouping is mirrored EXACTLY in the Rust test so the LM iteration

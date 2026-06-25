@@ -16,8 +16,8 @@ use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use feffdat::FeffDatFile;
-use feffinp::{Crystal, Edge, FeffInp, Lattice, Site};
+use feffit::feffdat::FeffDatFile;
+use feffit::feffinp::{Crystal, Edge, FeffInp, Lattice, Site};
 use siplot::{Colormap, ColormapName, PointMarker, Scatter3D, Scene3dGeometry, SceneWidget, Vec3};
 
 use crate::plot::{GREEN, RED};
@@ -350,10 +350,10 @@ enum BackendSel {
 }
 
 impl BackendSel {
-    fn to_engine(self) -> feffrun::Backend {
+    fn to_engine(self) -> feffit::feffrun::Backend {
         match self {
-            BackendSel::Feff10 => feffrun::Backend::Feff10,
-            BackendSel::Feff8l => feffrun::Backend::Feff8l,
+            BackendSel::Feff10 => feffit::feffrun::Backend::Feff10,
+            BackendSel::Feff8l => feffit::feffrun::Backend::Feff8l,
         }
     }
 }
@@ -1048,7 +1048,7 @@ fn path_label(p: &FeffDatFile) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use feffdat::GeomAtom;
+    use feffit::feffdat::GeomAtom;
 
     #[test]
     fn coordination_shells_merge_near_equal_and_cap() {

@@ -4,7 +4,7 @@
 Covers every branch of Cephes `Gamma`: the (2,3) rational interval, the
 recurrence for x<2 and x>=3, the near-zero `small` branch, Stirling for x>33,
 and the reflection formula for large negative x. Avoids the negative-integer
-poles. Writes `crates/feffdat/tests/data/ref_gamma.txt`.
+poles. Writes `crates/feffit/tests/data/ref_gamma.txt`.
 
 Run from the repo root with the project venv:
     .venv/bin/python scripts/ref_gamma.py

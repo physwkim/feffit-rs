@@ -9,7 +9,7 @@
 
 use std::f64::consts::PI;
 
-use feffdat::{FeffPath, Interp, KGrid, ff2chi, interp_linear};
+use crate::feffdat::{FeffPath, Interp, KGrid, ff2chi, interp_linear};
 
 use crate::bkg::{self, splev};
 use crate::outputs::{DataSetOutput, xafsft};

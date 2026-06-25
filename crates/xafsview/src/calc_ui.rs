@@ -520,7 +520,7 @@ fn powder_weight(
 /// **k ↔ E conversion** (the original XAFSView Tools menu item): convert between
 /// photoelectron wavenumber `k` [Å⁻¹] and photon energy `E` [eV] about an
 /// absorption-edge energy `E₀`, using larch's `KTOE` (`E − E₀ = KTOE·k²`, with
-/// [`feffdat::ktoe`]/[`feffdat::etok`]). Handy for locating a glitch or Bragg
+/// [`feffit::feffdat::ktoe`]/[`feffit::feffdat::etok`]). Handy for locating a glitch or Bragg
 /// peak seen in one space while working in the other. `E₀` is seeded from the
 /// active group's edge energy when the window opens and can be overridden.
 pub struct KeConvertWindow {
@@ -600,7 +600,7 @@ impl KeConvertWindow {
                     ui.label("⇒");
                     let de = self.energy - self.e0;
                     if de > 0.0 {
-                        ui.strong(format!("k = {:.4} Å⁻¹", feffdat::etok(de).sqrt()));
+                        ui.strong(format!("k = {:.4} Å⁻¹", feffit::feffdat::etok(de).sqrt()));
                     } else {
                         ui.strong("k = 0 Å⁻¹");
                         ui.weak("(at/below edge)");
@@ -617,7 +617,10 @@ impl KeConvertWindow {
                             .suffix(" Å⁻¹"),
                     );
                     ui.label("⇒");
-                    ui.strong(format!("E = {:.3} eV", self.e0 + feffdat::ktoe(self.k)));
+                    ui.strong(format!(
+                        "E = {:.3} eV",
+                        self.e0 + feffit::feffdat::ktoe(self.k)
+                    ));
                 });
             },
         );

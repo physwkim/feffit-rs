@@ -5,7 +5,7 @@ Runs larch's `larch.math.lincombo_fitting.groups2matrix` (the LCF/PCA regridding
 step, `interp_kind='cubic'`) on three standards sampled on three *different*
 energy grids, so the cubic interpolation of the non-reference curves is actually
 exercised. Emits inputs (so the Rust test feeds bit-identical arrays) and the
-expected (xdat, matrix) to `crates/xasproc/tests/data/ref_groups2matrix.txt`.
+expected (xdat, matrix) to `crates/feffit/tests/data/ref_groups2matrix.txt`.
 
 larch is imported from its source tree (`$XRAYLARCH` or the default path) with a
 stubbed `larch` / `larch.math` package so the heavy package `__init__` chain

@@ -4,7 +4,7 @@
 //! renders the parameter grid; the app turns its
 //! [`pre_params`](ReductionUi::pre_params) /
 //! [`autobk_params`](ReductionUi::autobk_params) / [`ft_params`](ReductionUi::ft_params)
-//! into engine calls via `xasdata::reduce`, and reads [`graph`](ReductionUi::graph)
+//! into engine calls via `feffit::xasdata::reduce`, and reads [`graph`](ReductionUi::graph)
 //! to decide what to plot. The Title / Data File / Theory rows and the
 //! Open / Start / Exit / Edit button cluster live in the app (they need session
 //! and file-dialog access).
@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use xasdata::{AutobkParams, FtParams, PreEdgeParams, Window};
+use feffit::xasdata::{AutobkParams, FtParams, PreEdgeParams, Window};
 
 /// Which reduction stage to display on the plot.
 #[derive(Clone, Copy, PartialEq, Eq)]

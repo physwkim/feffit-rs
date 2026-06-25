@@ -21,7 +21,7 @@
 //!
 //! The `sigma2_eins`/`sigma2_debye` Debye-Waller constraint helpers are
 //! available in path expressions, bound to each path's geometry through a
-//! [`params::FuncCtx`].
+//! [`crate::params::FuncCtx`].
 //!
 //! After a fit, [`DataSet::save_outputs`] forward/back-transforms the data and
 //! model (and optionally each path) χ(k) into χ(R)/χ(q) output arrays (larch
@@ -38,6 +38,19 @@ pub mod dataset;
 pub mod fit;
 pub mod outputs;
 pub mod transform;
+
+// Absorbed sub-crates. These were sibling workspace crates; they now live here
+// as modules so the whole engine ships as a single publishable crate. Their
+// public APIs are unchanged — only the path (`feffit::feffdat::…` instead of
+// `feffdat::…`) differs.
+pub mod feffdat;
+pub mod feffinp;
+pub mod feffrun;
+pub mod lm;
+pub mod params;
+pub mod xafsft;
+pub mod xasdata;
+pub mod xasproc;
 
 pub use dataset::DataSet;
 pub use fit::{

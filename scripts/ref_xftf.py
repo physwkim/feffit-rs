@@ -4,7 +4,7 @@
 Replicates `larch/xafs/xafsft.py` (ftwindow, xftf_fast, xftr_fast, xftf_prep,
 xftf, xftr) using the exact libraries larch uses: `scipy.fftpack` for the FFTs
 and `scipy.special.i0` for the Kaiser-Bessel window. Emits labeled-block files
-consumed by `crates/xafsft/tests/parity.rs`.
+consumed by `crates/feffit/tests/xafsft_parity.rs`.
 
 Run from the repo root with the project venv:
     .venv/bin/python scripts/ref_xftf.py
@@ -15,7 +15,7 @@ from scipy.fftpack import fft, ifft
 from scipy.special import i0 as bessel_i0
 
 sqrtpi = sqrt(pi)
-OUT = "crates/xafsft/tests/data"
+OUT = "crates/feffit/tests/data"
 
 
 def ftwindow(x, xmin=None, xmax=None, dx=1, dx2=None, window="hanning"):

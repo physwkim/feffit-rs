@@ -13,7 +13,7 @@ Run from the repo root with the project venv:
 from asteval import Interpreter
 from lmfit import Parameters
 
-OUT = "crates/params/tests/data"
+OUT = "crates/feffit/tests/data"
 
 # ---- expression cases (symtable + expressions) ------------------------------
 SYM = {"x": 1.3, "y": -2.7, "reff": 2.5478, "amp": 2.0}

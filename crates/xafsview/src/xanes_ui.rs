@@ -12,8 +12,8 @@
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
+use feffit::xasdata::{XasGroup, arctan_step, centroid, peak, valley, x_at_y};
 use siplot::YAxis;
-use xasdata::{XasGroup, arctan_step, centroid, peak, valley, x_at_y};
 
 use crate::analysis_ui::array_xy;
 use crate::plot::{BLUE, GREEN, ORANGE, PURPLE};

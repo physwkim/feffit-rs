@@ -14,31 +14,31 @@
 
 use std::path::PathBuf;
 
-use feffdat::{FeffPath, Interp, KGrid, PathParams, ff2chi};
+use feffit::feffdat::{FeffPath, Interp, KGrid, PathParams, ff2chi};
+use feffit::params::Parameters;
 use feffit::transform::FitSpace;
+use feffit::xafsft::Window;
 use feffit::{DataSet, FitDataSet, PathSpec, Spec, Transform, feffit};
-use params::Parameters;
-use xafsft::Window;
 
 /// The Copper fcc `feff.inp` shared with the `feffrun` integration test
 /// (workspace-relative; this test only runs with the full workspace present).
 fn cu_feff_inp() -> String {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../feffrun/tests/data/feff.inp");
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/feff.inp");
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
 }
 
 /// A FEFF8L runner if the executables are reachable, else `None`. Mirrors the
 /// discovery in `feffrun`'s own integration test (FEFF8L_DIR, then PATH).
-fn runner() -> Option<feffrun::Feff8l> {
-    if let Some(dir) = std::env::var_os(feffrun::BIN_DIR_ENV)
+fn runner() -> Option<feffit::feffrun::Feff8l> {
+    if let Some(dir) = std::env::var_os(feffit::feffrun::BIN_DIR_ENV)
         && PathBuf::from(&dir).join("feff8l_pot").is_file()
     {
-        return Some(feffrun::Feff8l::with_bin_dir(dir));
+        return Some(feffit::feffrun::Feff8l::with_bin_dir(dir));
     }
     if let Some(paths) = std::env::var_os("PATH") {
         for d in std::env::split_paths(&paths) {
             if d.join("feff8l_pot").is_file() {
-                return Some(feffrun::Feff8l::new());
+                return Some(feffit::feffrun::Feff8l::new());
             }
         }
     }
@@ -51,7 +51,7 @@ fn feffrun_to_feffit_recovers_known_path_params() {
         eprintln!(
             "SKIP feffrun_to_feffit_recovers_known_path_params: \
              feff8l_* not found (set {} or add to PATH)",
-            feffrun::BIN_DIR_ENV
+            feffit::feffrun::BIN_DIR_ENV
         );
         return;
     };

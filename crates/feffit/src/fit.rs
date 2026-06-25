@@ -8,13 +8,13 @@
 //! parameters augmented with path-local symbols (`reff`, `nleg`, `degen`,
 //! `rmass`, `rnorman`, `gam_ch`, `rs_int`, `vint`, `vmu`, `vfermi`) and the
 //! path-bound σ² helpers `sigma2_eins(t, theta)` / `sigma2_debye(t, theta)`
-//! (bound to the path geometry through a [`params::FuncCtx`]).
+//! (bound to the path geometry through a [`crate::params::FuncCtx`]).
 
 use std::collections::HashMap;
 
-use feffdat::{FeffDatFile, PathParams, gnxas, sigma2_debye, sigma2_eins};
-use lm::{LmConfig, lmdif};
-use params::{Expr, ExprError, FuncCtx, ParamError, Parameters, parse};
+use crate::feffdat::{FeffDatFile, PathParams, gnxas, sigma2_debye, sigma2_eins};
+use crate::lm::{LmConfig, lmdif};
+use crate::params::{Expr, ExprError, FuncCtx, ParamError, Parameters, parse};
 
 use crate::dataset::DataSet;
 

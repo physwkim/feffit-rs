@@ -15,9 +15,9 @@ use std::fmt::Write as _;
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
+use feffit::xasdata::XasGroup;
 use rayon::prelude::*;
 use siplot::YAxis;
-use xasdata::XasGroup;
 
 use crate::feffit_ui::{FeffitAction, FeffitUi, SavedPath};
 use crate::plot::{BLUE, RED};
@@ -117,7 +117,7 @@ impl FeffitBatch {
 
     /// Add a loaded Feff path to the config at `idx` (the app calls this after a
     /// file dialog services a [`BatchAction::AddPath`]).
-    pub fn add_path_to(&mut self, idx: usize, label: String, path: feffdat::FeffPath) {
+    pub fn add_path_to(&mut self, idx: usize, label: String, path: feffit::feffdat::FeffPath) {
         if let Some(cfg) = self.configs.get_mut(idx) {
             cfg.ui.add_path(label, path);
         }

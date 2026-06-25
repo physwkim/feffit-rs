@@ -17,7 +17,7 @@ Run from the repo root with the project venv:
 from larch.xafs import feffpath
 from larch.xafs.sigma2_models import sigma2_eins, sigma2_correldebye_py
 
-DATADIR = "crates/feffdat/tests/data"
+DATADIR = "crates/feffit/tests/data"
 PATHFILES = ["feff0001.dat", "feff0002.dat"]
 
 # (t, theta) grid — spans low/high T and the t==theta crossover

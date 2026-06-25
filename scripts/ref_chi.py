@@ -3,7 +3,7 @@
 
 Replicates `larch/xafs/feffdat.py` `FeffDatFile._read` and the *linear*
 (`interp='lin'`) branch of `FeffPathGroup._calc_chi`, using only numpy. The
-emitted reference files are consumed by `crates/feffdat/tests/parity.rs` to
+emitted reference files are consumed by `crates/feffit/tests/feffdat_parity.rs` to
 check the Rust parser + EXAFS equation to ~1e-10.
 
 The linear branch is reproduced exactly (it is `numpy.interp`). The cubic

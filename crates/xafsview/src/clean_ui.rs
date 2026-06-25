@@ -1,13 +1,13 @@
 //! The "Edit μ(E)" floating window: deglitch (point/range removal), trim, and
 //! smoothing for the current group, plus undo. Mirrors XAFSView's Edit-XMU
-//! dialog and Smoothing menu, driving the `xasdata::clean` orchestration.
+//! dialog and Smoothing menu, driving the `feffit::xasdata::clean` orchestration.
 //!
 //! Following the rest of the GUI, the window only *collects* the user's intent
 //! into a [`CleanAction`]; the app applies it to the current group and manages
 //! the undo stack, so this module borrows no session state.
 
 use eframe::egui;
-use xasdata::{RangeSide, SmoothForm};
+use feffit::xasdata::{RangeSide, SmoothForm};
 
 /// What the dialog is asking the app to do to the current group this frame.
 pub enum CleanAction {
