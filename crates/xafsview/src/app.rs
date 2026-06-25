@@ -206,8 +206,24 @@ impl XafsViewApp {
         }
     }
 
-    fn open_file(&mut self) {
+    /// Restrict a file dialog to raw scan files — numeric extensions `.000`–
+    /// `.999`, the beamline scan-number suffix. The `.xmu` / `.chi` we write
+    /// back into the same folder are outputs, so this hides them from the
+    /// raw-data pickers (batch make-μ and single Calc-XMU open). Shared so the
+    /// two stay in sync.
+    fn add_scan_filter(dlg: rfd::FileDialog) -> rfd::FileDialog {
+        let exts: Vec<String> = (0..1000).map(|n| format!("{n:03}")).collect();
+        dlg.add_filter("Scan data (.000–.999)", &exts)
+    }
+
+    /// Open a single data file for the Autobk flow. `scan_only` restricts the
+    /// picker to raw scan files (Calc-XMU); Load-μ and the File-menu open pass
+    /// `false` so precomputed `.xmu` files stay selectable.
+    fn open_file(&mut self, scan_only: bool) {
         let mut dlg = rfd::FileDialog::new();
+        if scan_only {
+            dlg = Self::add_scan_filter(dlg);
+        }
         if let Some(dir) = &self.session.folders.data_dir {
             dlg = dlg.set_directory(dir);
         }
@@ -235,7 +251,10 @@ impl XafsViewApp {
     fn open_new_file(&mut self) {
         match self.reduction.loading {
             LoadingType::ChiDat => self.open_chi_dat(),
-            LoadingType::CalcXmu | LoadingType::LoadXmu => self.open_file(),
+            // Calc-XMU opens raw scan data, so hide the .xmu/.chi outputs;
+            // Load-XMU opens a precomputed .xmu, so it must stay visible.
+            LoadingType::CalcXmu => self.open_file(true),
+            LoadingType::LoadXmu => self.open_file(false),
         }
     }
 
@@ -538,12 +557,9 @@ impl XafsViewApp {
                 "Open one file and choose its columns first, then batch the rest.".to_owned();
             return;
         };
-        let mut dlg = rfd::FileDialog::new();
-        // Batch make-μ takes raw scan files, whose extension is the scan number
-        // (.000–.999). The .xmu / .chi we write back into the same folder are
-        // outputs, so restrict the picker to numeric extensions and hide them.
-        let scan_exts: Vec<String> = (0..1000).map(|n| format!("{n:03}")).collect();
-        dlg = dlg.add_filter("Scan data (.000–.999)", &scan_exts);
+        // Batch make-μ takes raw scan files; hide the .xmu / .chi outputs we
+        // write back into the same folder (see add_scan_filter).
+        let mut dlg = Self::add_scan_filter(rfd::FileDialog::new());
         if let Some(dir) = &self.session.folders.data_dir {
             dlg = dlg.set_directory(dir);
         }
@@ -1250,7 +1266,9 @@ impl XafsViewApp {
             });
             if open_clicked {
                 self.tab = Tab::Autobk;
-                self.open_file();
+                // Generic "Open data file…" can load raw or a precomputed .xmu,
+                // so leave the picker unfiltered.
+                self.open_file(false);
             }
             let mut open_plot_data = false;
             let mut run_multi_autobk = false;
