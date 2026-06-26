@@ -121,6 +121,10 @@ pub struct PlotDataWindow {
     /// the app each frame via [`Self::show`]. "Save in single file" defaults its
     /// dialog here, matching the original XAFSView.
     results_dir: Option<PathBuf>,
+    /// The configured "Data" folder (`Folders.data_dir`, under the Sub base),
+    /// kept in sync the same way. The file picker opens here and the "Browse…"
+    /// dialog defaults here, matching the original XAFSView.
+    data_dir: Option<PathBuf>,
 
     /// Set whenever the overlay needs rebuilding (control change or new files).
     dirty: bool,
@@ -162,6 +166,7 @@ impl PlotDataWindow {
             sel_anchor: None,
             pick_status: String::new(),
             results_dir: None,
+            data_dir: None,
             dirty: true,
         }
     }
@@ -197,10 +202,17 @@ impl PlotDataWindow {
     }
 
     /// Render the window.
-    pub fn show(&mut self, ctx: &egui::Context, results_dir: Option<&std::path::Path>) {
-        // Track the configured Results folder so "Save in single file" can default
-        // its dialog there (kept fresh in case the user reconfigures folders).
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        results_dir: Option<&std::path::Path>,
+        data_dir: Option<&std::path::Path>,
+    ) {
+        // Track the configured Results/Data folders so the save dialog and file
+        // picker can default there (kept fresh in case the user reconfigures
+        // folders).
         self.results_dir = results_dir.map(std::path::Path::to_path_buf);
+        self.data_dir = data_dir.map(std::path::Path::to_path_buf);
         if !self.open {
             return;
         }
@@ -400,6 +412,12 @@ impl PlotDataWindow {
         ));
         if ui.button("ADD or DEL Data Files…").clicked() {
             self.picker_open = true;
+            // Open on the Data folder (under the Sub base) so the picker lists the
+            // data files straight away, like the original XAFSView. Only seed it
+            // the first time — keep wherever the user last browsed.
+            if self.pick_dir.is_none() {
+                self.pick_dir = self.data_dir.clone();
+            }
             // Seed "Selected Data" with the currently-loaded (plotted) files so
             // they can be removed here: OK reconciles the loaded set to whatever
             // remains selected, so `<=` actually un-plots a file.
@@ -460,15 +478,22 @@ impl PlotDataWindow {
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     // Folder path bar.
                     ui.horizontal(|ui| {
-                        if ui.button("📁 Browse…").clicked()
-                            && let Some(dir) = rfd::FileDialog::new().pick_folder()
-                        {
-                            self.pick_dir = Some(dir);
-                            // Keep the current selection (it may span folders); only
-                            // the Available list and highlights follow the new folder.
-                            self.avail_hi.clear();
-                            self.sel_hi.clear();
-                            self.refresh_available();
+                        if ui.button("📁 Browse…").clicked() {
+                            // Default to where the picker is looking now, else the
+                            // Data folder (under the Sub base).
+                            let mut fd = rfd::FileDialog::new();
+                            if let Some(dir) = self.pick_dir.as_ref().or(self.data_dir.as_ref()) {
+                                fd = fd.set_directory(dir);
+                            }
+                            if let Some(dir) = fd.pick_folder() {
+                                self.pick_dir = Some(dir);
+                                // Keep the current selection (it may span folders);
+                                // only the Available list and highlights follow the
+                                // new folder.
+                                self.avail_hi.clear();
+                                self.sel_hi.clear();
+                                self.refresh_available();
+                            }
                         }
                         match &self.pick_dir {
                             Some(dir) => {

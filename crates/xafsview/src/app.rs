@@ -1946,8 +1946,11 @@ impl eframe::App for XafsViewApp {
 
         // The Plot Data window overlays several groups; it owns its own plot and
         // reads (but does not mutate) the session's groups.
-        self.plot_data
-            .show(ui.ctx(), self.session.folders.results_dir.as_deref());
+        self.plot_data.show(
+            ui.ctx(),
+            self.session.folders.results_dir.as_deref(),
+            self.session.folders.data_dir.as_deref(),
+        );
 
         // The multi-FEFFIT batch window: each group has its own fit config seeded
         // from the Feffit tab (the template). The add-path dialog and Save Items
