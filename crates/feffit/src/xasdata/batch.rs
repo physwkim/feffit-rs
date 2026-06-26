@@ -10,6 +10,8 @@
 //! - [`average_curves`] — the mean of several curves on a common grid.
 //! - [`peak_in_range`] — the maximum of a curve within an x window.
 
+use std::path::Path;
+
 use rayon::prelude::*;
 
 use crate::xasdata::group::XasGroup;
@@ -18,12 +20,39 @@ use crate::xasdata::reduce::{FtParams, autobk_group, normalize, xftf_group};
 use crate::xasdata::xmu::{MuSpec, XmuError, build_mu};
 use crate::xasproc::{AutobkParams, PreEdgeParams};
 
+/// Derive a group's base name from its source file path.
+///
+/// PLS-II beamline scans in a series are named `sample.000`, `sample.001`, … —
+/// the scan number is the file *extension*. `Path::file_stem` alone strips it, so
+/// every scan in a series collapses to the same `sample`, and each per-scan output
+/// (`.xmu`, `k.chi`, `e.bkg`, …) then overwrites the previous one. When the
+/// extension is purely numeric we fold it into the name as `sample_000` — matching
+/// the original XAFSView output names (`sample_000.XMU`, `sample_000k.chi`) — so
+/// every scan keeps a distinct name. Files with a non-numeric extension (`.xmu`,
+/// `.chi`, `.XMU`, …) keep the plain file stem. Returns `None` when the path has
+/// no file stem.
+pub fn group_name_from_path(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_string_lossy().into_owned();
+    match path.extension() {
+        Some(ext) => {
+            let ext = ext.to_string_lossy();
+            if !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_digit()) {
+                Some(format!("{stem}_{ext}"))
+            } else {
+                Some(stem)
+            }
+        }
+        None => Some(stem),
+    }
+}
+
 /// Build one [`XasGroup`] per file using a single shared [`MuSpec`] (one column
 /// mapping applied across files of the same layout — XAFSView's batch make-xmu).
 ///
 /// Returns one result per input file in order; a file whose columns don't match
 /// the spec yields `Err(XmuError)` without aborting the rest. Each built group is
-/// labelled from the file stem and remembers its source path.
+/// labelled via [`group_name_from_path`] (so `sample.000`/`sample.001` scans stay
+/// distinct) and remembers its source path.
 pub fn make_xmu_batch(files: &[ColumnFile], spec: &MuSpec) -> Vec<Result<XasGroup, XmuError>> {
     // Each file is independent; `par_iter().collect()` preserves input order, so
     // the caller's `files[i]` ↔ `result[i]` pairing (used for output numbering)
@@ -34,9 +63,8 @@ pub fn make_xmu_batch(files: &[ColumnFile], spec: &MuSpec) -> Vec<Result<XasGrou
             let (energy, mu) = build_mu(cf, spec)?;
             let label = cf
                 .path
-                .as_ref()
-                .and_then(|p| p.file_stem())
-                .map(|s| s.to_string_lossy().into_owned())
+                .as_deref()
+                .and_then(group_name_from_path)
                 .unwrap_or_else(|| "group".to_owned());
             let mut g = XasGroup::from_mu(label, energy, mu);
             g.filename = cf.path.clone();
@@ -187,6 +215,26 @@ mod tests {
     use super::*;
     use crate::xasdata::reader::ColumnFile;
     use crate::xasdata::xmu::MuSpec;
+
+    /// The PLS-II `sample.NNN` scan-index naming must survive into the group name
+    /// (so a batch of `.000`/`.001`/… scans does not collapse to one output file),
+    /// while ordinary extensions are stripped as usual.
+    #[test]
+    fn group_name_folds_numeric_scan_index_keeps_distinct() {
+        let n = |p: &str| group_name_from_path(Path::new(p));
+        // Numeric extension is the scan index → folded in as `_NNN`, stays distinct.
+        assert_eq!(n("/d/PGT_Mn.000").as_deref(), Some("PGT_Mn_000"));
+        assert_eq!(n("/d/PGT_Mn.001").as_deref(), Some("PGT_Mn_001"));
+        assert_eq!(n("/d/PGT_Mn.065").as_deref(), Some("PGT_Mn_065"));
+        assert_ne!(n("/d/PGT_Mn.000"), n("/d/PGT_Mn.001"));
+        // Ordinary extensions are stripped (already-distinct names keep their stem).
+        assert_eq!(n("/d/PGT_Mn_000.XMU").as_deref(), Some("PGT_Mn_000"));
+        assert_eq!(n("/d/sample.xmu").as_deref(), Some("sample"));
+        assert_eq!(n("/d/sample.chi").as_deref(), Some("sample"));
+        // No extension → plain stem; no file name → None.
+        assert_eq!(n("/d/sample").as_deref(), Some("sample"));
+        assert_eq!(n("/"), None);
+    }
 
     /// Two `mu(E)` columns under one Raw spec → two labelled groups; a file
     /// missing the column errors without taking down the batch.

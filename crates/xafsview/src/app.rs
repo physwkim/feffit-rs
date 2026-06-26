@@ -335,9 +335,8 @@ impl XafsViewApp {
         match feffit::xasdata::build_mu(&import.file, &spec) {
             Ok((energy, mu)) => {
                 let label = input_path
-                    .as_ref()
-                    .and_then(|p| p.file_stem())
-                    .map(|s| s.to_string_lossy().into_owned())
+                    .as_deref()
+                    .and_then(feffit::xasdata::group_name_from_path)
                     .unwrap_or_else(|| format!("group{}", self.session.groups.len() + 1));
                 let n = energy.len();
                 // Persist μ(E) as a .xmu next to the source (the original's
@@ -394,8 +393,7 @@ impl XafsViewApp {
             return Err("no output folder".to_owned());
         };
         let stem = input
-            .and_then(|p| p.file_stem())
-            .map(|s| s.to_string_lossy().into_owned())
+            .and_then(feffit::xasdata::group_name_from_path)
             .unwrap_or_else(|| label.to_owned());
         let name = match index {
             Some(i) => format!("{stem}{i:04}.xmu"),
