@@ -120,7 +120,17 @@ pub struct XafsViewApp {
     last_tab: Tab,
     /// Status line shown at the bottom of the window.
     status: String,
+    /// Working value for the Settings "Font size" slider (the egui zoom factor).
+    /// The slider edits this freely; the live zoom is applied only when the drag
+    /// ends, so the UI doesn't reflow under the cursor on every drag tick.
+    ui_scale: f32,
 }
+
+/// Default overall UI zoom (scales text *and* spacing together). Set >1.0 so
+/// the app reads larger than egui's stock size out of the box; adjustable live
+/// from the Settings menu. egui's `Context` holds the live value, so it persists
+/// across frames within a session without any extra app state.
+const DEFAULT_UI_SCALE: f32 = 1.2;
 
 impl XafsViewApp {
     /// Build the app. Requires the wgpu render state (see [`main`](crate::main)).
@@ -129,6 +139,10 @@ impl XafsViewApp {
         // UI and siplot axis labels can render the superscript/subscript math
         // glyphs the default font lacks (Å⁻¹, kʷ, χ²ᵣ).
         crate::fonts::install_fallback(&cc.egui_ctx);
+
+        // Start a touch larger than egui's default so the whole UI (text and
+        // spacing) is more legible out of the box; the Settings menu adjusts it.
+        cc.egui_ctx.set_zoom_factor(DEFAULT_UI_SCALE);
 
         let render_state = cc
             .wgpu_render_state
@@ -191,6 +205,7 @@ impl XafsViewApp {
             clean_undo: Vec::new(),
             last_tab: Tab::Autobk,
             status: "Ready.".to_owned(),
+            ui_scale: DEFAULT_UI_SCALE,
         }
     }
 
@@ -1379,7 +1394,25 @@ impl XafsViewApp {
                     ui.close();
                 }
             });
-            ui.menu_button("Change BG", |ui| {
+            ui.menu_button("Settings", |ui| {
+                ui.set_min_width(200.0);
+                // Overall UI scale (font size): scales text and spacing together
+                // via egui's zoom factor, which the Context keeps across frames.
+                ui.label("Font size");
+                let resp = ui.add(egui::Slider::new(&mut self.ui_scale, 0.8..=2.0).step_by(0.05));
+                // Apply only when the adjustment finishes — the drag is released
+                // or a typed value is committed — so the whole UI doesn't rescale
+                // (and the slider slip out from under the cursor) on every tick.
+                if resp.drag_stopped() || resp.lost_focus() {
+                    ui.ctx().set_zoom_factor(self.ui_scale);
+                }
+                if ui.button("Reset to default").clicked() {
+                    self.ui_scale = DEFAULT_UI_SCALE;
+                    ui.ctx().set_zoom_factor(DEFAULT_UI_SCALE);
+                }
+                ui.separator();
+                // Background colour: toggle the whole egui UI between the dark and
+                // light visuals (moved here from the former "Change BG" menu).
                 if ui.button("Toggle dark / light").clicked() {
                     let dark = ui.ctx().global_style().visuals.dark_mode;
                     ui.ctx().set_visuals(if dark {
