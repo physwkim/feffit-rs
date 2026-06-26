@@ -1504,9 +1504,36 @@ impl XafsViewApp {
                     });
                 });
             });
+        // FT k-window band: on the kʷ·χ(k) graph, draw kmin/kmax as a draggable
+        // shaded band over the curve. Other graphs show no band — `set_window` is
+        // simply not called and `show` removes any stale band. Dragging an edge
+        // updates kmin/kmax and recomputes live, the same `change.refit` path a
+        // finished kmin/kmax DragValue edit takes (kmin/kmax feed both the AUTOBK
+        // background window and the FT, so a full recompute is the correct cost).
+        if self.reduction.graph == GraphType::KChi {
+            crate::plot::set_window(
+                &mut self.plot,
+                crate::plot::AxisWindow {
+                    min: self.reduction.kmin,
+                    max: self.reduction.kmax,
+                },
+            );
+        }
         egui::CentralPanel::default().show_inside(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });
+        if let Some(w) = crate::plot::take_window_drag(&mut self.plot) {
+            // A left-edge drag past the right (or vice versa) inverts the pair;
+            // re-order so kmin < kmax, and keep kmin off negative k.
+            let (lo, hi) = if w.min <= w.max {
+                (w.min, w.max)
+            } else {
+                (w.max, w.min)
+            };
+            self.reduction.kmin = lo.max(0.0);
+            self.reduction.kmax = hi;
+            change.refit = true;
+        }
 
         if open_clicked {
             self.open_new_file();

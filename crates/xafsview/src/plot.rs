@@ -10,7 +10,7 @@
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use siplot::{DataMargins, ItemHandle, Plot1D, PlotId, Symbol};
+use siplot::{DataMargins, ItemHandle, Plot1D, PlotId, Roi, Symbol};
 
 /// Fraction of the data range left blank on each side of the data extent, so
 /// samples at the extremes are lifted just off the axis frame without wasting
@@ -99,6 +99,12 @@ pub const PINK: egui::Color32 = egui::Color32::from_rgb(0xf5, 0x8f, 0xd6);
 /// number of curves on the dark canvas. Index with `PALETTE[i % PALETTE.len()]`.
 pub const PALETTE: [egui::Color32; 8] = [BLUE, ORANGE, GREEN, RED, PURPLE, BROWN, PINK, CYAN];
 
+/// Colour of the draggable FT-window band ([`set_window`]): a translucent amber
+/// that reads against the blue χ curves. siplot fills the band at half this
+/// alpha (`color.a()/2`) and outlines the edges at full alpha, so the edges stay
+/// clearly grabbable while the interior never hides the data underneath.
+const WINDOW_COLOR: egui::Color32 = egui::Color32::from_rgba_premultiplied(0xcc, 0x8c, 0x30, 0xcc);
+
 /// The muted matplotlib tab10 palette, for the white "Change BG" canvas where
 /// the bright [`PALETTE`] would wash out (tab10 is tuned for a light background).
 pub const PALETTE_LIGHT: [egui::Color32; 8] = [
@@ -111,6 +117,19 @@ pub const PALETTE_LIGHT: [egui::Color32; 8] = [
     egui::Color32::from_rgb(0xe3, 0x77, 0xc2),
     egui::Color32::from_rgb(0x17, 0xbe, 0xcf),
 ];
+
+/// A draggable `[min, max]` window on a plot's x-axis, drawn as a shaded
+/// vertical band the user can grab by either edge. The reduce tab uses it to
+/// expose the FT k-window directly on the kʷ·χ(k) curve: [`set_window`] requests
+/// the band before [`show`], and [`take_window_drag`] reports a drag back so the
+/// caller can update its parameters and recompute.
+#[derive(Clone, Copy, PartialEq)]
+pub struct AxisWindow {
+    /// Lower bound (left edge), in the plot's x units.
+    pub min: f64,
+    /// Upper bound (right edge), in the plot's x units.
+    pub max: f64,
+}
 
 /// A [`Plot1D`] bundled with the legend entries for the curves currently on it.
 ///
@@ -134,6 +153,22 @@ pub struct Plot {
     /// the coordinate readout, which is gated by siplot's `graph_cursor` flag.
     /// On by default. See [`show`] and [`draw_cursor_overlay`].
     crosshair: bool,
+    /// The draggable FT-window band, a siplot `VRange` ROI: `Some(index)` once
+    /// added. Managed entirely by [`set_window`]/[`show`] — the band is shown
+    /// only on frames where [`set_window`] was called and removed otherwise, so
+    /// it never leaks onto a graph (or a tab sharing this plot) that has no
+    /// window.
+    window_roi: Option<usize>,
+    /// The bounds last pushed to the window ROI by [`set_window`]. [`show`] tells
+    /// a user drag (ROI bounds changed during the inner `show`) from our own sync
+    /// by comparing the post-show bounds against this.
+    window_target: Option<AxisWindow>,
+    /// Set by [`set_window`] each frame it is called; [`show`] removes the band
+    /// when it was *not* requested this frame, then clears the flag.
+    window_requested: bool,
+    /// A user drag of either band edge, detected in [`show`] and taken by
+    /// [`take_window_drag`].
+    window_dragged: Option<AxisWindow>,
 }
 
 impl std::ops::Deref for Plot {
@@ -158,6 +193,10 @@ impl Plot {
             legend: Vec::new(),
             legend_frac: None,
             crosshair: true,
+            window_roi: None,
+            window_target: None,
+            window_requested: false,
+            window_dragged: None,
         }
     }
 
@@ -227,6 +266,52 @@ pub fn toolbar(plot: &mut Plot, ui: &mut egui::Ui) {
     });
 }
 
+/// Request the draggable FT-window band at `window` for this frame, drawn as a
+/// shaded vertical band on the active graph's x-axis. Call once per frame
+/// *before* [`show`] for every frame the band should appear; a frame with no
+/// call removes it (so the band never leaks onto a graph — or a tab sharing this
+/// plot — that has no window). The user drags either edge; [`show`] then reports
+/// the new bounds through [`take_window_drag`].
+///
+/// The ROI is only re-synced when `window` differs from the value last pushed —
+/// a typed parameter, a graph switch, an Autobk Start — so an in-progress edge
+/// drag is left to siplot's own interaction and not overwritten mid-drag.
+pub fn set_window(plot: &mut Plot, window: AxisWindow) {
+    plot.window_requested = true;
+    match plot.window_roi {
+        None => {
+            let idx = plot.inner.add_roi(Roi::VRange {
+                x: (window.min, window.max),
+            });
+            plot.inner.set_roi_name(idx, "FT window");
+            plot.inner.set_roi_color(idx, WINDOW_COLOR);
+            if let Some(managed) = plot.inner.rois_mut().get_mut(idx) {
+                managed.fill = true;
+            }
+            plot.window_roi = Some(idx);
+            plot.window_target = Some(window);
+        }
+        Some(idx) => {
+            if plot.window_target != Some(window) {
+                if let Some(managed) = plot.inner.rois_mut().get_mut(idx) {
+                    managed.roi = Roi::VRange {
+                        x: (window.min, window.max),
+                    };
+                }
+                plot.window_target = Some(window);
+            }
+        }
+    }
+}
+
+/// Take the FT-window drag detected during the last [`show`], if any: the new
+/// `[min, max]` bounds the user dragged the band to. Returns `Some` once per drag
+/// frame and clears the pending drag, so the caller updates its parameters and
+/// recomputes exactly once.
+pub fn take_window_drag(plot: &mut Plot) -> Option<AxisWindow> {
+    plot.window_dragged.take()
+}
+
 /// Render `plot` as one unit: its toolbar on top, then the plot canvas filling
 /// the full width with the legend *overlaid* in the top-right corner of the data
 /// area (matplotlib-style), mapping each curve's color/symbol to the name set
@@ -250,6 +335,33 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     plot.inner.set_graph_cursor(false);
     let resp = plot.inner.show(ui);
     plot.inner.set_graph_cursor(readout_on);
+
+    // FT-window band. siplot drives the VRange edge drag inside the inner `show`
+    // above, mutating the ROI in place; detect that by comparing the post-show
+    // bounds against the value we last pushed (`window_target`). Then keep the
+    // band only if it was requested this frame, else remove it so it never leaks
+    // onto a windowless graph or another tab sharing this plot. Drain siplot's
+    // event buffer (RoiAdded/RoiChanged accumulate per frame) since nothing here
+    // consumes it — we read state, not events.
+    plot.inner.drain_events();
+    if let Some(idx) = plot.window_roi
+        && let Some(managed) = plot.inner.rois().get(idx)
+        && let Roi::VRange { x: (min, max) } = managed.roi
+        && let Some(t) = plot.window_target
+        && ((min - t.min).abs() > 1e-9 || (max - t.max).abs() > 1e-9)
+    {
+        let w = AxisWindow { min, max };
+        plot.window_dragged = Some(w);
+        plot.window_target = Some(w);
+    }
+    if !plot.window_requested
+        && let Some(idx) = plot.window_roi.take()
+    {
+        plot.inner.remove_roi(idx);
+        plot.window_target = None;
+    }
+    plot.window_requested = false;
+
     let crosshair_on = plot.crosshair;
     // `PlotResponse::transform` carries the data-area rectangle (screen points)
     // that we anchor the legend overlay to and map the pointer through.
