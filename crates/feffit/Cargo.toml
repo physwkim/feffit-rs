@@ -15,6 +15,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusty-fitpack = "0.1.2"
 nalgebra = "0.35"
+# Lenient text decoding for beamline files. Korean-facility raw files (and a
+# Korean-typed feff.inp TITLE) carry CP949/EUC-KR header text that plain UTF-8
+# reads reject; `textio` falls back to EUC-KR so such files still load.
+encoding_rs = "0.8"
 # Optional pure-Rust space-group symmetry expansion (asymmetric unit + space
 # group → full cell) used by the `feffinp` module's Atoms support, behind the
 # `spacegroup` feature.

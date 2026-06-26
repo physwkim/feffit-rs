@@ -271,7 +271,9 @@ impl Feff10 {
         if !inp.is_file() {
             return Err(FeffError::NoFeffInp(inp));
         }
-        let content = std::fs::read_to_string(&inp).map_err(|e| FeffError::Io {
+        // Lenient decode: a Korean-typed feff.inp TITLE can be CP949/EUC-KR,
+        // which a strict UTF-8 read would reject before FEFF ever runs.
+        let content = crate::textio::read_to_string_lenient(&inp).map_err(|e| FeffError::Io {
             action: format!("read {}", inp.display()),
             source: e,
         })?;

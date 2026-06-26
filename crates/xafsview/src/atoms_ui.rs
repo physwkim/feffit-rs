@@ -565,7 +565,9 @@ fn load_feff_inp(work_dir: Option<&Path>) -> Option<String> {
         dlg = dlg.set_directory(d);
     }
     let path = dlg.pick_file()?;
-    std::fs::read_to_string(path).ok()
+    // Lenient decode (shared with the data readers): a Korean-typed feff.inp
+    // TITLE is CP949/EUC-KR, which a strict UTF-8 read would silently reject.
+    feffit::textio::read_to_string_lenient(&path).ok()
 }
 
 /// Save the current `feff.inp` text via a native dialog.

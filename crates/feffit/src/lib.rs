@@ -48,6 +48,7 @@ pub mod feffinp;
 pub mod feffrun;
 pub mod lm;
 pub mod params;
+pub mod textio;
 pub mod xafsft;
 pub mod xasdata;
 pub mod xasproc;

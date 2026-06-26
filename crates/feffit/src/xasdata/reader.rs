@@ -64,7 +64,10 @@ impl ColumnFile {
     /// Read and parse a column file from disk.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ReadError> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path)?;
+        // Decode leniently: raw files from Korean beamlines carry CP949/EUC-KR
+        // header text that a strict UTF-8 read would reject, failing the whole
+        // load even though the numeric data is ASCII.
+        let text = crate::textio::read_to_string_lenient(path)?;
         let mut cf = Self::from_text(&text)?;
         cf.path = Some(path.to_path_buf());
         Ok(cf)
@@ -355,5 +358,35 @@ mod tests {
         std::fs::remove_file(&path).ok();
         assert_eq!(k, vec![0.05, 0.10]);
         assert_eq!(chi, vec![0.2705808, -0.2710386]);
+    }
+
+    #[test]
+    fn from_path_loads_cp949_korean_header() {
+        // A Korean-beamline raw file: CP949/EUC-KR header (sample/description
+        // text) followed by ASCII numeric data. A strict UTF-8 read errors on the
+        // header bytes; `from_path` must decode leniently so the file still loads
+        // with its data intact and the Korean header preserved.
+        let (enc_header, _, _) =
+            encoding_rs::EUC_KR.encode("; Description : 한글 시료명 (NCM 양극재)\n");
+        let mut bytes = enc_header.into_owned();
+        bytes.extend_from_slice(b"; energy i0 it\n7000.0 100.0 50.0\n7001.0 200.0 90.0\n");
+        assert!(
+            std::str::from_utf8(&bytes).is_err(),
+            "fixture must be non-UTF-8 to exercise the CP949 fallback"
+        );
+
+        let path = std::env::temp_dir().join(format!("xasdata_cp949_{}.000", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let cf = ColumnFile::from_path(&path).expect("CP949 raw file must load");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(cf.ncols(), 3);
+        assert_eq!(cf.nrows(), 2);
+        assert_eq!(cf.column(0), Some([7000.0, 7001.0].as_slice()));
+        assert!(
+            cf.header.iter().any(|h| h.contains("한글 시료명")),
+            "Korean header should decode from CP949, got {:?}",
+            cf.header
+        );
     }
 }

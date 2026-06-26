@@ -10,7 +10,6 @@
 //! Only the `pha/amp/rep/lam/k` arrays and `reff/degen` feed the EXAFS
 //! equation; the rest is metadata reproduced for reporting parity.
 
-use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -90,7 +89,9 @@ impl FeffDatFile {
     /// Read and parse a `feffNNNN.dat` file from disk.
     pub fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
         let p = path.as_ref();
-        let text = fs::read_to_string(p)?;
+        // Lenient decode: the TITLE line can carry CP949/EUC-KR text from a
+        // Korean-typed feff.inp, which a strict UTF-8 read would reject.
+        let text = crate::textio::read_to_string_lenient(p)?;
         let mut f = Self::parse(&text);
         f.filename = Some(p.to_string_lossy().into_owned());
         Ok(f)
