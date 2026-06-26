@@ -1153,6 +1153,8 @@ impl XafsViewApp {
     /// Redraw the shared plot with the last fit's data vs model in the selected
     /// space/part.
     fn replot_feffit(&mut self) {
+        use crate::feffit_ui::PlotSpace;
+        use crate::plot::{GREEN, ORANGE};
         use crate::plot_data::{FIT_DATA, FIT_MODEL};
 
         self.plot.clear_curves();
@@ -1160,8 +1162,31 @@ impl XafsViewApp {
         let Some(p) = self.feffit.plot() else {
             return;
         };
-
         let has_model = p.has_model;
+
+        // K+Q: kʷ·χ(k) and χ(q) overlaid on the shared Å⁻¹ axis (four curves).
+        if space == PlotSpace::KQ {
+            let ((kx, kd, km), (qx, qd, qm)) = p.kq_series(part);
+            self.plot.set_graph_x_label("k, q (Å⁻¹)");
+            self.plot
+                .set_graph_y_label("kʷ·χ(k), χ(q)", siplot::YAxis::Left);
+            if !kx.is_empty() {
+                self.plot
+                    .add_curve_with_legend(&kx, &kd, FIT_DATA, "data k");
+                if has_model {
+                    self.plot
+                        .add_curve_with_legend(&kx, &km, FIT_MODEL, "model k");
+                }
+            }
+            if !qx.is_empty() {
+                self.plot.add_curve_with_legend(&qx, &qd, GREEN, "data q");
+                if has_model {
+                    self.plot.add_curve_with_legend(&qx, &qm, ORANGE, "model q");
+                }
+            }
+            return;
+        }
+
         let (x, data_y, model_y, xlabel, ylabel) = p.series(space, part);
         self.plot.set_graph_x_label(xlabel);
         self.plot.set_graph_y_label(ylabel, siplot::YAxis::Left);

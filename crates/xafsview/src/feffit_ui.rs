@@ -230,6 +230,8 @@ pub enum PlotSpace {
     R,
     /// `χ(q)` (back-transformed k-space).
     Q,
+    /// `kʷ·χ(k)` and `χ(q)` overlaid (both vs Å⁻¹) — the original's "K+Q".
+    KQ,
 }
 
 /// For R/Q space, which component to draw.
@@ -286,14 +288,15 @@ pub struct FeffitPlot {
 impl FeffitPlot {
     /// Build the `(x, data_y, model_y, x-label, y-label)` series for a given
     /// plot space and part. For k-space the part is ignored (`kʷ·χ(k)`); for
-    /// R/Q the part selects magnitude / real / imag / phase.
+    /// R/Q the part selects magnitude / real / imag / phase. `KQ` falls back to
+    /// the k-space series — the combined view is drawn via [`kq_series`](Self::kq_series).
     pub fn series(
         &self,
         space: PlotSpace,
         part: PlotPart,
     ) -> (Vec<f64>, Vec<f64>, Vec<f64>, &'static str, &'static str) {
         match space {
-            PlotSpace::K => {
+            PlotSpace::K | PlotSpace::KQ => {
                 let kw = self.kweight;
                 let weight = |k: &[f64], chi: &[f64]| -> Vec<f64> {
                     k.iter().zip(chi).map(|(&k, &c)| c * k.powi(kw)).collect()
@@ -315,6 +318,22 @@ impl FeffitPlot {
                 (self.data.q.clone(), dy, my, "q (Å⁻¹)", yl)
             }
         }
+    }
+
+    /// The "K+Q" combined view: the `kʷ·χ(k)` series and the `χ(q)` series (the
+    /// chosen `part`), both on the Å⁻¹ axis. Returns
+    /// `((k_x, k_data, k_model), (q_x, q_data, q_model))`.
+    #[allow(clippy::type_complexity)]
+    pub fn kq_series(
+        &self,
+        part: PlotPart,
+    ) -> (
+        (Vec<f64>, Vec<f64>, Vec<f64>),
+        (Vec<f64>, Vec<f64>, Vec<f64>),
+    ) {
+        let (kx, kd, km, _, _) = self.series(PlotSpace::K, part);
+        let (qx, qd, qm, _, _) = self.series(PlotSpace::Q, part);
+        ((kx, kd, km), (qx, qd, qm))
     }
 
     /// The six `(filename, content)` transforms the original's Plot Data reads,
@@ -950,12 +969,14 @@ impl FeffitUi {
                 (PlotSpace::Q, "Q"),
                 (PlotSpace::R, "R"),
                 (PlotSpace::K, "K"),
+                (PlotSpace::KQ, "K+Q"),
             ] {
                 if ui.selectable_value(&mut self.space, s, lbl).clicked() {
                     action.get_or_insert(FeffitAction::Replot);
                 }
             }
         });
+        // The part selector drives R/Q (and the q half of K+Q); pure k ignores it.
         if self.space != PlotSpace::K {
             ui.horizontal(|ui| {
                 ui.label("Graph type");
@@ -1295,6 +1316,20 @@ mod tests {
         assert!(plot.model_chi.is_empty(), "only FT has no model chi");
         assert!(!plot.data.r.is_empty(), "data was transformed to R-space");
         assert_eq!(plot.data.r.len(), plot.data.chir_mag.len());
+    }
+
+    #[test]
+    fn kq_series_pairs_k_and_q_curves() {
+        let (k, chi) = cu_kchi();
+        let mut ui = feffit_ui_with_paths();
+        ui.run(&k, &chi).expect("fit");
+        let plot = ui.plot().expect("plot stored");
+        let ((kx, kd, km), (qx, qd, qm)) = plot.kq_series(PlotPart::Mag);
+        assert!(!kx.is_empty() && !qx.is_empty(), "both halves present");
+        assert_eq!(kx.len(), kd.len());
+        assert_eq!(kx.len(), km.len());
+        assert_eq!(qx.len(), qd.len());
+        assert_eq!(qx.len(), qm.len());
     }
 
     #[test]
