@@ -270,6 +270,38 @@ impl FitMode {
     }
 }
 
+/// One of the original's "View …" result reports (the buttons under "Feffit out
+/// data"), shown in a pop-up text window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportKind {
+    /// Pairwise correlations between the free variables.
+    Correlations,
+    /// The free (varied) variables: value ± stderr.
+    FitValues,
+    /// The fixed global variables: name = value.
+    FixValues,
+    /// The full fit report (statistics, variables, path parameters).
+    FeffitSumm,
+    /// The path parameters, grouped by path.
+    PathSumm,
+    /// The fit statistics block on its own.
+    ResultsSumm,
+}
+
+impl ReportKind {
+    /// The pop-up window title.
+    pub fn title(self) -> &'static str {
+        match self {
+            ReportKind::Correlations => "Correlations",
+            ReportKind::FitValues => "Fit values",
+            ReportKind::FixValues => "Fix values",
+            ReportKind::FeffitSumm => "Feffit summary",
+            ReportKind::PathSumm => "Path summary",
+            ReportKind::ResultsSumm => "Results summary",
+        }
+    }
+}
+
 /// Data and model arrays from the last fit, ready to plot in any space.
 pub struct FeffitPlot {
     pub data_k: Vec<f64>,
@@ -475,6 +507,8 @@ pub struct FeffitUi {
     /// The original's "Fit" dropdown: fit / no fit / only FT. Defaults to
     /// `NoFit` (forward model preview without optimising).
     fit_mode: FitMode,
+    /// Which "View …" result report pop-up is open (transient UI state).
+    report_view: Option<ReportKind>,
     result: Option<FeffitResult>,
     plot: Option<FeffitPlot>,
 }
@@ -496,6 +530,7 @@ impl Default for FeffitUi {
             selected_path: 0,
             user_funcs: String::new(),
             fit_mode: FitMode::NoFit,
+            report_view: None,
             result: None,
             plot: None,
         }
@@ -517,6 +552,7 @@ impl FeffitUi {
             selected_path: 0,
             user_funcs: self.user_funcs.clone(),
             fit_mode: self.fit_mode,
+            report_view: None,
             result: None,
             plot: None,
         }
@@ -608,6 +644,99 @@ impl FeffitUi {
             ));
         }
         s
+    }
+
+    /// Text body for one of the "View …" result reports. Reports that need a
+    /// fit result return a short notice when none has been run; "Fix values"
+    /// reads the current parameter table, so it works without a fit.
+    pub fn report_for(&self, kind: ReportKind) -> String {
+        // Fix values come from the parameter table, not the fit result.
+        if kind == ReportKind::FixValues {
+            let mut s = String::from("=== Fixed variables ===\n");
+            let mut any = false;
+            for row in self.params.iter().filter(|r| r.kind == ParamKind::Fixed) {
+                s.push_str(&format!("  {:<14} = {:>12.6}\n", row.name, row.value));
+                any = true;
+            }
+            if !any {
+                s.push_str("  (none — every variable is varied or an expression)\n");
+            }
+            return s;
+        }
+
+        let Some(res) = &self.result else {
+            return "Run a fit first — this report needs fit results.".to_owned();
+        };
+        match kind {
+            ReportKind::FixValues => unreachable!("handled above"),
+            ReportKind::FitValues => {
+                let mut s = String::from("=== Free variables (value ± stderr) ===\n");
+                for b in &res.best {
+                    s.push_str(&format!(
+                        "  {:<14} = {:>12.6} ± {:.6}\n",
+                        b.name, b.value, b.stderr
+                    ));
+                }
+                s
+            }
+            ReportKind::Correlations => {
+                let mut s = String::from("=== Correlations between free variables ===\n");
+                let Some(cov) = &res.covar else {
+                    s.push_str("  (covariance unavailable — the Jacobian was singular)\n");
+                    return s;
+                };
+                let n = res.best.len();
+                // corr[i][j] = cov[i][j] / sqrt(cov[i][i]·cov[j][j]); list each
+                // pair once, largest magnitude first.
+                let mut pairs: Vec<(usize, usize, f64)> = Vec::new();
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        let d = (cov[i][i] * cov[j][j]).sqrt();
+                        let c = if d > 0.0 { cov[i][j] / d } else { 0.0 };
+                        pairs.push((i, j, c));
+                    }
+                }
+                pairs.sort_by(|a, b| b.2.abs().total_cmp(&a.2.abs()));
+                if pairs.is_empty() {
+                    s.push_str("  (fewer than two free variables)\n");
+                }
+                for (i, j, c) in pairs {
+                    s.push_str(&format!(
+                        "  {:<14} {:<14} = {:>+7.4}\n",
+                        res.best[i].name, res.best[j].name, c
+                    ));
+                }
+                s
+            }
+            ReportKind::PathSumm => {
+                let mut s = String::from("=== Path parameters ===\n");
+                let mut last = usize::MAX;
+                for pp in &res.path_params {
+                    if pp.path != last {
+                        s.push_str(&format!("\n  path {}:\n", pp.path));
+                        last = pp.path;
+                    }
+                    s.push_str(&format!(
+                        "    {:<8} = {:>12.6} ± {:.6}\n",
+                        pp.name, pp.value, pp.stderr
+                    ));
+                }
+                s
+            }
+            ReportKind::ResultsSumm => {
+                let mut s = String::from("=== Fit statistics ===\n");
+                s.push_str(&format!("  n_independent  = {:.3}\n", res.n_idp));
+                s.push_str(&format!("  n_varys        = {}\n", res.nvarys));
+                s.push_str(&format!("  n_free         = {}\n", res.nfree));
+                s.push_str(&format!("  chi_square     = {:.6}\n", res.chi_square));
+                s.push_str(&format!("  reduced chi^2  = {:.6}\n", res.chi2_reduced));
+                s.push_str(&format!("  R-factor       = {:.6}\n", res.rfactor));
+                s.push_str(&format!("  Akaike (AIC)   = {:.4}\n", res.aic));
+                s.push_str(&format!("  Bayesian (BIC) = {:.4}\n", res.bic));
+                s
+            }
+            ReportKind::FeffitSumm => self.report_text(),
+        }
     }
 
     /// Add a path file the app picked from a dialog.
@@ -1033,6 +1162,52 @@ impl FeffitUi {
                 });
         }
 
+        // --- View … result reports (the original's "Feffit out data" buttons) -
+        ui.add_space(4.0);
+        ui.label("View");
+        ui.horizontal_wrapped(|ui| {
+            // Most reports need a fit result; "Fix values" reads the parameter
+            // table, so it is always available.
+            let have = self.result.is_some();
+            for (kind, enabled) in [
+                (ReportKind::Correlations, have),
+                (ReportKind::FitValues, have),
+                (ReportKind::FixValues, true),
+                (ReportKind::FeffitSumm, have),
+                (ReportKind::PathSumm, have),
+                (ReportKind::ResultsSumm, have),
+            ] {
+                if ui
+                    .add_enabled(enabled, egui::Button::new(kind.title()))
+                    .clicked()
+                {
+                    self.report_view = Some(kind);
+                }
+            }
+        });
+
+        // The selected report's pop-up text window (one shared, re-titled window).
+        if let Some(kind) = self.report_view {
+            let text = self.report_for(kind);
+            let mut open = true;
+            egui::Window::new(kind.title())
+                .id(egui::Id::new("feffit_report"))
+                .open(&mut open)
+                .resizable(true)
+                .default_size([440.0, 340.0])
+                .show(ui.ctx(), |ui| {
+                    egui::ScrollArea::both().show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(text).monospace())
+                                .wrap_mode(egui::TextWrapMode::Extend),
+                        );
+                    });
+                });
+            if !open {
+                self.report_view = None;
+            }
+        }
+
         action
     }
 }
@@ -1330,6 +1505,55 @@ mod tests {
         assert_eq!(kx.len(), km.len());
         assert_eq!(qx.len(), qd.len());
         assert_eq!(qx.len(), qm.len());
+    }
+
+    #[test]
+    fn report_for_needs_a_fit_except_fix_values() {
+        let ui = FeffitUi::default();
+        // Fix values read the parameter table — available without a fit.
+        assert!(
+            ui.report_for(ReportKind::FixValues)
+                .contains("Fixed variables"),
+            "fix values render without a fit"
+        );
+        for kind in [
+            ReportKind::FitValues,
+            ReportKind::Correlations,
+            ReportKind::PathSumm,
+            ReportKind::ResultsSumm,
+            ReportKind::FeffitSumm,
+        ] {
+            assert!(
+                ui.report_for(kind).contains("Run a fit first"),
+                "{} should require a fit",
+                kind.title()
+            );
+        }
+    }
+
+    #[test]
+    fn report_for_after_fit_has_sections() {
+        let (k, chi) = cu_kchi();
+        let mut ui = feffit_ui_with_paths();
+        ui.run(&k, &chi).expect("fit");
+        assert!(
+            ui.report_for(ReportKind::FitValues).contains("amp"),
+            "fit values list the varied parameters"
+        );
+        assert!(
+            ui.report_for(ReportKind::ResultsSumm)
+                .contains("reduced chi^2"),
+            "results summary carries the statistics"
+        );
+        assert!(
+            ui.report_for(ReportKind::PathSumm).contains("path "),
+            "path summary groups by path"
+        );
+        assert!(
+            ui.report_for(ReportKind::Correlations)
+                .contains("Correlations"),
+            "correlations report has a header"
+        );
     }
 
     #[test]
