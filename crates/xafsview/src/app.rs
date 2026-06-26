@@ -423,6 +423,7 @@ impl XafsViewApp {
         let pre = self.reduction.pre_params();
         let bk = self.reduction.autobk_params();
         let ft = self.reduction.ft_params();
+        let xr = self.reduction.xftr_params();
         let info = {
             let g = self.session.current_group_mut()?;
             if g.mu.is_empty() {
@@ -431,6 +432,7 @@ impl XafsViewApp {
             feffit::xasdata::normalize(g, &pre);
             feffit::xasdata::autobk_group(g, &bk, 1.0);
             feffit::xasdata::xftf_group(g, &ft);
+            feffit::xasdata::xftr_group(g, &xr);
             (g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len()))
         };
         self.plot_data.mark_dirty();
@@ -860,6 +862,26 @@ impl XafsViewApp {
                 self.plot.set_graph_y_label("|χ(R)|", siplot::YAxis::Left);
                 if let (Some(r), Some(mag)) = (&g.r, &g.chir_mag) {
                     self.plot.add_curve_with_legend(r, mag, BLUE, "|χ(R)|");
+                }
+            }
+            GraphType::ChiQ => {
+                // Fourier-filtered EXAFS: the R-windowed back-transform Re[χ(q)]
+                // (carrying the forward FT's k-weight) overlaid on the original
+                // kʷ·χ(k), so the R-window's effect reads directly against the
+                // unfiltered signal on the shared k≈q axis.
+                self.plot.set_graph_x_label("q (Å⁻¹)");
+                self.plot.set_graph_y_label("kʷ·χ(q)", siplot::YAxis::Left);
+                if let (Some(k), Some(chi)) = (&g.k, &g.chi) {
+                    let y: Vec<f64> = k
+                        .iter()
+                        .zip(chi)
+                        .map(|(&kk, &c)| c * kk.powi(kweight))
+                        .collect();
+                    self.plot.add_curve_with_legend(k, &y, BLUE, "kʷ·χ(k)");
+                }
+                if let (Some(q), Some(re)) = (&g.q, &g.chiq_re) {
+                    self.plot
+                        .add_curve_with_legend(q, re, ORANGE, "Re[χ(q)] (filtered)");
                 }
             }
             GraphType::MuDeriv => {
@@ -1504,34 +1526,44 @@ impl XafsViewApp {
                     });
                 });
             });
-        // FT k-window band: on the kʷ·χ(k) graph, draw kmin/kmax as a draggable
-        // shaded band over the curve. Other graphs show no band — `set_window` is
-        // simply not called and `show` removes any stale band. Dragging an edge
-        // updates kmin/kmax and recomputes live, the same `change.refit` path a
-        // finished kmin/kmax DragValue edit takes (kmin/kmax feed both the AUTOBK
-        // background window and the FT, so a full recompute is the correct cost).
-        if self.reduction.graph == GraphType::KChi {
-            crate::plot::set_window(
-                &mut self.plot,
-                crate::plot::AxisWindow {
-                    min: self.reduction.kmin,
-                    max: self.reduction.kmax,
-                },
-            );
+        // Draggable FT-window band over the curve: the forward k-window
+        // (kmin/kmax) on the kʷ·χ(k) graph, the reverse R-window (rmin/rmax) on
+        // the |χ(R)| graph. Other graphs show no band — `set_window` is simply not
+        // called and `show` removes any stale band. Dragging an edge updates the
+        // bound and recomputes live, the same `change.refit` path a finished
+        // DragValue edit takes (kmin/kmax feed both the AUTOBK background window
+        // and the FT, so a full recompute is the correct cost either way).
+        let active_window = match self.reduction.graph {
+            GraphType::KChi => Some((self.reduction.kmin, self.reduction.kmax)),
+            GraphType::ChiR => Some((self.reduction.rmin, self.reduction.rmax)),
+            _ => None,
+        };
+        if let Some((min, max)) = active_window {
+            crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
         }
         egui::CentralPanel::default().show_inside(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });
         if let Some(w) = crate::plot::take_window_drag(&mut self.plot) {
             // A left-edge drag past the right (or vice versa) inverts the pair;
-            // re-order so kmin < kmax, and keep kmin off negative k.
+            // re-order so min < max, and keep the lower bound off negative k/R.
             let (lo, hi) = if w.min <= w.max {
                 (w.min, w.max)
             } else {
                 (w.max, w.min)
             };
-            self.reduction.kmin = lo.max(0.0);
-            self.reduction.kmax = hi;
+            let lo = lo.max(0.0);
+            match self.reduction.graph {
+                GraphType::KChi => {
+                    self.reduction.kmin = lo;
+                    self.reduction.kmax = hi;
+                }
+                GraphType::ChiR => {
+                    self.reduction.rmin = lo;
+                    self.reduction.rmax = hi;
+                }
+                _ => {}
+            }
             change.refit = true;
         }
 

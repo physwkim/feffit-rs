@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use feffit::xasdata::{AutobkParams, FtParams, PreEdgeParams, Window};
+use feffit::xasdata::{AutobkParams, FtParams, PreEdgeParams, Window, XftrParams};
 
 /// Which reduction stage to display on the plot.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -23,6 +23,9 @@ pub enum GraphType {
     KChi,
     /// `*R.CHI`: magnitude of the Fourier transform `|χ(R)|`.
     ChiR,
+    /// `*Q.CHI`: Fourier-filtered EXAFS `Re[χ(q)]` from the R-windowed reverse
+    /// FT, overlaid on the original `kʷ·χ(k)` for comparison.
+    ChiQ,
     /// `XMU' + XMU''`: first and second derivative of `mu(E)`.
     MuDeriv,
     /// `BKG(E)'`: first derivative of the background `μ0(E)`.
@@ -39,10 +42,11 @@ pub enum GraphType {
 
 impl GraphType {
     /// All graph types, in the original XAFSView "Graph type" order.
-    pub const ALL: [GraphType; 9] = [
+    pub const ALL: [GraphType; 10] = [
         GraphType::MuBkg,
         GraphType::KChi,
         GraphType::ChiR,
+        GraphType::ChiQ,
         GraphType::MuDeriv,
         GraphType::BkgEDeriv,
         GraphType::BkgKDeriv,
@@ -57,6 +61,7 @@ impl GraphType {
             GraphType::MuBkg => "XMU + BKG",
             GraphType::KChi => "*K.CHI",
             GraphType::ChiR => "*R.CHI",
+            GraphType::ChiQ => "*Q.CHI",
             GraphType::MuDeriv => "XMU' + XMU''",
             GraphType::BkgEDeriv => "BKG(E)'",
             GraphType::BkgKDeriv => "BKG(k)'",
@@ -126,8 +131,16 @@ pub struct ReductionUi {
     pub kmax: f64,
     /// FT window taper width (Å⁻¹).
     pub dk: f64,
-    /// FT window function.
+    /// FT window function. Shared by the forward k-window and the reverse
+    /// R-window taper.
     pub window: Window,
+    /// Reverse-FT R-window lower bound (Å) — the back-transform peak selection
+    /// for the Fourier-filtered χ(q).
+    pub rmin: f64,
+    /// Reverse-FT R-window upper bound (Å).
+    pub rmax: f64,
+    /// Reverse-FT R-window taper width (Å).
+    pub dr: f64,
     /// Low-energy spline clamp weight.
     pub clamp_lo: f64,
     /// High-energy spline clamp weight.
@@ -172,6 +185,9 @@ impl Default for ReductionUi {
             kmax: 14.0,
             dk: 1.0,
             window: Window::Hanning,
+            rmin: 1.0,
+            rmax: 3.0,
+            dr: 0.2,
             clamp_lo: 0.0,
             clamp_hi: 1.0,
             graph: GraphType::MuBkg,
@@ -237,6 +253,19 @@ impl ReductionUi {
             dk: self.dk,
             window: self.window,
             ..FtParams::default()
+        }
+    }
+
+    /// Reverse-FT parameters for the Fourier-filtered χ(q) plot. `qmax_out`
+    /// follows larch's `kmax + 2`; the R-window shares the FT window function.
+    pub fn xftr_params(&self) -> XftrParams {
+        XftrParams {
+            rmin: self.rmin,
+            rmax: self.rmax,
+            dr: self.dr,
+            window: self.window,
+            qmax_out: self.kmax + 2.0,
+            ..XftrParams::default()
         }
     }
 
@@ -415,6 +444,24 @@ impl ReductionUi {
                                 }
                             });
                         ui.end_row();
+
+                        // Reverse-FT R-window (the back-transform peak selection
+                        // for the *Q.CHI graph; also the band draggable on *R.CHI).
+                        for (label, value, speed, range) in [
+                            ("rmin", &mut self.rmin, 0.05, 0.0..=8.0),
+                            ("rmax", &mut self.rmax, 0.05, 0.0..=8.0),
+                            ("dr", &mut self.dr, 0.05, 0.0..=2.0),
+                        ] {
+                            ui.label(label);
+                            let r = ui.add(
+                                egui::DragValue::new(value)
+                                    .speed(speed)
+                                    .range(range)
+                                    .suffix(" Å"),
+                            );
+                            change.refit |= r.drag_stopped() || r.lost_focus();
+                            ui.end_row();
+                        }
                     });
             });
         });
@@ -455,7 +502,10 @@ mod tests {
     /// entries, in order, with the original radio labels — every label distinct
     /// and non-empty (drives the combo box via `GraphType::ALL`).
     #[test]
-    fn graph_types_mirror_the_original_nine() {
+    fn graph_types_cover_the_original_nine_plus_back_transform() {
+        // The original XAFSView Autobk has nine graph types; `*Q.CHI` is an
+        // addition beyond parity — the Fourier-filtered χ(q) view the original
+        // lacks here, needed so the reverse-FT R-window has a visible result.
         let labels: Vec<&str> = GraphType::ALL.iter().map(|g| g.label()).collect();
         assert_eq!(
             labels,
@@ -463,6 +513,7 @@ mod tests {
                 "XMU + BKG",
                 "*K.CHI",
                 "*R.CHI",
+                "*Q.CHI",
                 "XMU' + XMU''",
                 "BKG(E)'",
                 "BKG(k)'",
