@@ -13,8 +13,8 @@ use feffit::feffdat::FeffPath;
 use feffit::params::Parameters;
 use feffit::xasdata::Window;
 use feffit::{
-    DataSet, FeffitResult, FitDataSet, FitSpace, PATH_PNAMES, PathSpec, Spec, Transform,
-    XafsOutput, feffit, feffit_eval, xafsft,
+    DataSet, FeffitResult, FitDataSet, FitSpace, PathSpec, Spec, Transform, XafsOutput, feffit,
+    feffit_eval, xafsft,
 };
 
 /// What the FEFFIT controls need the app to do this frame.
@@ -67,8 +67,97 @@ impl ParamRow {
     }
 }
 
-/// One loaded Feff path plus its eight editable parameter-spec fields (in
-/// [`PATH_PNAMES`] order: degen, s02, e0, ei, deltar, sigma2, third, fourth).
+/// The four per-path local fit parameters (the original's per-path "Guess/Set"
+/// block), in display order. Each, when enabled, registers an auto-named
+/// variable `<base><pathindex>` (1-based): the coordination factor `N` (the
+/// amplitude is `amp·N`), the Debye-Waller `sig` (σ²), and the `third`/`fourth`
+/// cumulants. `(base, hint)`.
+const PATH_LOCALS: [(&str, &str); 4] = [
+    ("N", "coordination factor — amplitude is amp·N"),
+    ("sig", "σ² Debye-Waller (Å²)"),
+    ("third", "3rd cumulant C₃ (Å³)"),
+    ("fourth", "4th cumulant C₄ (Å⁴)"),
+];
+const LOC_N: usize = 0;
+const LOC_SIG: usize = 1;
+const LOC_THIRD: usize = 2;
+const LOC_FOURTH: usize = 3;
+
+/// One per-path fit parameter: a refined (`Vary` = "guess") or held
+/// (`Fixed` = "set") value, an `Expr` override (an expression over other
+/// variables, used by `.inp` import), and an enable flag. When disabled the path
+/// parameter is the constant `value` (so a disabled `N` gives amplitude `amp·1`).
+#[derive(Clone)]
+struct PathLocal {
+    kind: ParamKind,
+    value: f64,
+    expr: String,
+    enabled: bool,
+}
+
+impl PathLocal {
+    fn guess(value: f64) -> Self {
+        Self {
+            kind: ParamKind::Vary,
+            value,
+            expr: String::new(),
+            enabled: true,
+        }
+    }
+    fn set(value: f64) -> Self {
+        Self {
+            kind: ParamKind::Fixed,
+            value,
+            expr: String::new(),
+            enabled: true,
+        }
+    }
+    /// A parameter present in the block but unchecked (off): a fixed constant.
+    fn off(value: f64) -> Self {
+        Self {
+            kind: ParamKind::Vary,
+            value,
+            expr: String::new(),
+            enabled: false,
+        }
+    }
+
+    /// The auto-named variable this local registers, or `None` when it is
+    /// disabled or an expression (those reference existing variables instead).
+    fn var(&self, base: &str, idx: usize) -> Option<(String, ParamKind, f64)> {
+        (self.enabled && self.kind != ParamKind::Expr)
+            .then(|| (format!("{base}{}", idx + 1), self.kind, self.value))
+    }
+
+    /// The [`Spec`] for an additive path parameter (σ²/third/fourth): the
+    /// auto-named variable when enabled, the typed expression for `Expr`, else
+    /// the constant value.
+    fn spec(&self, base: &str, idx: usize) -> Spec {
+        if !self.enabled {
+            return Spec::Const(self.value);
+        }
+        match self.kind {
+            ParamKind::Expr => parse_spec(&self.expr),
+            _ => Spec::Expr(format!("{base}{}", idx + 1)),
+        }
+    }
+
+    /// The multiplicative factor for the amplitude `amp · factor` (the `N`
+    /// local): the variable, the parenthesised expression, or the constant.
+    fn factor(&self, base: &str, idx: usize) -> String {
+        if !self.enabled {
+            return format!("{}", self.value);
+        }
+        match self.kind {
+            ParamKind::Expr => format!("({})", self.expr.trim()),
+            _ => format!("{base}{}", idx + 1),
+        }
+    }
+}
+
+/// One loaded Feff path: the shared-parameter wiring (editable expressions over
+/// the global variables / the `.dat` file) plus the per-path local fit
+/// parameters ([`PATH_LOCALS`]).
 #[derive(Clone)]
 struct PathRow {
     label: String,
@@ -76,45 +165,69 @@ struct PathRow {
     nleg: usize,
     enabled: bool,
     path: FeffPath,
-    specs: [String; 8],
+    /// Editable expressions for the shared path parameters: `degen` (from the
+    /// file), `e0`/`deltar` wired to the global variables, and `ei`.
+    degen: String,
+    e0: String,
+    ei: String,
+    deltar: String,
+    /// Per-path amplitude override (`.inp` import / advanced). `None` derives the
+    /// amplitude `amp·N` from the shared `amp` global and the `N` local.
+    s02_override: Option<String>,
+    /// The per-path local fit parameters, in [`PATH_LOCALS`] order.
+    locals: [PathLocal; 4],
 }
 
 impl PathRow {
-    /// Seed the spec fields from a freshly loaded path with the standard
-    /// first-shell wiring (degen from the file; s02/e0/Δr/σ² bound to the
-    /// default variables) so a loaded path is ready to fit.
+    /// Seed a freshly loaded path with the standard first-shell wiring: `degen`
+    /// from the file, `e0`/`Δr` bound to the shared globals, the amplitude
+    /// `amp·N`, and a refined per-path σ² — ready to fit.
     fn new(label: String, path: FeffPath) -> Self {
         let reff = path.feffdat.reff;
         let nleg = path.feffdat.nleg;
-        let specs = default_specs(path.feffdat.degen);
+        let degen = format!("{}", path.feffdat.degen);
         Self {
             label,
             reff,
             nleg,
             enabled: true,
             path,
-            specs,
+            degen,
+            e0: "del_e0".to_owned(),
+            ei: "0".to_owned(),
+            deltar: "alpha*reff".to_owned(),
+            s02_override: None,
+            locals: default_locals(),
         }
     }
 
-    /// Reset the eight parameter-spec fields to the standard first-shell starter
-    /// wiring (the original "Init" button for the selected path).
+    /// Reset this path's parameters to the standard first-shell starter wiring
+    /// (the original "Init" button for the selected path).
     fn reset_specs(&mut self) {
-        self.specs = default_specs(self.path.feffdat.degen);
+        self.degen = format!("{}", self.path.feffdat.degen);
+        self.e0 = "del_e0".to_owned();
+        self.ei = "0".to_owned();
+        self.deltar = "alpha*reff".to_owned();
+        self.s02_override = None;
+        self.locals = default_locals();
     }
 
-    /// Parse the eight spec fields into a [`PathSpec`] (a field that parses as a
-    /// number is a constant; otherwise it is an expression string).
-    fn to_pathspec(&self) -> PathSpec {
+    /// Assemble this path's [`PathSpec`] at fit position `idx` (0-based; the
+    /// per-path variables are named with the 1-based index).
+    fn to_pathspec(&self, idx: usize) -> PathSpec {
+        let s02 = match &self.s02_override {
+            Some(e) => parse_spec(e),
+            None => Spec::Expr(format!("amp*{}", self.locals[LOC_N].factor("N", idx))),
+        };
         PathSpec {
-            degen: parse_spec(&self.specs[0]),
-            s02: parse_spec(&self.specs[1]),
-            e0: parse_spec(&self.specs[2]),
-            ei: parse_spec(&self.specs[3]),
-            deltar: parse_spec(&self.specs[4]),
-            sigma2: parse_spec(&self.specs[5]),
-            third: parse_spec(&self.specs[6]),
-            fourth: parse_spec(&self.specs[7]),
+            degen: parse_spec(&self.degen),
+            s02,
+            e0: parse_spec(&self.e0),
+            ei: parse_spec(&self.ei),
+            deltar: parse_spec(&self.deltar),
+            sigma2: self.locals[LOC_SIG].spec("sig", idx),
+            third: self.locals[LOC_THIRD].spec("third", idx),
+            fourth: self.locals[LOC_FOURTH].spec("fourth", idx),
         }
     }
 }
@@ -128,19 +241,14 @@ fn parse_spec(s: &str) -> Spec {
     }
 }
 
-/// The standard first-shell starter spec fields (degen from the file; s02/e0/Δr/σ²
-/// bound to the default variables) — shared by [`PathRow::new`] and the "Init"
-/// reset.
-fn default_specs(degen: impl std::fmt::Display) -> [String; 8] {
+/// The standard first-shell per-path locals: `N` fixed at 1 (so amplitude is
+/// `amp·1`), a refined σ², and the cumulants present but off.
+fn default_locals() -> [PathLocal; 4] {
     [
-        format!("{degen}"),      // degen
-        "amp".to_owned(),        // s02
-        "del_e0".to_owned(),     // e0
-        "0".to_owned(),          // ei
-        "alpha*reff".to_owned(), // deltar
-        "sig2".to_owned(),       // sigma2
-        "0".to_owned(),          // third
-        "0".to_owned(),          // fourth
+        PathLocal::set(1.0),
+        PathLocal::guess(0.003),
+        PathLocal::off(0.0),
+        PathLocal::off(0.0),
     ]
 }
 
@@ -148,23 +256,19 @@ fn default_specs(degen: impl std::fmt::Display) -> [String; 8] {
 /// parameters can be inserted by name (with a sensible starting value) instead of
 /// remembered and typed. Each entry is `(name, default value, hint)`.
 ///
-/// The first four are exactly the variables the default path wiring references
-/// (see [`default_specs`]): `amp`→s02, `del_e0`→e0, `alpha`→Δr (`alpha*reff`),
-/// `sig2`→σ². `temp`/`debye_temp` are the inputs to the Debye-Waller
-/// `sigma2_debye`/`sigma2_eins` helpers, used via a `%set` user function.
-const STANDARD_VARS: [(&str, f64, &str); 6] = [
-    ("amp", 0.9, "S₀² amplitude — the default path s02"),
+/// The first three are the shared variables the default path wiring references:
+/// `amp`→s02 amplitude, `del_e0`→e0, `alpha`→Δr (`alpha*reff`). `temp`/`debye_temp`
+/// are the inputs to the Debye-Waller `sigma2_debye`/`sigma2_eins` helpers, used
+/// via a `%set` user function. (σ² and N are per-path locals on each path, not
+/// globals — see [`PATH_LOCALS`].)
+const STANDARD_VARS: [(&str, f64, &str); 5] = [
+    ("amp", 0.9, "S₀² amplitude — shared across paths"),
     (
         "del_e0",
         0.0,
-        "ΔE₀ energy-origin shift — the default path e0",
+        "ΔE₀ energy-origin shift — shared across paths",
     ),
-    (
-        "alpha",
-        0.0,
-        "lattice expansion — the default path Δr (alpha·reff)",
-    ),
-    ("sig2", 0.003, "σ² Debye-Waller — the default path sigma2"),
+    ("alpha", 0.0, "lattice expansion — shared (Δr = alpha·reff)"),
     (
         "temp",
         300.0,
@@ -644,7 +748,7 @@ pub struct SavedPath {
     /// Half path length from the feff file.
     pub reff: f64,
     /// `(parameter name, value, stderr)` for each fitted path parameter, names
-    /// drawn from [`PATH_PNAMES`].
+    /// drawn from [`feffit::PATH_PNAMES`].
     params: Vec<(String, f64, f64)>,
 }
 
@@ -657,7 +761,7 @@ impl SavedPath {
             .map(|(_, v, e)| (*v, *e))
     }
 
-    /// `(value, stderr)` for a Save-Items key: a [`PATH_PNAMES`] parameter name,
+    /// `(value, stderr)` for a Save-Items key: a [`feffit::PATH_PNAMES`] parameter name,
     /// or `""` for the computed `reff + Δr` (Δr's value offset by the constant
     /// `reff`, carrying Δr's stderr). Missing parameters report `(0, 0)`, the
     /// original's `n = 0` filler for paths a fit does not use.
@@ -715,12 +819,13 @@ impl Default for FeffitUi {
     fn default() -> Self {
         Self {
             paths: Vec::new(),
-            // A standard first-shell starter set the seeded path specs reference.
+            // The shared global variables the seeded path wiring references:
+            // S₀² amplitude, ΔE₀, and the lattice expansion. (σ² and N are
+            // per-path locals on each path, not globals.)
             params: vec![
                 ParamRow::var("amp", 0.9),
                 ParamRow::var("del_e0", 0.0),
                 ParamRow::var("alpha", 0.0),
-                ParamRow::var("sig2", 0.003),
             ],
             ft: FtSettings::default(),
             space: PlotSpace::R,
@@ -1006,20 +1111,40 @@ impl FeffitUi {
 
     /// Add a path loaded for a `Load inp` import, applying the `.inp`'s
     /// per-parameter expression overrides over the default first-shell wiring
-    /// (degen stays as read from the `.dat` file).
+    /// (`degen` stays as read from the `.dat` file). The `.inp` carries its own
+    /// per-path variables (`e1`/`delr1`/`sig1`/…, brought into the global table
+    /// by [`apply_inp`](Self::apply_inp)), so the shared expressions and the
+    /// σ²/cumulant locals are kept verbatim as `Expr` references to them; the
+    /// `.inp`'s amplitude expression overrides the derived `amp·N`.
     pub fn add_inp_path(&mut self, label: String, path: FeffPath, inp: &InpPath) {
         let mut row = PathRow::new(label, path);
-        for (slot, ov) in [
-            (1, &inp.s02),
-            (2, &inp.e0),
-            (3, &inp.ei),
-            (4, &inp.deltar),
-            (5, &inp.sigma2),
-            (6, &inp.third),
-            (7, &inp.fourth),
+        if let Some(v) = &inp.e0 {
+            row.e0 = v.clone();
+        }
+        if let Some(v) = &inp.ei {
+            row.ei = v.clone();
+        }
+        if let Some(v) = &inp.deltar {
+            row.deltar = v.clone();
+        }
+        if let Some(v) = &inp.s02 {
+            // The `.inp` drives amplitude itself; disable the unused N local so it
+            // does not register a stray variable.
+            row.s02_override = Some(v.clone());
+            row.locals[LOC_N].enabled = false;
+        }
+        for (li, ov) in [
+            (LOC_SIG, &inp.sigma2),
+            (LOC_THIRD, &inp.third),
+            (LOC_FOURTH, &inp.fourth),
         ] {
             if let Some(v) = ov {
-                row.specs[slot] = v.clone();
+                row.locals[li] = PathLocal {
+                    kind: ParamKind::Expr,
+                    value: 0.0,
+                    expr: v.clone(),
+                    enabled: true,
+                };
             }
         }
         self.paths.push(row);
@@ -1128,9 +1253,23 @@ impl FeffitUi {
 
         let mut feff_paths = Vec::new();
         let mut specs = Vec::new();
-        for row in self.paths.iter().filter(|p| p.enabled) {
+        for (idx, row) in self.paths.iter().enumerate() {
+            if !row.enabled {
+                continue;
+            }
+            // Register this path's enabled local variables (auto-named by the
+            // 1-based path index), then wire its spec to them.
+            for (li, (base, _)) in PATH_LOCALS.iter().enumerate() {
+                if let Some((name, kind, value)) = row.locals[li].var(base, idx) {
+                    match kind {
+                        ParamKind::Vary => params.add_var(&name, value),
+                        ParamKind::Fixed => params.add_fixed(&name, value),
+                        ParamKind::Expr => {}
+                    }
+                }
+            }
             feff_paths.push(row.path.clone());
-            specs.push(row.to_pathspec());
+            specs.push(row.to_pathspec(idx));
         }
 
         let dataset = DataSet::new(
@@ -1321,19 +1460,74 @@ impl FeffitUi {
                         "{}  (reff={:.3}, nleg={})",
                         p.label, p.reff, p.nleg
                     ));
-                    egui::Grid::new("feffit_path_specs")
+                    // Per-path fit parameters (the original's per-path Guess/Set
+                    // block): N, σ², 3rd/4th cumulant, each an auto-named variable
+                    // `<base><pathindex>` when enabled.
+                    ui.add_space(2.0);
+                    ui.strong("Per-path parameters");
+                    for (li, (base, hint)) in PATH_LOCALS.iter().copied().enumerate() {
+                        let loc = &mut p.locals[li];
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut loc.enabled, "")
+                                .on_hover_text("use this parameter in the fit");
+                            ui.add_enabled_ui(loc.enabled, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(format!("{base}{}", idx + 1))
+                                            .monospace(),
+                                    )
+                                    .selectable(false),
+                                )
+                                .on_hover_text(hint);
+                                egui::ComboBox::from_id_salt(("ploc", idx, li))
+                                    .selected_text(kind_name(loc.kind))
+                                    .width(56.0)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut loc.kind,
+                                            ParamKind::Vary,
+                                            "guess",
+                                        );
+                                        ui.selectable_value(&mut loc.kind, ParamKind::Fixed, "set");
+                                        ui.selectable_value(&mut loc.kind, ParamKind::Expr, "expr");
+                                    });
+                                match loc.kind {
+                                    ParamKind::Expr => {
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut loc.expr)
+                                                .desired_width(110.0),
+                                        );
+                                    }
+                                    _ => {
+                                        ui.add(egui::DragValue::new(&mut loc.value).speed(0.001));
+                                    }
+                                }
+                            });
+                        });
+                    }
+                    // Shared wiring: editable expressions over the global
+                    // variables / the .dat file. The amplitude (amp·N) is derived
+                    // from the N local unless a `.inp` import overrode it.
+                    ui.add_space(2.0);
+                    ui.strong("Wiring (shared)");
+                    egui::Grid::new("feffit_path_wiring")
                         .num_columns(2)
                         .spacing([6.0, 4.0])
                         .show(ui, |ui| {
-                            for (j, name) in PATH_PNAMES.iter().enumerate() {
-                                ui.label(*name);
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut p.specs[j])
-                                        .desired_width(150.0),
-                                );
+                            for (name, field) in [
+                                ("degen", &mut p.degen),
+                                ("e0", &mut p.e0),
+                                ("deltar", &mut p.deltar),
+                                ("ei", &mut p.ei),
+                            ] {
+                                ui.label(name);
+                                ui.add(egui::TextEdit::singleline(field).desired_width(150.0));
                                 ui.end_row();
                             }
                         });
+                    if let Some(s02) = &p.s02_override {
+                        ui.weak(format!("s02 = {s02}  (from .inp)"));
+                    }
                 }
                 if let Some(i) = remove_path {
                     self.paths.remove(i);
@@ -1791,13 +1985,50 @@ mod tests {
     #[test]
     fn seeded_path_wires_default_variables() {
         let row = PathRow::new("p".into(), FeffPath::new(FeffDatFile::parse(FEFF0001)));
-        let spec = row.to_pathspec();
-        assert!(matches!(spec.s02, Spec::Expr(ref s) if s == "amp"));
+        let spec = row.to_pathspec(0);
+        // Amplitude is the shared `amp` times the per-path N (fixed at 1); e0/Δr
+        // wire to the shared globals; σ² is the per-path `sig1` variable.
+        assert!(matches!(spec.s02, Spec::Expr(ref s) if s == "amp*N1"));
         assert!(matches!(spec.e0, Spec::Expr(ref s) if s == "del_e0"));
         assert!(matches!(spec.deltar, Spec::Expr(ref s) if s == "alpha*reff"));
-        assert!(matches!(spec.sigma2, Spec::Expr(ref s) if s == "sig2"));
-        // degen comes from the file as a constant.
+        assert!(matches!(spec.sigma2, Spec::Expr(ref s) if s == "sig1"));
+        // degen comes from the file as a constant; cumulants are off (constant 0).
         assert!(matches!(spec.degen, Spec::Const(_)));
+        assert!(matches!(spec.third, Spec::Const(v) if v == 0.0));
+        assert!(matches!(spec.fourth, Spec::Const(v) if v == 0.0));
+    }
+
+    #[test]
+    fn per_path_sigma_uses_the_path_index() {
+        // The second path's σ² is a distinct variable `sig2`, so two paths refine
+        // independent Debye-Waller factors.
+        let row = PathRow::new("p".into(), FeffPath::new(FeffDatFile::parse(FEFF0001)));
+        let spec1 = row.to_pathspec(1);
+        assert!(matches!(spec1.sigma2, Spec::Expr(ref s) if s == "sig2"));
+        assert!(matches!(spec1.s02, Spec::Expr(ref s) if s == "amp*N2"));
+    }
+
+    #[test]
+    fn disabled_local_becomes_a_constant_and_registers_no_variable() {
+        let mut row = PathRow::new("p".into(), FeffPath::new(FeffDatFile::parse(FEFF0001)));
+        // Turn σ² off: it should fall back to its constant value, not `sig1`.
+        row.locals[LOC_SIG].enabled = false;
+        row.locals[LOC_SIG].value = 0.005;
+        let spec = row.to_pathspec(0);
+        assert!(matches!(spec.sigma2, Spec::Const(v) if (v - 0.005).abs() < 1e-12));
+        assert!(
+            row.locals[LOC_SIG].var("sig", 0).is_none(),
+            "a disabled local registers no variable"
+        );
+        // An expression local references existing variables, so also registers none.
+        row.locals[LOC_SIG] = PathLocal {
+            kind: ParamKind::Expr,
+            value: 0.0,
+            expr: "sigm_mcm".into(),
+            enabled: true,
+        };
+        assert!(matches!(row.to_pathspec(0).sigma2, Spec::Expr(ref s) if s == "sigm_mcm"));
+        assert!(row.locals[LOC_SIG].var("sig", 0).is_none());
     }
 
     #[test]
@@ -1828,9 +2059,11 @@ mod tests {
 
     #[test]
     fn run_errors_without_paths() {
-        let mut ui = FeffitUi::default();
         // A path-requiring mode (the default "Only FT" transforms data alone).
-        ui.fit_mode = FitMode::Fit;
+        let mut ui = FeffitUi {
+            fit_mode: FitMode::Fit,
+            ..FeffitUi::default()
+        };
         let (k, chi) = cu_kchi();
         assert!(ui.run(&k, &chi).is_err(), "no paths must error");
     }
@@ -1854,7 +2087,12 @@ mod tests {
             "MINPACK should report success (info 1-4), got {}",
             res.info
         );
-        assert_eq!(res.nvarys, 4, "amp, del_e0, alpha, sig2 all vary");
+        // Shared amp/del_e0/alpha plus a per-path σ² for each of the two paths
+        // (sig1, sig2); the per-path N1/N2 are fixed, so 5 vary.
+        assert_eq!(
+            res.nvarys, 5,
+            "amp, del_e0, alpha + per-path sig1, sig2 all vary"
+        );
         assert!(
             res.rfactor.is_finite() && res.rfactor < 0.5,
             "R={}",
@@ -1862,8 +2100,8 @@ mod tests {
         );
         assert!(res.chi2_reduced.is_finite());
 
-        // The four named variables must appear in the best-fit table.
-        for name in ["amp", "del_e0", "alpha", "sig2"] {
+        // The shared globals and both per-path σ² must appear in the best-fit table.
+        for name in ["amp", "del_e0", "alpha", "sig1", "sig2"] {
             assert!(
                 res.best.iter().any(|b| b.name == name),
                 "missing best-fit var {name}"
@@ -2093,6 +2331,31 @@ mod tests {
     }
 
     #[test]
+    fn add_inp_path_keeps_the_inp_expressions() {
+        // The `.inp` carries its own per-path variables (e1/delr1/sig1, amplitude
+        // `s02 * N1`); add_inp_path must preserve those expressions verbatim
+        // rather than substitute the default amp·N / per-path locals.
+        let inp = parse_feffit_inp(INP_SAMPLE);
+        let mut ui = FeffitUi::default();
+        ui.apply_inp(&inp);
+        ui.add_inp_path(
+            "feff0001.dat".into(),
+            FeffPath::new(FeffDatFile::parse(FEFF0001)),
+            &inp.paths[0],
+        );
+        let spec = ui.paths[0].to_pathspec(0);
+        assert!(matches!(spec.e0, Spec::Expr(ref s) if s == "e1"));
+        assert!(matches!(spec.deltar, Spec::Expr(ref s) if s == "delr1"));
+        assert!(matches!(spec.s02, Spec::Expr(ref s) if s == "s02 * N1"));
+        assert!(matches!(spec.sigma2, Spec::Expr(ref s) if s == "sig1"));
+        // The amplitude override disables the unused N local (no stray variable).
+        assert!(
+            ui.paths[0].locals[LOC_N].var("N", 0).is_none(),
+            "the .inp drives amplitude, so N registers nothing"
+        );
+    }
+
+    #[test]
     fn adopt_fit_as_guess_updates_vary_values_and_undo_reverts() {
         let vary_values = |ui: &FeffitUi| -> Vec<(String, f64)> {
             ui.params
@@ -2135,22 +2398,28 @@ mod tests {
     }
 
     #[test]
-    fn standard_vars_cover_the_default_path_wiring() {
-        // The "Add ▾" menu must offer the variables the default path specs
-        // reference, so adding one by name actually resolves a loaded path.
+    fn standard_vars_cover_the_shared_wiring() {
+        // The "Add ▾" menu offers the shared global variables the default path
+        // wiring references; σ² is per-path now, not a global.
         let offered: Vec<&str> = STANDARD_VARS.iter().map(|(n, _, _)| *n).collect();
-        let specs = default_specs(1.0);
-        for needed in ["amp", "del_e0", "alpha", "sig2"] {
+        let row = PathRow::new("p".into(), FeffPath::new(FeffDatFile::parse(FEFF0001)));
+        let spec = row.to_pathspec(0);
+        let wiring = format!("{:?} {:?} {:?}", spec.s02, spec.e0, spec.deltar);
+        for needed in ["amp", "del_e0", "alpha"] {
             assert!(offered.contains(&needed), "Add menu offers {needed}");
             assert!(
-                specs.iter().any(|s| s.contains(needed)),
+                wiring.contains(needed),
                 "default path wiring references {needed}"
             );
         }
-        // The default variable seed is exactly those four (in order).
+        assert!(
+            !offered.contains(&"sig2"),
+            "σ² is a per-path local, not a global"
+        );
+        // The default variable seed is exactly the three shared params (in order).
         let ui = FeffitUi::default();
         let seeded: Vec<&str> = ui.params.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(seeded, ["amp", "del_e0", "alpha", "sig2"]);
+        assert_eq!(seeded, ["amp", "del_e0", "alpha"]);
     }
 
     #[test]
