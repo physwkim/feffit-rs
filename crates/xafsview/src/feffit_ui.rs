@@ -28,6 +28,10 @@ pub enum FeffitAction {
     /// Open the Plot Data overlay window for the fit's group (the original's
     /// "Send to plot data").
     SendToPlotData,
+    /// Save the current fit report to a file (the original's "Save result").
+    SaveResult,
+    /// Load a saved result/text file into the pop-up viewer ("Load result").
+    LoadResult,
 }
 
 /// How a global variable enters the fit.
@@ -509,6 +513,8 @@ pub struct FeffitUi {
     fit_mode: FitMode,
     /// Which "View …" result report pop-up is open (transient UI state).
     report_view: Option<ReportKind>,
+    /// An ad-hoc `(title, body)` text pop-up — a loaded result file or the log.
+    text_view: Option<(String, String)>,
     result: Option<FeffitResult>,
     plot: Option<FeffitPlot>,
 }
@@ -531,6 +537,7 @@ impl Default for FeffitUi {
             user_funcs: String::new(),
             fit_mode: FitMode::NoFit,
             report_view: None,
+            text_view: None,
             result: None,
             plot: None,
         }
@@ -553,6 +560,7 @@ impl FeffitUi {
             user_funcs: self.user_funcs.clone(),
             fit_mode: self.fit_mode,
             report_view: None,
+            text_view: None,
             result: None,
             plot: None,
         }
@@ -737,6 +745,12 @@ impl FeffitUi {
             }
             ReportKind::FeffitSumm => self.report_text(),
         }
+    }
+
+    /// Open the ad-hoc text pop-up (a loaded result file, or the log) with the
+    /// given title and body.
+    pub fn show_text(&mut self, title: impl Into<String>, body: String) {
+        self.text_view = Some((title.into(), body));
     }
 
     /// Add a path file the app picked from a dialog.
@@ -1189,27 +1203,70 @@ impl FeffitUi {
         // The selected report's pop-up text window (one shared, re-titled window).
         if let Some(kind) = self.report_view {
             let text = self.report_for(kind);
-            let mut open = true;
-            egui::Window::new(kind.title())
-                .id(egui::Id::new("feffit_report"))
-                .open(&mut open)
-                .resizable(true)
-                .default_size([440.0, 340.0])
-                .show(ui.ctx(), |ui| {
-                    egui::ScrollArea::both().show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(text).monospace())
-                                .wrap_mode(egui::TextWrapMode::Extend),
-                        );
-                    });
-                });
-            if !open {
+            if !text_window(ui, "feffit_report", kind.title(), &text) {
                 self.report_view = None;
             }
         }
 
+        // --- Bottom file row (the original's Open log / Load / Save result) ---
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui
+                .button("Open log")
+                .on_hover_text("show the last fit's full report")
+                .clicked()
+            {
+                // Our equivalent of feffit.log is the full fit report.
+                let body = self.report_text();
+                self.text_view = Some((
+                    "Feffit log".to_owned(),
+                    if body.is_empty() {
+                        "No fit has been run yet.".to_owned()
+                    } else {
+                        body
+                    },
+                ));
+            }
+            if ui.button("Load result").clicked() {
+                action = Some(FeffitAction::LoadResult);
+            }
+            if ui
+                .add_enabled(self.result.is_some(), egui::Button::new("Save result"))
+                .clicked()
+            {
+                action = Some(FeffitAction::SaveResult);
+            }
+        });
+
+        // The ad-hoc text pop-up (loaded result file / log).
+        if let Some((title, body)) = self.text_view.clone()
+            && !text_window(ui, "feffit_text", &title, &body)
+        {
+            self.text_view = None;
+        }
+
         action
     }
+}
+
+/// Render a titled, scrollable, monospace text pop-up. Returns whether the
+/// window is still open (the user may have closed it via the title-bar ✕).
+fn text_window(ui: &mut egui::Ui, id: &str, title: &str, body: &str) -> bool {
+    let mut open = true;
+    egui::Window::new(title)
+        .id(egui::Id::new(id))
+        .open(&mut open)
+        .resizable(true)
+        .default_size([440.0, 340.0])
+        .show(ui.ctx(), |ui| {
+            egui::ScrollArea::both().show(ui, |ui| {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(body).monospace())
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                );
+            });
+        });
+    open
 }
 
 /// A statistics grid row.

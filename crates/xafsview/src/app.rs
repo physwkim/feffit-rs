@@ -981,6 +981,8 @@ impl XafsViewApp {
             Some(FeffitAction::Run) => self.run_feffit(),
             Some(FeffitAction::Replot) => self.replot_feffit(),
             Some(FeffitAction::SendToPlotData) => self.send_feffit_to_plot_data(),
+            Some(FeffitAction::SaveResult) => self.save_feffit_result(),
+            Some(FeffitAction::LoadResult) => self.load_feffit_result(),
             None => {}
         }
     }
@@ -1220,6 +1222,66 @@ impl XafsViewApp {
         self.plot_data
             .set_fit_overlay(label, xlabel, ylabel, x, data_y, model_y);
         self.status = "Sent the Feffit fit (data + model) to Plot Data.".to_owned();
+    }
+
+    /// Save the current fit report to a text file (the original's "Save result").
+    fn save_feffit_result(&mut self) {
+        let text = self.feffit.report_text();
+        if text.is_empty() {
+            self.status = "Run a fit first — there is no result to save.".to_owned();
+            return;
+        }
+        let stem = self.feffit_fit_group.as_deref().unwrap_or("feffit");
+        let mut dlg = rfd::FileDialog::new()
+            .add_filter("Text", &["txt", "log", "out"])
+            .set_file_name(format!("{stem}.txt"));
+        if let Some(dir) = self
+            .session
+            .folders
+            .feffit_dir
+            .clone()
+            .or_else(|| self.session.folders.results_dir.clone())
+        {
+            dlg = dlg.set_directory(dir);
+        }
+        let Some(path) = dlg.save_file() else {
+            self.status = "Save result cancelled.".to_owned();
+            return;
+        };
+        match std::fs::write(&path, text) {
+            Ok(()) => self.status = format!("Saved fit result to {}", path.display()),
+            Err(e) => self.status = format!("Could not save result: {e}"),
+        }
+    }
+
+    /// Load a saved result/text file into the Feffit pop-up viewer ("Load result").
+    fn load_feffit_result(&mut self) {
+        let mut dlg =
+            rfd::FileDialog::new().add_filter("Text", &["txt", "log", "out", "fit", "dat"]);
+        if let Some(dir) = self
+            .session
+            .folders
+            .feffit_dir
+            .clone()
+            .or_else(|| self.session.folders.results_dir.clone())
+        {
+            dlg = dlg.set_directory(dir);
+        }
+        let Some(path) = dlg.pick_file() else {
+            self.status = "Load result cancelled.".to_owned();
+            return;
+        };
+        match feffit::textio::read_to_string_lenient(&path) {
+            Ok(content) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "result".to_owned());
+                self.feffit.show_text(format!("Loaded: {name}"), content);
+                self.status = format!("Loaded result from {}", path.display());
+            }
+            Err(e) => self.status = format!("Could not load result: {e}"),
+        }
     }
 
     /// The Autobk tab: import + reduction controls on the left, plot on the right.
