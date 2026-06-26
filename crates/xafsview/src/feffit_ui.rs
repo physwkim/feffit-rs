@@ -670,6 +670,9 @@ pub struct FeffitUi {
     report_view: Option<ReportKind>,
     /// An ad-hoc `(title, body)` text pop-up — a loaded result file or the log.
     text_view: Option<(String, String)>,
+    /// Snapshot of the variable table taken before "Use fit as guess", so that
+    /// the adopt can be reverted with "Undo".
+    param_undo: Option<Vec<ParamRow>>,
     result: Option<FeffitResult>,
     plot: Option<FeffitPlot>,
 }
@@ -693,6 +696,7 @@ impl Default for FeffitUi {
             fit_mode: FitMode::NoFit,
             report_view: None,
             text_view: None,
+            param_undo: None,
             result: None,
             plot: None,
         }
@@ -716,6 +720,7 @@ impl FeffitUi {
             fit_mode: self.fit_mode,
             report_view: None,
             text_view: None,
+            param_undo: None,
             result: None,
             plot: None,
         }
@@ -984,6 +989,43 @@ impl FeffitUi {
             }
         }
         self.paths.push(row);
+    }
+
+    /// Adopt the last fit's best-fit values as the new starting guesses for the
+    /// matching `vary` variables (the EXAFS iterate-the-fit workflow, and how
+    /// the path parameters — being expressions over these variables — pick up
+    /// the new guesses too). Snapshots the previous values first so
+    /// [`undo_guess`](Self::undo_guess) can revert. Returns how many variables
+    /// were updated.
+    pub fn adopt_fit_as_guess(&mut self) -> usize {
+        let best: Vec<(String, f64)> = match &self.result {
+            Some(res) => res.best.iter().map(|b| (b.name.clone(), b.value)).collect(),
+            None => return 0,
+        };
+        let snapshot = self.params.clone();
+        let mut updated = 0;
+        for row in self.params.iter_mut().filter(|r| r.kind == ParamKind::Vary) {
+            if let Some((_, v)) = best.iter().find(|(n, _)| *n == row.name) {
+                row.value = *v;
+                updated += 1;
+            }
+        }
+        if updated > 0 {
+            self.param_undo = Some(snapshot);
+        }
+        updated
+    }
+
+    /// Revert the most recent "Use fit as guess" snapshot. Returns `true` if a
+    /// snapshot was restored.
+    pub fn undo_guess(&mut self) -> bool {
+        match self.param_undo.take() {
+            Some(prev) => {
+                self.params = prev;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Add a path file the app picked from a dialog.
@@ -1270,12 +1312,36 @@ impl FeffitUi {
 
         // --- Global variables ---------------------------------------------
         ui.group(|ui| {
+            let mut adopt = false;
+            let mut undo = false;
             ui.horizontal(|ui| {
                 ui.strong("Global variables");
                 if ui.button("Add").clicked() {
                     self.params.push(ParamRow::var("new", 0.0));
                 }
+                // "Use fit as guess" copies the best-fit values back onto the
+                // vary variables as new starting guesses; "Undo" reverts it.
+                if ui
+                    .add_enabled(self.result.is_some(), egui::Button::new("Use fit as guess"))
+                    .on_hover_text("adopt the best-fit values as the new starting guesses")
+                    .clicked()
+                {
+                    adopt = true;
+                }
+                if ui
+                    .add_enabled(self.param_undo.is_some(), egui::Button::new("Undo"))
+                    .on_hover_text("revert the last guess update")
+                    .clicked()
+                {
+                    undo = true;
+                }
             });
+            if adopt {
+                self.adopt_fit_as_guess();
+            }
+            if undo {
+                self.undo_guess();
+            }
             let mut remove_param = None;
             for (i, row) in self.params.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
@@ -1956,6 +2022,48 @@ mod tests {
                 .any(|p| p.name == "s02" && p.kind == ParamKind::Fixed)
         );
         assert!(ui.paths.is_empty(), "paths cleared for app-side reload");
+    }
+
+    #[test]
+    fn adopt_fit_as_guess_updates_vary_values_and_undo_reverts() {
+        let vary_values = |ui: &FeffitUi| -> Vec<(String, f64)> {
+            ui.params
+                .iter()
+                .filter(|r| r.kind == ParamKind::Vary)
+                .map(|r| (r.name.clone(), r.value))
+                .collect()
+        };
+
+        let (k, chi) = cu_kchi();
+        let mut ui = feffit_ui_with_paths();
+        let before = vary_values(&ui);
+        ui.run(&k, &chi).expect("fit");
+
+        let updated = ui.adopt_fit_as_guess();
+        assert!(
+            updated > 0,
+            "at least one vary variable adopted a best-fit value"
+        );
+        assert_ne!(
+            before,
+            vary_values(&ui),
+            "guesses changed after adopting the fit"
+        );
+
+        assert!(ui.undo_guess(), "undo restores the snapshot");
+        assert_eq!(
+            before,
+            vary_values(&ui),
+            "undo brings back the starting guesses"
+        );
+        assert!(!ui.undo_guess(), "no snapshot left after undo");
+    }
+
+    #[test]
+    fn adopt_fit_as_guess_without_a_result_is_a_noop() {
+        let mut ui = FeffitUi::default();
+        assert_eq!(ui.adopt_fit_as_guess(), 0);
+        assert!(!ui.undo_guess(), "no snapshot recorded without a fit");
     }
 
     #[test]
