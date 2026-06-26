@@ -145,6 +145,11 @@ pub struct ReductionUi {
     pub norm1: f64,
     /// Normalization fit upper bound (eV, relative to E0) — original "Nor2".
     pub norm2: f64,
+    /// Post-edge normalization polynomial order (0=constant … 3=cubic), used
+    /// when `pre_norm_auto` is off. XAFSView's normalization is quadratic (2);
+    /// the auto rule picks 1 for a <300 eV norm window, which underestimates the
+    /// edge step by ~1.6% on the KSW Mn data — exposing this lets the user match.
+    pub nnorm: usize,
     /// How "Open New file" interprets the chosen file.
     pub loading: LoadingType,
     /// Optional theoretical χ(k) standard constraining the background fit.
@@ -179,6 +184,7 @@ impl Default for ReductionUi {
             pre2: -50.0,
             norm1: 150.0,
             norm2: 400.0,
+            nnorm: 2,
             loading: LoadingType::CalcXmu,
             theory: None,
             output_file: String::new(),
@@ -198,6 +204,7 @@ impl ReductionUi {
             p.pre2 = Some(self.pre2);
             p.norm1 = Some(self.norm1);
             p.norm2 = Some(self.norm2);
+            p.nnorm = Some(self.nnorm);
         }
         p
     }
@@ -290,6 +297,16 @@ impl ReductionUi {
                             change.refit |= r.drag_stopped() || r.lost_focus();
                             ui.end_row();
                         }
+
+                        ui.label("Nnorm");
+                        let r = ui
+                            .add_enabled(manual, egui::DragValue::new(&mut self.nnorm).range(0..=3))
+                            .on_hover_text(
+                                "post-edge normalization order (0=const … 3=cubic); \
+                                 XAFSView uses 2",
+                            );
+                        change.refit |= r.drag_stopped() || r.lost_focus();
+                        ui.end_row();
                     });
 
                 // A `ui.separator()` here is a vertical divider, and inside
