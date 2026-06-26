@@ -14,7 +14,7 @@ use feffit::params::Parameters;
 use feffit::xasdata::Window;
 use feffit::{
     DataSet, FeffitResult, FitDataSet, FitSpace, PATH_PNAMES, PathSpec, Spec, Transform,
-    XafsOutput, feffit,
+    XafsOutput, feffit, feffit_eval, xafsft,
 };
 
 /// What the FEFFIT controls need the app to do this frame.
@@ -241,6 +241,33 @@ pub enum PlotPart {
     Pha,
 }
 
+/// The original "Fit" dropdown (manual §1.2.2): what the Run button does — the
+/// UWXAFS feffit `fit / no fit / only FT` modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FitMode {
+    /// Forward-evaluate the model at the current guess values and overlay it on
+    /// the data — no least-squares optimisation, no statistics. The default.
+    NoFit,
+    /// Fourier-transform the data only (no paths, no model).
+    OnlyFt,
+    /// Run the least-squares fit, then overlay the best-fit model.
+    Fit,
+}
+
+impl FitMode {
+    /// All modes in the dropdown's display order.
+    pub const ALL: [FitMode; 3] = [FitMode::NoFit, FitMode::OnlyFt, FitMode::Fit];
+
+    /// Dropdown label (matches the original's "Fit" ring text).
+    pub fn label(self) -> &'static str {
+        match self {
+            FitMode::NoFit => "No fit",
+            FitMode::OnlyFt => "Only FT",
+            FitMode::Fit => "Fit",
+        }
+    }
+}
+
 /// Data and model arrays from the last fit, ready to plot in any space.
 pub struct FeffitPlot {
     pub data_k: Vec<f64>,
@@ -250,6 +277,10 @@ pub struct FeffitPlot {
     pub model: XafsOutput,
     /// k-weight the fit used (for the `kʷ·χ(k)` plot).
     pub kweight: i32,
+    /// Whether `model`/`model_chi` are meaningful. `false` in "Only FT" mode
+    /// (data transformed alone) so consumers skip the model curve and `.fit`
+    /// output files.
+    pub has_model: bool,
 }
 
 impl FeffitPlot {
@@ -422,6 +453,9 @@ pub struct FeffitUi {
     /// The "user defined functions" box: extra `%set name = expr` definitions
     /// parsed into the fit's parameters before each run.
     user_funcs: String,
+    /// The original's "Fit" dropdown: fit / no fit / only FT. Defaults to
+    /// `NoFit` (forward model preview without optimising).
+    fit_mode: FitMode,
     result: Option<FeffitResult>,
     plot: Option<FeffitPlot>,
 }
@@ -442,6 +476,7 @@ impl Default for FeffitUi {
             part: PlotPart::Mag,
             selected_path: 0,
             user_funcs: String::new(),
+            fit_mode: FitMode::NoFit,
             result: None,
             plot: None,
         }
@@ -462,6 +497,7 @@ impl FeffitUi {
             part: self.part,
             selected_path: 0,
             user_funcs: self.user_funcs.clone(),
+            fit_mode: self.fit_mode,
             result: None,
             plot: None,
         }
@@ -565,15 +601,40 @@ impl FeffitUi {
         self.paths.iter().any(|p| p.enabled)
     }
 
-    /// Assemble and run the fit against `data_k`/`data_chi`, storing the result
-    /// and the data-vs-model plot arrays. Returns a one-line status on success
-    /// or an error message.
+    /// Run the active [`FitMode`] against `data_k`/`data_chi`, storing the result
+    /// (when fitting) and the data-vs-model plot arrays. Returns a one-line status
+    /// on success or an error message.
+    ///
+    /// - [`FitMode::OnlyFt`]: Fourier-transform the data alone (no paths needed).
+    /// - [`FitMode::NoFit`]: forward-evaluate the model at the current guess
+    ///   values and overlay it — no optimisation, no statistics.
+    /// - [`FitMode::Fit`]: full least-squares fit, then overlay the best-fit model.
     pub fn run(&mut self, data_k: &[f64], data_chi: &[f64]) -> Result<String, String> {
-        if !self.has_enabled_path() {
-            return Err("No enabled Feff paths to fit.".to_owned());
-        }
         if data_k.is_empty() || data_chi.len() != data_k.len() {
             return Err("Current group has no chi(k) — run AUTOBK first.".to_owned());
+        }
+        let rmax_out = self.ft.rmax + 2.0;
+
+        // Only FT: transform the data on its own — no paths, no model, no fit.
+        if self.fit_mode == FitMode::OnlyFt {
+            let data = xafsft(&self.ft.to_transform(), data_chi, rmax_out);
+            self.plot = Some(FeffitPlot {
+                data_k: data_k.to_vec(),
+                data_chi: data_chi.to_vec(),
+                model_chi: Vec::new(),
+                // Unused when `has_model` is false; clone the data so every plot
+                // array stays length-consistent without an empty-`XafsOutput`.
+                model: data.clone(),
+                data,
+                kweight: self.ft.kweight,
+                has_model: false,
+            });
+            self.result = None;
+            return Ok("Only FT: transformed data χ(k) → χ(R)/χ(q).".to_owned());
+        }
+
+        if !self.has_enabled_path() {
+            return Err("No enabled Feff paths to fit.".to_owned());
         }
 
         let mut params = Parameters::new();
@@ -613,11 +674,30 @@ impl FeffitUi {
             epsilon_k: None,
         }];
 
+        // No fit: forward-evaluate the model at the guess values, no optimisation.
+        if self.fit_mode == FitMode::NoFit {
+            feffit_eval(&mut params, &mut fds).map_err(|e| format!("model eval failed: {e}"))?;
+            let model_chi = fds[0].dataset.model_chi_sum();
+            let out = fds[0].dataset.save_outputs(rmax_out, false);
+            self.plot = Some(FeffitPlot {
+                data_k: data_k.to_vec(),
+                data_chi: data_chi.to_vec(),
+                model_chi,
+                data: out.data,
+                model: out.model,
+                kweight: self.ft.kweight,
+                has_model: true,
+            });
+            self.result = None;
+            return Ok("No fit: forward model at the current guess values.".to_owned());
+        }
+
+        // Fit: full least-squares optimisation.
         let res = feffit(&mut params, &mut fds).map_err(|e| format!("fit failed: {e}"))?;
 
         // Model chi(k) on the data grid, and forward-FT of both data and model.
         let model_chi = fds[0].dataset.model_chi_sum();
-        let out = fds[0].dataset.save_outputs(self.ft.rmax + 2.0, false);
+        let out = fds[0].dataset.save_outputs(rmax_out, false);
         self.plot = Some(FeffitPlot {
             data_k: data_k.to_vec(),
             data_chi: data_chi.to_vec(),
@@ -625,6 +705,7 @@ impl FeffitUi {
             data: out.data,
             model: out.model,
             kweight: self.ft.kweight,
+            has_model: true,
         });
 
         let summary = format!(
@@ -703,6 +784,19 @@ impl FeffitUi {
                     ui.label("R window");
                     window_combo(ui, "feffit_rwin", &mut self.ft.rwindow);
                     ui.end_row();
+                });
+        });
+
+        // --- Fit mode (the original's "Fit" dropdown: fit / no fit / only FT) --
+        ui.horizontal(|ui| {
+            ui.label("Fit")
+                .on_hover_text("Run: No fit = forward model preview; Only FT = transform data; Fit = least-squares fit");
+            egui::ComboBox::from_id_salt("feffit_fit_mode")
+                .selected_text(self.fit_mode.label())
+                .show_ui(ui, |ui| {
+                    for m in FitMode::ALL {
+                        ui.selectable_value(&mut self.fit_mode, m, m.label());
+                    }
                 });
         });
 
@@ -834,16 +928,14 @@ impl FeffitUi {
 
         ui.separator();
         ui.horizontal(|ui| {
-            if crate::widgets::primary(ui, "Run", crate::widgets::ROW_BTN, self.has_enabled_path())
-                .clicked()
-            {
+            // "Only FT" transforms the data alone, so it needs no paths; the other
+            // modes need at least one enabled path.
+            let can_run = self.fit_mode == FitMode::OnlyFt || self.has_enabled_path();
+            if crate::widgets::primary(ui, "Run", crate::widgets::ROW_BTN, can_run).clicked() {
                 action = Some(FeffitAction::Run);
             }
             if ui
-                .add_enabled(
-                    self.result.is_some(),
-                    egui::Button::new("Send to Plot Data"),
-                )
+                .add_enabled(self.plot.is_some(), egui::Button::new("Send to Plot Data"))
                 .on_hover_text("open the Plot Data overlay for this group")
                 .clicked()
             {
@@ -1025,7 +1117,12 @@ mod tests {
     }
 
     fn feffit_ui_with_paths() -> FeffitUi {
-        let mut ui = FeffitUi::default();
+        // The default mode is `NoFit` (forward preview); the fit tests want the
+        // least-squares path, so opt this fixture into `Fit`.
+        let mut ui = FeffitUi {
+            fit_mode: FitMode::Fit,
+            ..FeffitUi::default()
+        };
         ui.add_path(
             "feff0001.dat".into(),
             FeffPath::new(FeffDatFile::parse(FEFF0001)),
@@ -1159,6 +1256,45 @@ mod tests {
         assert_eq!(plot.data.r.len(), plot.data.chir_mag.len());
         assert_eq!(plot.model.r.len(), plot.model.chir_mag.len());
         assert_eq!(plot.data_k.len(), plot.model_chi.len());
+        assert!(plot.has_model, "Fit mode carries a model");
+    }
+
+    #[test]
+    fn default_mode_is_no_fit() {
+        assert_eq!(FeffitUi::default().fit_mode, FitMode::NoFit);
+    }
+
+    #[test]
+    fn no_fit_forward_model_without_optimising() {
+        let (k, chi) = cu_kchi();
+        let mut ui = feffit_ui_with_paths();
+        ui.fit_mode = FitMode::NoFit;
+        let msg = ui.run(&k, &chi).expect("no-fit eval should run");
+        assert!(msg.starts_with("No fit"), "status names the mode: {msg}");
+        // No optimisation → no statistics, but a model is built and plotted.
+        assert!(ui.result().is_none(), "no fit must not produce a result");
+        let plot = ui.plot().expect("forward model plotted");
+        assert!(plot.has_model, "no fit carries a forward model");
+        assert_eq!(plot.data_k.len(), plot.model_chi.len());
+        assert!(!plot.model.r.is_empty());
+    }
+
+    #[test]
+    fn only_ft_transforms_data_without_paths() {
+        let (k, chi) = cu_kchi();
+        // No paths added — "Only FT" must still run (it transforms the data alone).
+        let mut ui = FeffitUi {
+            fit_mode: FitMode::OnlyFt,
+            ..FeffitUi::default()
+        };
+        let msg = ui.run(&k, &chi).expect("only-FT should run without paths");
+        assert!(msg.starts_with("Only FT"), "status names the mode: {msg}");
+        assert!(ui.result().is_none(), "only FT produces no fit result");
+        let plot = ui.plot().expect("data transform plotted");
+        assert!(!plot.has_model, "only FT has no model");
+        assert!(plot.model_chi.is_empty(), "only FT has no model chi");
+        assert!(!plot.data.r.is_empty(), "data was transformed to R-space");
+        assert_eq!(plot.data.r.len(), plot.data.chir_mag.len());
     }
 
     #[test]

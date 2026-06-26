@@ -826,8 +826,11 @@ impl PlotDataWindow {
             if !ov.x.is_empty() {
                 self.plot
                     .add_curve_with_legend(&ov.x, &ov.data, FIT_DATA, "fit data");
-                self.plot
-                    .add_curve_with_legend(&ov.x, &ov.model, FIT_MODEL, "fit model");
+                // "Only FT" overlays carry no model curve.
+                if !ov.model.is_empty() {
+                    self.plot
+                        .add_curve_with_legend(&ov.x, &ov.model, FIT_MODEL, "fit model");
+                }
             }
             return;
         }

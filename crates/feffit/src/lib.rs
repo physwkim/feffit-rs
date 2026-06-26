@@ -56,6 +56,7 @@ pub mod xasproc;
 pub use dataset::DataSet;
 pub use fit::{
     Best, FeffitResult, FitDataSet, FitError, PATH_PNAMES, PathParam, PathSpec, Spec, feffit,
+    feffit_eval,
 };
 pub use outputs::{DataSetOutput, XafsOutput, xafsft};
 pub use transform::{FitSpace, Transform};

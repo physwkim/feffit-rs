@@ -333,6 +333,41 @@ fn apply_params(
     Ok(())
 }
 
+/// Forward-evaluate the model without optimising — UWXAFS feffit's "no fit" mode.
+///
+/// Compiles each dataset's path-parameter expressions, prepares the datasets, and
+/// pushes the numeric path parameters obtained at the parameters' *current* (guess)
+/// values into every path. After this call each dataset's
+/// [`model_chi_sum`](DataSet::model_chi_sum) / [`save_outputs`](DataSet::save_outputs)
+/// reflect those guess values, so the caller can transform and plot the model
+/// overlaid on the data without running a least-squares fit. No parameter is
+/// changed and no statistics are produced. Background refinement is ignored — the
+/// forward model uses the parameters exactly as given.
+pub fn feffit_eval(params: &mut Parameters, datasets: &mut [FitDataSet]) -> Result<(), FitError> {
+    let mut compiled: Vec<Vec<CompiledPathSpec>> = Vec::with_capacity(datasets.len());
+    for fds in datasets.iter_mut() {
+        if fds.dataset.paths.len() != fds.specs.len() {
+            return Err(FitError::Shape(format!(
+                "dataset has {} paths but {} specs",
+                fds.dataset.paths.len(),
+                fds.specs.len()
+            )));
+        }
+        fds.dataset.prepare_fit(fds.epsilon_k);
+        let cspecs = fds
+            .specs
+            .iter()
+            .map(CompiledPathSpec::from)
+            .collect::<Result<Vec<_>, _>>()?;
+        compiled.push(cspecs);
+    }
+    // No background-refinement variables in the forward evaluation: pass an empty
+    // name list per dataset so `apply_params` resolves only the path expressions
+    // (`apply_params` calls `update_constraints` itself).
+    let bkg_names: Vec<Vec<String>> = vec![Vec::new(); datasets.len()];
+    apply_params(params, datasets, &compiled, &bkg_names)
+}
+
 /// Fit a sum of Feff paths to one or more datasets (port of larch `feffit()`).
 ///
 /// `params` holds the free variables and any global constraint parameters. On

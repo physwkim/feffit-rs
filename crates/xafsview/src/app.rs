@@ -1133,14 +1133,15 @@ impl XafsViewApp {
         match self.feffit.run(&k, &chi) {
             Ok(msg) => {
                 self.feffit_fit_group = Some(label.clone());
-                // Persist the fit transforms as the original's *.dat/*.fit files
-                // (so Plot Data can overlay them).
+                // Persist the transforms as the original's *.dat/*.fit files (so
+                // Plot Data can overlay them). "Only FT" produces no model, so
+                // there are no .fit files to write — skip it.
                 let saved = match self.feffit.plot() {
-                    Some(plot) => match self.write_feffit_outputs(plot, &label) {
+                    Some(plot) if plot.has_model => match self.write_feffit_outputs(plot, &label) {
                         Ok(n) => format!(" · saved {n} .dat/.fit files"),
                         Err(e) => format!(" · .dat/.fit not written: {e}"),
                     },
-                    None => String::new(),
+                    _ => String::new(),
                 };
                 self.status = format!("{msg}{saved}");
                 self.replot_feffit();
@@ -1160,14 +1161,18 @@ impl XafsViewApp {
             return;
         };
 
+        let has_model = p.has_model;
         let (x, data_y, model_y, xlabel, ylabel) = p.series(space, part);
         self.plot.set_graph_x_label(xlabel);
         self.plot.set_graph_y_label(ylabel, siplot::YAxis::Left);
         if !x.is_empty() {
             self.plot
                 .add_curve_with_legend(&x, &data_y, FIT_DATA, "data");
-            self.plot
-                .add_curve_with_legend(&x, &model_y, FIT_MODEL, "model");
+            // "Only FT" mode has no model — draw the data alone.
+            if has_model {
+                self.plot
+                    .add_curve_with_legend(&x, &model_y, FIT_MODEL, "model");
+            }
         }
     }
 
@@ -1180,10 +1185,13 @@ impl XafsViewApp {
         };
         let (space, part) = self.feffit.plot_selection();
         let Some(p) = self.feffit.plot() else {
-            self.status = "Run a fit first, then send it to Plot Data.".to_owned();
+            self.status = "Run Feffit first, then send it to Plot Data.".to_owned();
             return;
         };
+        let has_model = p.has_model;
         let (x, data_y, model_y, xlabel, ylabel) = p.series(space, part);
+        // "Only FT" has no model — send an empty model so Plot Data draws data alone.
+        let model_y = if has_model { model_y } else { Vec::new() };
         self.plot_data
             .set_fit_overlay(label, xlabel, ylabel, x, data_y, model_y);
         self.status = "Sent the Feffit fit (data + model) to Plot Data.".to_owned();
