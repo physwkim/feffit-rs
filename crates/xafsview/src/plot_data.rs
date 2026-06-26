@@ -90,6 +90,11 @@ pub struct PlotDataWindow {
     overlay: Option<FitOverlay>,
     /// Whether the sent fit takes over the plot (vs the loaded files).
     show_overlay: bool,
+    /// The legend label of the curve highlighted by a legend click (drawn with a
+    /// thicker line, brought to front). `None` = nothing highlighted; clicking
+    /// the same entry again clears it. Plot Data only — the shared plot reports
+    /// the click, other tabs ignore it.
+    highlighted: Option<String>,
 
     // --- file viewer --------------------------------------------------------
     /// The selected *File type* for browsing/loading files.
@@ -153,6 +158,7 @@ impl PlotDataWindow {
             peaks: Vec::new(),
             overlay: None,
             show_overlay: false,
+            highlighted: None,
             file_type: FileType::Chi,
             graph_item: FileType::Chi.default_item(),
             loaded: Vec::new(),
@@ -239,6 +245,17 @@ impl PlotDataWindow {
                         self.dirty = false;
                     }
                     crate::plot::show(&mut self.plot, ui);
+                    // A legend click toggles which curve is highlighted (re-drawn
+                    // emphasized on the next rebuild); clicking the active entry
+                    // clears it.
+                    if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
+                        self.highlighted = if self.highlighted.as_deref() == Some(label.as_str()) {
+                            None
+                        } else {
+                            Some(label)
+                        };
+                        self.dirty = true;
+                    }
                 });
             },
         );
@@ -852,6 +869,16 @@ impl PlotDataWindow {
     }
 
     /// Rebuild every plotted curve from the loaded files and current settings.
+    /// Add one trace to the plot, drawn emphasized when it is the curve the user
+    /// highlighted by clicking its legend entry (thicker line, on top).
+    fn add_trace(&mut self, label: &str, x: &[f64], y: &[f64], color: Color32) {
+        if self.highlighted.as_deref() == Some(label) {
+            self.plot.add_emphasized_curve(x, y, color, label);
+        } else {
+            self.plot.add_curve_with_legend(x, y, color, label);
+        }
+    }
+
     fn rebuild(&mut self) {
         self.plot.clear();
 
@@ -907,11 +934,11 @@ impl PlotDataWindow {
         // Stack the individual traces (offset i·stack) and draw.
         for (idx, (label, x, y, color)) in traces.into_iter().enumerate() {
             let ys = stack_offset_y(y, idx, self.stack);
-            self.plot.add_curve_with_legend(&x, &ys, color, label);
+            self.add_trace(&label, &x, &ys, color);
         }
 
         if let Some((x, y)) = avg {
-            self.plot.add_curve_with_legend(&x, &y, fg, "average");
+            self.add_trace("average", &x, &y, fg);
         }
 
         for (_, px, _) in &self.peaks {

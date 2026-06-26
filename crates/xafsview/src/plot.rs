@@ -10,7 +10,7 @@
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use siplot::{DataMargins, ItemHandle, Plot1D, PlotId, Roi, Symbol};
+use siplot::{CurveSpec, DataMargins, ItemHandle, Plot1D, PlotId, Roi, Symbol};
 
 /// Fraction of the data range left blank on each side of the data extent, so
 /// samples at the extremes are lifted just off the axis frame without wasting
@@ -169,6 +169,11 @@ pub struct Plot {
     /// A user drag of either band edge, detected in [`show`] and taken by
     /// [`take_window_drag`].
     window_dragged: Option<AxisWindow>,
+    /// The legend entry the user clicked this frame (its label), set in [`show`]
+    /// and consumed by [`take_legend_click`]. Lets a caller (Plot Data) drive a
+    /// "highlight the clicked curve" selection; plots that never take it are
+    /// unaffected.
+    legend_clicked: Option<String>,
 }
 
 impl std::ops::Deref for Plot {
@@ -197,6 +202,7 @@ impl Plot {
             window_target: None,
             window_requested: false,
             window_dragged: None,
+            legend_clicked: None,
         }
     }
 
@@ -213,6 +219,34 @@ impl Plot {
         let legend = legend.into();
         self.legend.push((legend.clone(), color));
         self.inner.add_curve_with_legend(x, y, color, legend)
+    }
+
+    /// Like [`add_curve_with_legend`](Self::add_curve_with_legend) but draws the
+    /// curve emphasized — a thicker line brought to the front — so a selected
+    /// curve stands out without dimming the others. Used by Plot Data's
+    /// legend-click highlight. The legend swatch still records the curve's own
+    /// colour, so its identity is unchanged.
+    pub fn add_emphasized_curve(
+        &mut self,
+        x: &[f64],
+        y: &[f64],
+        color: egui::Color32,
+        legend: impl Into<String>,
+    ) -> ItemHandle {
+        // Default curve width is 1.0; 3.0 reads as clearly emphasized on either
+        // canvas background without depending on colour. A high z keeps the
+        // thick line on top of curves added after it.
+        const EMPH_WIDTH: f32 = 3.0;
+        const EMPH_Z: f32 = 100.0;
+        let legend = legend.into();
+        self.legend.push((legend.clone(), color));
+        let handle = self.inner.add_curve_spec(CurveSpec {
+            line_width: EMPH_WIDTH,
+            ..CurveSpec::new(x, y, color)
+        });
+        self.inner.set_item_legend(handle, legend);
+        self.inner.set_item_z(handle, EMPH_Z);
+        handle
     }
 
     /// Clear all plot items and the recorded legend together. Shadows
@@ -310,6 +344,13 @@ pub fn set_window(plot: &mut Plot, window: AxisWindow) {
 /// recomputes exactly once.
 pub fn take_window_drag(plot: &mut Plot) -> Option<AxisWindow> {
     plot.window_dragged.take()
+}
+
+/// Take the legend entry (its label) the user clicked since the last call, if
+/// any. Plot Data uses it to toggle which curve is highlighted; callers that
+/// never take it leave the click inert.
+pub fn take_legend_click(plot: &mut Plot) -> Option<String> {
+    plot.legend_clicked.take()
 }
 
 /// Render `plot` as one unit: its toolbar on top, then the plot canvas filling
@@ -412,6 +453,7 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
         ),
         None => area.right_top() + egui::vec2(-PAD, PAD),
     };
+    let mut legend_click: Option<String> = None;
     egui::Area::new(legend_id)
         .order(egui::Order::Foreground)
         .movable(true)
@@ -437,11 +479,16 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                                 ..Default::default()
                             })
                             .show(ui, |ui| {
-                                draw_legend(ui, &plot.legend, data_bg);
+                                legend_click = draw_legend(ui, &plot.legend, data_bg);
                             });
                     });
                 });
         });
+
+    // A legend row was clicked this frame — record it for `take_legend_click`.
+    if legend_click.is_some() {
+        plot.legend_clicked = legend_click;
+    }
 
     // Re-derive the fraction from where the legend actually ended up this frame
     // (after any drag and `constrain_to` clamping), so the next frame — and any
@@ -461,9 +508,15 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
 /// Draw the plain in-axes legend: one row per entry — a short line swatch in the
 /// curve's colour, then its label. No fill, border, or visibility toggle (unlike
 /// siplot's `show_legend`, which the GUI deliberately bypasses); just the colour
-/// key over the transparent overlay. Rows are non-interactive so a drag anywhere
-/// on the legend moves the enclosing `Area` rather than being captured.
-fn draw_legend(ui: &mut egui::Ui, entries: &[(String, egui::Color32)], data_bg: egui::Color32) {
+/// key over the transparent overlay. Rows sense a *click* (returned as the
+/// clicked label) so a caller can highlight that curve, but not a *drag*, so a
+/// drag anywhere on the legend still moves the enclosing `Area`. Returns the
+/// label clicked this frame, if any.
+fn draw_legend(
+    ui: &mut egui::Ui,
+    entries: &[(String, egui::Color32)],
+    data_bg: egui::Color32,
+) -> Option<String> {
     const SWATCH_W: f32 = 22.0;
     const SWATCH_H: f32 = 12.0;
     // Pick a label colour that contrasts with the data-area background (dark
@@ -476,22 +529,35 @@ fn draw_legend(ui: &mut egui::Ui, entries: &[(String, egui::Color32)], data_bg: 
         egui::Color32::from_gray(0xe0)
     };
     ui.spacing_mut().item_spacing.y = 2.0;
+    let mut clicked = None;
     for (label, color) in entries {
-        ui.horizontal(|ui| {
-            let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(SWATCH_W, SWATCH_H), egui::Sense::hover());
-            let y = rect.center().y;
-            ui.painter().line_segment(
-                [
-                    egui::pos2(rect.left() + 2.0, y),
-                    egui::pos2(rect.right() - 2.0, y),
-                ],
-                egui::Stroke::new(2.0, *color),
-            );
-            ui.add_space(4.0);
-            ui.colored_label(text, label.as_str());
-        });
+        let row = ui
+            .horizontal(|ui| {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(SWATCH_W, SWATCH_H), egui::Sense::hover());
+                let y = rect.center().y;
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(rect.left() + 2.0, y),
+                        egui::pos2(rect.right() - 2.0, y),
+                    ],
+                    egui::Stroke::new(2.0, *color),
+                );
+                ui.add_space(4.0);
+                ui.colored_label(text, label.as_str());
+            })
+            .response
+            // Add click sense to the whole row without capturing drags, so the
+            // legend `Area` still moves when dragged from a row.
+            .interact(egui::Sense::click());
+        if row.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if row.clicked() {
+            clicked = Some(label.clone());
+        }
     }
+    clicked
 }
 
 /// Draw the cursor overlay over the data area `area` while the pointer is at
