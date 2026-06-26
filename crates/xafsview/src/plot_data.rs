@@ -117,6 +117,10 @@ pub struct PlotDataWindow {
     sel_anchor: Option<usize>,
     /// Outcome of the last load (shown in the Files section).
     pick_status: String,
+    /// The configured "Results" folder (`Folders.results_dir`), kept in sync by
+    /// the app each frame via [`Self::show`]. "Save in single file" defaults its
+    /// dialog here, matching the original XAFSView.
+    results_dir: Option<PathBuf>,
 
     /// Set whenever the overlay needs rebuilding (control change or new files).
     dirty: bool,
@@ -157,6 +161,7 @@ impl PlotDataWindow {
             avail_anchor: None,
             sel_anchor: None,
             pick_status: String::new(),
+            results_dir: None,
             dirty: true,
         }
     }
@@ -192,7 +197,10 @@ impl PlotDataWindow {
     }
 
     /// Render the window.
-    pub fn show(&mut self, ctx: &egui::Context) {
+    pub fn show(&mut self, ctx: &egui::Context, results_dir: Option<&std::path::Path>) {
+        // Track the configured Results folder so "Save in single file" can default
+        // its dialog there (kept fresh in case the user reconfigures folders).
+        self.results_dir = results_dir.map(std::path::Path::to_path_buf);
         if !self.open {
             return;
         }
@@ -797,11 +805,14 @@ impl PlotDataWindow {
             self.pick_status = "Nothing to save — load a file first.".to_owned();
             return;
         }
-        let Some(path) = rfd::FileDialog::new()
+        let mut dlg = rfd::FileDialog::new()
             .add_filter("Plot Data result", &["result"])
-            .set_file_name("plotdata.result")
-            .save_file()
-        else {
+            .set_file_name("plotdata.result");
+        // Default to the Results folder, like the original XAFSView.
+        if let Some(dir) = &self.results_dir {
+            dlg = dlg.set_directory(dir);
+        }
+        let Some(path) = dlg.save_file() else {
             return;
         };
         let (xlabel, ylabel) = self.axis_labels();
