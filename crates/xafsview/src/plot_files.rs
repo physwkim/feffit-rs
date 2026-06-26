@@ -28,11 +28,19 @@ pub enum FileType {
     Dat,
     /// FEFFIT model: `<stem>{k,r,q}.fit`.
     Fit,
+    /// AUTOBK background: `<stem>e.bkg` (energy, μ₀) and `<stem>k.bkg` (k, μ₀−μ).
+    Bkg,
 }
 
 impl FileType {
     /// All file types, in selector order.
-    pub const ALL: [FileType; 4] = [FileType::Xmu, FileType::Chi, FileType::Dat, FileType::Fit];
+    pub const ALL: [FileType; 5] = [
+        FileType::Xmu,
+        FileType::Chi,
+        FileType::Dat,
+        FileType::Fit,
+        FileType::Bkg,
+    ];
 
     /// The selector label (the original's glob form).
     pub fn label(self) -> &'static str {
@@ -41,6 +49,7 @@ impl FileType {
             FileType::Chi => "*.chi",
             FileType::Dat => "*.dat",
             FileType::Fit => "*.fit",
+            FileType::Bkg => "*.bkg",
         }
     }
 
@@ -51,6 +60,7 @@ impl FileType {
             FileType::Chi => &[GraphItem::ChiK, GraphItem::ChiR],
             FileType::Dat => &[GraphItem::DatK, GraphItem::DatR, GraphItem::DatQ],
             FileType::Fit => &[GraphItem::FitK, GraphItem::FitR, GraphItem::FitQ],
+            FileType::Bkg => &[GraphItem::BkgE, GraphItem::BkgK],
         }
     }
 
@@ -86,6 +96,10 @@ pub enum GraphItem {
     FitR,
     /// `<stem>q.fit`: |χ(q)| model.
     FitQ,
+    /// `<stem>e.bkg`: the AUTOBK background μ₀(E).
+    BkgE,
+    /// `<stem>k.bkg`: the AUTOBK background in k, μ₀−μ.
+    BkgK,
 }
 
 impl GraphItem {
@@ -103,6 +117,8 @@ impl GraphItem {
             GraphItem::FitK => "k.fit",
             GraphItem::FitR => "r.fit",
             GraphItem::FitQ => "q.fit",
+            GraphItem::BkgE => "e.bkg",
+            GraphItem::BkgK => "k.bkg",
         }
     }
 
@@ -118,6 +134,8 @@ impl GraphItem {
             GraphItem::FitK => "k.fit",
             GraphItem::FitR => "r.fit",
             GraphItem::FitQ => "q.fit",
+            GraphItem::BkgE => "e.bkg",
+            GraphItem::BkgK => "k.bkg",
         }
     }
 
@@ -133,6 +151,8 @@ impl GraphItem {
             GraphItem::ChiK | GraphItem::DatK | GraphItem::FitK => "k (Å⁻¹)",
             GraphItem::ChiR | GraphItem::DatR | GraphItem::FitR => "R (Å)",
             GraphItem::DatQ | GraphItem::FitQ => "q (Å⁻¹)",
+            GraphItem::BkgE => "Energy (eV)",
+            GraphItem::BkgK => "k (Å⁻¹)",
         }
     }
 
@@ -145,6 +165,8 @@ impl GraphItem {
             GraphItem::ChiK | GraphItem::DatK | GraphItem::FitK => "kʷ·χ(k)",
             GraphItem::ChiR | GraphItem::DatR | GraphItem::FitR => "|χ(R)|",
             GraphItem::DatQ | GraphItem::FitQ => "|χ(q)|",
+            GraphItem::BkgE => "μ₀(E)",
+            GraphItem::BkgK => "μ₀−μ",
         }
     }
 
@@ -284,6 +306,25 @@ mod tests {
         assert!((t.y[0] - 1.0).abs() < 1e-9);
         assert!((t.y[1] - 4.0).abs() < 1e-9);
         assert!((t.y[2] - 16.0).abs() < 1e-9);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn bkg_items_select_their_files_and_load_the_value_untouched() {
+        // e.bkg / k.bkg suffixes are exclusive of each other and of the χ items.
+        assert!(GraphItem::BkgK.matches("FeS2k.bkg"));
+        assert!(GraphItem::BkgE.matches("FeS2e.bkg"));
+        assert!(!GraphItem::BkgK.matches("FeS2e.bkg"));
+        assert!(!GraphItem::ChiK.matches("FeS2k.bkg"));
+
+        // The background is stored ready-to-plot: no k-weighting, no derivative.
+        let p = tmp("k.bkg");
+        let k = [1.0, 2.0, 4.0];
+        let bkg = [0.5, 0.4, 0.3];
+        std::fs::write(&p, chik_string("t", &k, &bkg)).expect("write k.bkg");
+        let t = load_trace(&p, GraphItem::BkgK, 3).expect("load k.bkg");
+        assert_eq!(t.x, k);
+        assert_eq!(t.y, bkg, "k.bkg plots μ₀−μ as written, ignoring G_kweight");
         let _ = std::fs::remove_file(&p);
     }
 
