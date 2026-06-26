@@ -17,6 +17,19 @@ pub(crate) fn chik_string(label: &str, k: &[f64], chi: &[f64]) -> String {
     s
 }
 
+/// Two-column `x`, `y` body with a caller-supplied column header. Used for the
+/// AUTOBK background files the original XAFSView writes: `e.bkg` (energy, μ0) and
+/// `k.bkg` (k, μ0−μ). Same fixed-width layout as the `.xmu`/`.chi` writers.
+pub(crate) fn xy_string(label: &str, columns: &str, x: &[f64], y: &[f64]) -> String {
+    let mut s = String::with_capacity(x.len() * 32 + 64);
+    let _ = writeln!(s, "# {label}");
+    let _ = writeln!(s, "# {columns}");
+    for (&xx, &yy) in x.iter().zip(y) {
+        let _ = writeln!(s, "{xx:14.6}  {yy:18.10}");
+    }
+    s
+}
+
 /// Four-column `axis`, `|chi|`, `re`, `im` body — the R/q-space
 /// `.chi`/`.dat`/`.fit` format. `axis` names the first column (`R` or `q`) so
 /// r- and q-space files are labelled correctly.
@@ -54,6 +67,13 @@ mod tests {
     #[test]
     fn chik_string_has_two_data_columns() {
         let s = chik_string("t", &[1.0, 2.0], &[0.1, 0.2]);
+        assert_eq!(first_data_row(&s).split_whitespace().count(), 2);
+    }
+
+    #[test]
+    fn xy_string_has_two_columns_and_the_given_header() {
+        let s = xy_string("t", " energy            bkg", &[1.0, 2.0], &[0.1, 0.2]);
+        assert!(s.contains("energy"), "column header expected: {s}");
         assert_eq!(first_data_row(&s).split_whitespace().count(), 2);
     }
 

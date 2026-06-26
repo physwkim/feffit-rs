@@ -468,11 +468,12 @@ impl XafsViewApp {
     }
 
     /// Write the AUTOBK outputs the original's "Output file" produces: χ(k) →
-    /// `<stem>k.chi` (k, χ) and χ(R) → `<stem>r.chi` (R, |χ|, Re, Im), into the
-    /// work folder (falling back to the data folder, then the source folder).
-    /// The single-group path passes the editable "Output file" stem; the
+    /// `<stem>k.chi` (k, χ), χ(R) → `<stem>r.chi` (R, |χ|, Re, Im), and the
+    /// background pair μ0(E) → `<stem>e.bkg` and μ0−μ in k → `<stem>k.bkg`, into
+    /// the Autobk folder (falling back to the data folder, then the source
+    /// folder). The single-group path passes the editable "Output file" stem; the
     /// Multiple-autobk path passes each group's own label so the outputs stay
-    /// distinct.
+    /// distinct. Returns the two χ paths (for the status line).
     fn write_chi_files(
         &self,
         g: &XasGroup,
@@ -510,6 +511,25 @@ impl XafsViewApp {
             g.chir_re.as_deref().unwrap_or(&[]),
             g.chir_im.as_deref().unwrap_or(&[]),
         )?;
+        // Original XAFSView also writes the AUTOBK background: μ0(E) → <stem>e.bkg
+        // and the background EXAFS in k → <stem>k.bkg. The k-space background is
+        // μ0−μ on the k grid, i.e. −edge_step·χ (χ = (μ−μ0)/edge_step).
+        if let Some(bkg) = g.bkg.as_deref()
+            && !g.energy.is_empty()
+            && bkg.len() == g.energy.len()
+        {
+            std::fs::write(
+                dir.join(format!("{stem}e.bkg")),
+                crate::chi_io::xy_string(&g.label, " energy            bkg", &g.energy, bkg),
+            )?;
+        }
+        if let (Some(k), Some(chi), Some(step)) = (g.k.as_deref(), g.chi.as_deref(), g.edge_step) {
+            let bkg_k: Vec<f64> = chi.iter().map(|&c| -step * c).collect();
+            std::fs::write(
+                dir.join(format!("{stem}k.bkg")),
+                crate::chi_io::xy_string(&g.label, " k                 bkg", k, &bkg_k),
+            )?;
+        }
         Ok((k_path, r_path))
     }
 
