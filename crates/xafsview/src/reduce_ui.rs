@@ -214,10 +214,12 @@ impl ReductionUi {
     }
 
     /// Render the "Autobk parameters" grid plus the loading-mode and graph-type
-    /// selectors, mirroring the original 3-column layout. Returns `true` when
-    /// only the graph type changed (a cheap replot, no refit needed).
-    pub fn controls(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut replot = false;
+    /// selectors, mirroring the original 3-column layout. The returned
+    /// [`ControlsChange`] reports whether a reduction parameter's edit just
+    /// finished (`refit`, re-run Autobk) and/or only the graph type changed
+    /// (`replot`, a cheap re-render).
+    pub fn controls(&mut self, ui: &mut egui::Ui) -> ControlsChange {
+        let mut change = ControlsChange::default();
         ui.group(|ui| {
             ui.strong("Autobk parameters");
             ui.horizontal_top(|ui| {
@@ -228,25 +230,29 @@ impl ReductionUi {
                     .show(ui, |ui| {
                         ui.label("Eo");
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut self.e0_auto, "auto");
-                            ui.add_enabled(
+                            change.refit |= ui.checkbox(&mut self.e0_auto, "auto").changed();
+                            let r = ui.add_enabled(
                                 !self.e0_auto,
                                 egui::DragValue::new(&mut self.e0).speed(0.1).suffix(" eV"),
                             );
+                            change.refit |= r.drag_stopped() || r.lost_focus();
                         });
                         ui.end_row();
 
                         ui.label("Rbkg");
-                        ui.add(
+                        let r = ui.add(
                             egui::DragValue::new(&mut self.rbkg)
                                 .speed(0.01)
                                 .range(0.2..=2.5)
                                 .suffix(" Å"),
                         );
+                        change.refit |= r.drag_stopped() || r.lost_focus();
                         ui.end_row();
 
                         ui.label("ranges");
-                        ui.checkbox(&mut self.pre_norm_auto, "auto pre/norm");
+                        change.refit |= ui
+                            .checkbox(&mut self.pre_norm_auto, "auto pre/norm")
+                            .changed();
                         ui.end_row();
 
                         let manual = !self.pre_norm_auto;
@@ -257,10 +263,11 @@ impl ReductionUi {
                             ("Nor2", &mut self.norm2),
                         ] {
                             ui.label(label);
-                            ui.add_enabled(
+                            let r = ui.add_enabled(
                                 manual,
                                 egui::DragValue::new(value).speed(1.0).suffix(" eV"),
                             );
+                            change.refit |= r.drag_stopped() || r.lost_focus();
                             ui.end_row();
                         }
                     });
@@ -278,28 +285,32 @@ impl ReductionUi {
                     .spacing([6.0, 4.0])
                     .show(ui, |ui| {
                         ui.label("kmin");
-                        ui.add(
+                        let r = ui.add(
                             egui::DragValue::new(&mut self.kmin)
                                 .speed(0.1)
                                 .range(0.0..=6.0),
                         );
+                        change.refit |= r.drag_stopped() || r.lost_focus();
                         ui.end_row();
                         ui.label("kmax");
-                        ui.add(
+                        let r = ui.add(
                             egui::DragValue::new(&mut self.kmax)
                                 .speed(0.1)
                                 .range(5.0..=20.0),
                         );
+                        change.refit |= r.drag_stopped() || r.lost_focus();
                         ui.end_row();
                         ui.label("dk");
-                        ui.add(
+                        let r = ui.add(
                             egui::DragValue::new(&mut self.dk)
                                 .speed(0.1)
                                 .range(0.0..=3.0),
                         );
+                        change.refit |= r.drag_stopped() || r.lost_focus();
                         ui.end_row();
                         ui.label("kweight");
-                        ui.add(egui::DragValue::new(&mut self.kweight).range(0..=3));
+                        let r = ui.add(egui::DragValue::new(&mut self.kweight).range(0..=3));
+                        change.refit |= r.drag_stopped() || r.lost_focus();
                         ui.end_row();
                         ui.label("Window");
                         egui::ComboBox::from_id_salt("autobk_window")
@@ -313,23 +324,30 @@ impl ReductionUi {
                                     Window::Sine,
                                     Window::Gaussian,
                                 ] {
-                                    ui.selectable_value(&mut self.window, w, window_name(w));
+                                    if ui
+                                        .selectable_value(&mut self.window, w, window_name(w))
+                                        .changed()
+                                    {
+                                        change.refit = true;
+                                    }
                                 }
                             });
                         ui.end_row();
                         ui.label("clamp lo");
-                        ui.add(
+                        let r = ui.add(
                             egui::DragValue::new(&mut self.clamp_lo)
                                 .speed(0.5)
                                 .range(0.0..=50.0),
                         );
+                        change.refit |= r.drag_stopped() || r.lost_focus();
                         ui.end_row();
                         ui.label("clamp hi");
-                        ui.add(
+                        let r = ui.add(
                             egui::DragValue::new(&mut self.clamp_hi)
                                 .speed(0.5)
                                 .range(0.0..=50.0),
                         );
+                        change.refit |= r.drag_stopped() || r.lost_focus();
                         ui.end_row();
                     });
 
@@ -355,7 +373,7 @@ impl ReductionUi {
                                 for g in GraphType::ALL {
                                     if ui.selectable_value(&mut self.graph, g, g.label()).clicked()
                                     {
-                                        replot = true;
+                                        change.replot = true;
                                     }
                                 }
                             });
@@ -363,8 +381,19 @@ impl ReductionUi {
                     });
             });
         });
-        replot
+        change
     }
+}
+
+/// What [`ReductionUi::controls`] detected on a frame: a finished parameter edit
+/// (re-run Autobk) and/or a graph-type switch (cheap replot, no refit).
+#[derive(Default, Clone, Copy)]
+pub struct ControlsChange {
+    /// A reduction parameter's edit finished this frame — the drag was released
+    /// or a typed value committed — so Autobk should re-run with the new value.
+    pub refit: bool,
+    /// Only the graph type changed → re-render the current data, no refit.
+    pub replot: bool,
 }
 
 /// Display name for a window type.

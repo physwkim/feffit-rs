@@ -14,7 +14,7 @@ use crate::feffit_ui::{FeffitAction, FeffitPlot, FeffitUi};
 use crate::import::{ImportAction, ImportState};
 use crate::mback_ui::MbackWindow;
 use crate::plot_data::PlotDataWindow;
-use crate::reduce_ui::{GraphType, LoadingType, ReductionUi, TheoryStd};
+use crate::reduce_ui::{ControlsChange, GraphType, LoadingType, ReductionUi, TheoryStd};
 use crate::timeres_ui::TimeResolvedWindow;
 use crate::wavelet::{WaveletAction, WaveletWindow, morlet_cwt};
 use crate::xanes_ui::XanesWindow;
@@ -416,21 +416,33 @@ impl XafsViewApp {
     }
 
     /// Run normalize → autobk → xftf on the current group, then redraw.
-    fn run_reduction(&mut self) {
+    /// Recompute the reduction (normalize → AUTOBK → FT) for the current group
+    /// and refresh the plots. This is the live-preview path used when an Autobk
+    /// parameter changes: it does NOT write χ files to disk — that stays the
+    /// explicit "Autobk Start" action. Returns `(E₀, k-point count)`, or `None`
+    /// when there is no μ(E) to reduce.
+    fn recompute_reduction(&mut self) -> Option<(f64, usize)> {
         let pre = self.reduction.pre_params();
         let bk = self.reduction.autobk_params();
         let ft = self.reduction.ft_params();
         let info = {
-            let Some(g) = self.session.current_group_mut() else {
-                return;
-            };
+            let g = self.session.current_group_mut()?;
             if g.mu.is_empty() {
-                return;
+                return None;
             }
             feffit::xasdata::normalize(g, &pre);
             feffit::xasdata::autobk_group(g, &bk, 1.0);
             feffit::xasdata::xftf_group(g, &ft);
             (g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len()))
+        };
+        self.plot_data.mark_dirty();
+        self.replot_graph();
+        Some(info)
+    }
+
+    fn run_reduction(&mut self) {
+        let Some(info) = self.recompute_reduction() else {
+            return;
         };
         // Original Autobk "Output file" behaviour: persist χ(k) → <stem>k.chi and
         // χ(R) → <stem>r.chi once the transform has produced them. The stem is the
@@ -455,8 +467,6 @@ impl XafsViewApp {
             "AUTOBK done: E₀ = {:.2} eV, {} k-points{saved}",
             info.0, info.1
         );
-        self.plot_data.mark_dirty();
-        self.replot_graph();
     }
 
     /// Write the AUTOBK outputs the original's "Output file" produces: χ(k) →
@@ -1105,7 +1115,7 @@ impl XafsViewApp {
         let mut theory_pick = false;
         let mut theory_clear = false;
         let mut import_action = None;
-        let mut replot = false;
+        let mut change = ControlsChange::default();
 
         // μ(E)-dependent actions (Autobk Start, Edit μ(E)) need a real spectrum,
         // not a directly-loaded χ(k) group.
@@ -1207,7 +1217,7 @@ impl XafsViewApp {
 
                         // the "Autobk parameters" grid (+ loading mode + graph type)
                         ui.separator();
-                        replot = self.reduction.controls(ui);
+                        change = self.reduction.controls(ui);
 
                         // The 2×2 action block (그림 1-2-1-1) sits directly below
                         // the parameters — no pinned-bottom gap.
@@ -1250,17 +1260,23 @@ impl XafsViewApp {
         if let Some(ImportAction::CalcXmu) = import_action {
             self.calc_xmu();
         }
+        // "Autobk Start" runs the full reduction *and* writes the χ files. A
+        // finished Autobk parameter edit (change.refit) instead auto-runs a live
+        // preview — recompute + replot only, no file write — so the graph tracks
+        // the new value the moment the drag/edit ends. A bare graph-type switch is
+        // the cheap replot. Start wins when it and an edit land on the same frame.
         if start_clicked {
             self.run_reduction();
+        } else if has_mu && change.refit {
+            self.recompute_reduction();
+        } else if change.replot {
+            self.replot_graph();
         }
         if edit_clicked {
             self.open_edit_xmu();
         }
         if exit_clicked {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        if replot {
-            self.replot_graph();
         }
     }
 
