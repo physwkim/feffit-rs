@@ -1159,14 +1159,14 @@ impl XafsViewApp {
             Ok(msg) => {
                 self.feffit_fit_group = Some(label.clone());
                 // Persist the transforms as the original's *.dat/*.fit files (so
-                // Plot Data can overlay them). "Only FT" produces no model, so
-                // there are no .fit files to write — skip it.
+                // Plot Data can overlay them). The data .dat files always write;
+                // "Only FT" has no model, so output_pairs omits the .fit files.
                 let saved = match self.feffit.plot() {
-                    Some(plot) if plot.has_model => match self.write_feffit_outputs(plot, &label) {
+                    Some(plot) => match self.write_feffit_outputs(plot, &label) {
                         Ok(n) => format!(" · saved {n} .dat/.fit files"),
                         Err(e) => format!(" · .dat/.fit not written: {e}"),
                     },
-                    _ => String::new(),
+                    None => String::new(),
                 };
                 self.status = format!("{msg}{saved}");
                 self.replot_feffit();

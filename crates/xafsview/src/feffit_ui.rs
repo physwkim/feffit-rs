@@ -665,40 +665,50 @@ impl FeffitPlot {
         ((kx, kd, km), (qx, qd, qm))
     }
 
-    /// The six `(filename, content)` transforms the original's Plot Data reads,
-    /// named from `stem`: k/r/q-space data → `<stem>k.dat`/`r.dat`/`q.dat` and
-    /// the model → `<stem>k.fit`/`r.fit`/`q.fit`. Single owner of the
-    /// field→file mapping, shared by the single-fit on-disk writer and the
-    /// batch `(name, content)` builder so both stay byte-identical.
+    /// The `(filename, content)` transforms the original's Plot Data reads,
+    /// named from `stem`. The three k/r/q-space data files
+    /// (`<stem>k.dat`/`r.dat`/`q.dat`) are always produced; the three model
+    /// files (`<stem>k.fit`/`r.fit`/`q.fit`) are added only when a model was
+    /// fit (`has_model`) — "Only FT" has no model, so it persists data alone.
+    /// Single owner of the field→file mapping, shared by the single-fit
+    /// on-disk writer and the batch `(name, content)` builder so both stay
+    /// byte-identical.
     pub fn output_pairs(&self, stem: &str) -> Vec<(String, String)> {
         use crate::chi_io::{chik_string, complex4_string};
         let (d, m) = (&self.data, &self.model);
-        vec![
+        // Data transforms always exist after a successful run, so the three
+        // `.dat` files always write. The `.fit` model files are added only
+        // when a model was actually fit — one uniform rule (persist exactly
+        // the transforms that exist), not a write-all-or-nothing gate.
+        let mut pairs = vec![
             (
                 format!("{stem}k.dat"),
                 chik_string(stem, &self.data_k, &self.data_chi),
-            ),
-            (
-                format!("{stem}k.fit"),
-                chik_string(stem, &self.data_k, &self.model_chi),
             ),
             (
                 format!("{stem}r.dat"),
                 complex4_string(stem, "R", &d.r, &d.chir_mag, &d.chir_re, &d.chir_im),
             ),
             (
-                format!("{stem}r.fit"),
-                complex4_string(stem, "R", &m.r, &m.chir_mag, &m.chir_re, &m.chir_im),
-            ),
-            (
                 format!("{stem}q.dat"),
                 complex4_string(stem, "q", &d.q, &d.chiq_mag, &d.chiq_re, &d.chiq_im),
             ),
-            (
+        ];
+        if self.has_model {
+            pairs.push((
+                format!("{stem}k.fit"),
+                chik_string(stem, &self.data_k, &self.model_chi),
+            ));
+            pairs.push((
+                format!("{stem}r.fit"),
+                complex4_string(stem, "R", &m.r, &m.chir_mag, &m.chir_re, &m.chir_im),
+            ));
+            pairs.push((
                 format!("{stem}q.fit"),
                 complex4_string(stem, "q", &m.q, &m.chiq_mag, &m.chiq_re, &m.chiq_im),
-            ),
-        ]
+            ));
+        }
+        pairs
     }
 }
 
@@ -2160,6 +2170,47 @@ mod tests {
         assert!(plot.model_chi.is_empty(), "only FT has no model chi");
         assert!(!plot.data.r.is_empty(), "data was transformed to R-space");
         assert_eq!(plot.data.r.len(), plot.data.chir_mag.len());
+    }
+
+    #[test]
+    fn output_pairs_writes_data_always_and_fit_only_with_a_model() {
+        let (k, chi) = cu_kchi();
+
+        // No model ("Only FT"): the three data files write, no .fit.
+        let mut ft = FeffitUi {
+            fit_mode: FitMode::OnlyFt,
+            ..FeffitUi::default()
+        };
+        ft.run(&k, &chi).expect("only-FT runs");
+        let names: Vec<String> = ft
+            .plot()
+            .unwrap()
+            .output_pairs("g")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(
+            names,
+            ["gk.dat", "gr.dat", "gq.dat"],
+            "FT-only persists the three data files only"
+        );
+
+        // A model present (No-fit forward eval): the three .fit files are added.
+        let mut fit = feffit_ui_with_paths();
+        fit.fit_mode = FitMode::NoFit;
+        fit.run(&k, &chi).expect("no-fit eval runs");
+        let names: Vec<String> = fit
+            .plot()
+            .unwrap()
+            .output_pairs("g")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(
+            names,
+            ["gk.dat", "gr.dat", "gq.dat", "gk.fit", "gr.fit", "gq.fit"],
+            "a fitted model adds the three .fit files"
+        );
     }
 
     #[test]
