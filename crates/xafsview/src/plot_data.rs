@@ -764,15 +764,7 @@ impl PlotDataWindow {
         self.built_traces()
             .into_iter()
             .enumerate()
-            .map(|(idx, (label, x, y, _color))| {
-                let off = idx as f64 * self.stack;
-                let ys = if off != 0.0 {
-                    y.iter().map(|v| v + off).collect()
-                } else {
-                    y
-                };
-                (label, x, ys)
-            })
+            .map(|(idx, (label, x, y, _color))| (label, x, stack_offset_y(y, idx, self.stack)))
             .collect()
     }
 
@@ -856,12 +848,7 @@ impl PlotDataWindow {
 
         // Stack the individual traces (offset i·stack) and draw.
         for (idx, (label, x, y, color)) in traces.into_iter().enumerate() {
-            let off = idx as f64 * self.stack;
-            let ys: Vec<f64> = if off != 0.0 {
-                y.iter().map(|v| v + off).collect()
-            } else {
-                y
-            };
+            let ys = stack_offset_y(y, idx, self.stack);
             self.plot.add_curve_with_legend(&x, &ys, color, label);
         }
 
@@ -956,6 +943,20 @@ fn smooth5(y: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+/// Raise trace `idx`'s y-values by its stacking offset (`idx · stack`); trace 0
+/// is left unshifted. The single definition of the waterfall offset, shared by
+/// the draw path ([`PlotDataWindow::rebuild`]) and the save path
+/// ([`PlotDataWindow::displayed_composite`]) so a "Save in single file" carries
+/// exactly the vertical stacking the user sees on screen.
+fn stack_offset_y(y: Vec<f64>, idx: usize, stack: f64) -> Vec<f64> {
+    let off = idx as f64 * stack;
+    if off != 0.0 {
+        y.iter().map(|v| v + off).collect()
+    } else {
+        y
+    }
+}
+
 /// The minimum `(x, y)` of `y` over `x ∈ [lo, hi]` (inclusive); `None` when no
 /// sample falls in the range. Mirrors [`peak_in_range`] for the minimum.
 fn min_in_range(x: &[f64], y: &[f64], lo: f64, hi: f64) -> Option<(f64, f64)> {
@@ -1023,6 +1024,19 @@ mod tests {
         assert!((got - 2.5).abs() < 1e-9, "got {got}");
         // The same target outside the restricted window is not found.
         assert_eq!(x_at_y_in_range(&x, &y, 2.5, 3.0, 4.0), None);
+    }
+
+    #[test]
+    fn stack_offset_raises_each_trace_and_is_baked_into_the_save() {
+        let y = vec![1.0, 2.0, 3.0];
+        // Trace 0 is never shifted, regardless of the stack value.
+        assert_eq!(stack_offset_y(y.clone(), 0, 2.5), y);
+        // Trace i is raised by i·stack — what the draw path and the save path
+        // (displayed_composite) both call, so a saved file carries the stacking.
+        assert_eq!(stack_offset_y(y.clone(), 1, 2.5), vec![3.5, 4.5, 5.5]);
+        assert_eq!(stack_offset_y(y.clone(), 2, 2.5), vec![6.0, 7.0, 8.0]);
+        // A zero offset leaves the values untouched (no stacking, no change).
+        assert_eq!(stack_offset_y(y.clone(), 3, 0.0), y);
     }
 
     #[test]
