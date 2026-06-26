@@ -82,6 +82,17 @@ pub struct XasGroup {
     pub chir_re: Option<Vec<f64>>,
     /// `Im chi(R)`.
     pub chir_im: Option<Vec<f64>>,
+
+    // --- reverse Fourier transform (xftr) ----------------------------------
+    /// Back-transform wavenumber grid `q`, Å⁻¹ (the Fourier-filtered EXAFS, from
+    /// an R-windowed reverse FT of `chi(R)`).
+    pub q: Option<Vec<f64>>,
+    /// `|chi(q)|`.
+    pub chiq_mag: Option<Vec<f64>>,
+    /// `Re chi(q)`.
+    pub chiq_re: Option<Vec<f64>>,
+    /// `Im chi(q)`.
+    pub chiq_im: Option<Vec<f64>>,
 }
 
 impl XasGroup {

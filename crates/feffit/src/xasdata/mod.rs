@@ -27,7 +27,7 @@ pub use batch::{
 pub use clean::{RangeSide, SmoothForm, deglitch_point, deglitch_range, smooth_mu, trim};
 pub use group::{Folders, Session, XasGroup};
 pub use reader::{ColumnFile, ReadError, RoleGuess, read_chi_dat};
-pub use reduce::{FtParams, autobk_group, normalize, xftf_group};
+pub use reduce::{FtParams, XftrParams, autobk_group, normalize, xftf_group, xftr_group};
 pub use xmu::{MuSpec, XmuError, build_mu};
 
 // Re-export the engine parameter/window types so downstream crates (the GUI,
