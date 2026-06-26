@@ -983,6 +983,7 @@ impl XafsViewApp {
             Some(FeffitAction::SendToPlotData) => self.send_feffit_to_plot_data(),
             Some(FeffitAction::SaveResult) => self.save_feffit_result(),
             Some(FeffitAction::LoadResult) => self.load_feffit_result(),
+            Some(FeffitAction::LoadInp) => self.load_feffit_inp(),
             None => {}
         }
     }
@@ -1282,6 +1283,87 @@ impl XafsViewApp {
             }
             Err(e) => self.status = format!("Could not load result: {e}"),
         }
+    }
+
+    /// Import a UWXAFS `feffit.inp`: parse it, apply its FT windows / fit mode /
+    /// user functions / variables to the Feffit tab, then load each path's
+    /// `feffNNNN.dat` (resolved relative to the `.inp`, falling back to the Atoms
+    /// folder by file name) with its per-parameter expression overrides.
+    fn load_feffit_inp(&mut self) {
+        let mut dlg = rfd::FileDialog::new().add_filter("Feffit input", &["inp"]);
+        if let Some(dir) = self
+            .session
+            .folders
+            .feffit_dir
+            .clone()
+            .or_else(|| self.session.folders.sub_base.clone())
+        {
+            dlg = dlg.set_directory(dir);
+        }
+        let Some(path) = dlg.pick_file() else {
+            self.status = "Load inp cancelled.".to_owned();
+            return;
+        };
+        let content = match feffit::textio::read_to_string_lenient(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status = format!("Could not read inp: {e}");
+                return;
+            }
+        };
+
+        let inp = crate::feffit_ui::parse_feffit_inp(&content);
+        let nvars = inp.vars.len();
+        let npaths = inp.paths.len();
+        let base = path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        self.feffit.apply_inp(&inp);
+
+        let mut loaded = 0usize;
+        let mut missing = 0usize;
+        for ip in &inp.paths {
+            let candidate = base.join(ip.file.replace('\\', "/"));
+            let resolved = if candidate.exists() {
+                Some(candidate)
+            } else {
+                // Fall back to the Atoms folder, matched by file name.
+                candidate
+                    .file_name()
+                    .and_then(|name| {
+                        self.session
+                            .folders
+                            .atoms_dir
+                            .as_ref()
+                            .map(|d| d.join(name))
+                    })
+                    .filter(|p| p.exists())
+            };
+            match resolved.and_then(|p| {
+                feffit::feffdat::FeffPath::from_path(&p)
+                    .ok()
+                    .map(|fp| (p, fp))
+            }) {
+                Some((p, fp)) => {
+                    let label = p
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| format!("path{}", ip.number));
+                    self.feffit.add_inp_path(label, fp, ip);
+                    loaded += 1;
+                }
+                None => missing += 1,
+            }
+        }
+
+        self.status = if missing == 0 {
+            format!("Loaded inp: {nvars} variable(s), {loaded}/{npaths} path(s).")
+        } else {
+            format!(
+                "Loaded inp: {nvars} variable(s), {loaded}/{npaths} path(s) ({missing} file(s) not found)."
+            )
+        };
     }
 
     /// The Autobk tab: import + reduction controls on the left, plot on the right.

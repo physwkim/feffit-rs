@@ -341,10 +341,11 @@ impl FeffitBatch {
             Some(FeffitAction::Replot) => self.dirty = true,
             // The batch window is itself a multi-group view with its own plot and
             // its own "Save Items", so the Feffit tab's single-fit Send-to-Plot /
-            // Save-result / Load-result affordances are no-ops here.
+            // Save-result / Load-result / Load-inp affordances are no-ops here.
             Some(FeffitAction::SendToPlotData)
             | Some(FeffitAction::SaveResult)
-            | Some(FeffitAction::LoadResult) => {}
+            | Some(FeffitAction::LoadResult)
+            | Some(FeffitAction::LoadInp) => {}
             None => {}
         }
 

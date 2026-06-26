@@ -32,6 +32,8 @@ pub enum FeffitAction {
     SaveResult,
     /// Load a saved result/text file into the pop-up viewer ("Load result").
     LoadResult,
+    /// Import a UWXAFS `feffit.inp` to populate the fit ("Load inp").
+    LoadInp,
 }
 
 /// How a global variable enters the fit.
@@ -167,6 +169,159 @@ fn parse_user_funcs(text: &str) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+/// One global/local variable from a `feffit.inp`: `guess`/`set NAME = VALUE`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InpVar {
+    pub name: String,
+    /// `true` for `guess` (a free variable), `false` for `set` (fixed).
+    pub guess: bool,
+    pub value: f64,
+}
+
+/// One path entry from a `feffit.inp`: the `feffNNNN.dat` file (as written, with
+/// Windows separators) and any per-parameter expression overrides.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InpPath {
+    pub number: usize,
+    pub file: String,
+    pub s02: Option<String>,
+    pub e0: Option<String>,
+    pub ei: Option<String>,
+    pub deltar: Option<String>,
+    pub sigma2: Option<String>,
+    pub third: Option<String>,
+    pub fourth: Option<String>,
+}
+
+/// A parsed UWXAFS `feffit.inp` (the subset XAFSView writes): FT-window
+/// parameters, the fit/no-fit flag, user functions, variables, and path
+/// entries. Window fields are `Option` so an absent key leaves the current
+/// value intact on apply.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FeffitInp {
+    pub kmin: Option<f64>,
+    pub kmax: Option<f64>,
+    pub dk: Option<f64>,
+    pub rmin: Option<f64>,
+    pub rmax: Option<f64>,
+    pub dr: Option<f64>,
+    pub kweight: Option<i32>,
+    pub iwindo: Option<i32>,
+    pub nofit: Option<bool>,
+    pub user_funcs: String,
+    pub vars: Vec<InpVar>,
+    pub paths: Vec<InpPath>,
+}
+
+/// Parse a UWXAFS `feffit.inp` into a [`FeffitInp`]. A line whose first
+/// non-blank character is `%` is disabled (commented out) — except the `%set`
+/// user-function directive — and an inline trailing `% …` comment is stripped
+/// from active lines. Lines are classified by their first token: `set`/`guess`
+/// variables, `path`/`e0`/`delR`/`s02`/`sigma2`/`third`/`fourth`/`ei` path
+/// entries, `Nofit`, and the `kmin = … rmax = …` window-parameter pairs.
+pub fn parse_feffit_inp(text: &str) -> FeffitInp {
+    use std::collections::BTreeMap;
+
+    let mut inp = FeffitInp::default();
+    let mut paths: BTreeMap<usize, InpPath> = BTreeMap::new();
+
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // `%set NAME = EXPR` is an active user-function directive.
+        if line.len() >= 4
+            && line[..4].eq_ignore_ascii_case("%set")
+            && line[4..].starts_with(char::is_whitespace)
+        {
+            inp.user_funcs.push_str(line);
+            inp.user_funcs.push('\n');
+            continue;
+        }
+        // Any other leading `%` (including `%%`) is a comment.
+        if line.starts_with('%') {
+            continue;
+        }
+        // Strip a trailing inline `% …` comment, then normalise `=` spacing.
+        let active = line.split('%').next().unwrap_or(line).trim();
+        if active.is_empty() {
+            continue;
+        }
+        let spaced = active.replace('=', " = ");
+        let tok: Vec<&str> = spaced.split_whitespace().collect();
+        if tok.is_empty() {
+            continue;
+        }
+        let key = tok[0].to_ascii_lowercase();
+        match key.as_str() {
+            "set" | "guess" if tok.len() >= 4 && tok[2] == "=" => {
+                if let Ok(v) = tok[3].parse::<f64>() {
+                    inp.vars.push(InpVar {
+                        name: tok[1].to_owned(),
+                        guess: key == "guess",
+                        value: v,
+                    });
+                }
+            }
+            "nofit" if tok.len() >= 3 && tok[1] == "=" => {
+                inp.nofit = Some(tok[2].eq_ignore_ascii_case("true"));
+            }
+            "path" if tok.len() >= 3 => {
+                if let Ok(n) = tok[1].parse::<usize>() {
+                    let p = paths.entry(n).or_default();
+                    p.number = n;
+                    p.file = tok[2..].join(" ");
+                }
+            }
+            "e0" | "delr" | "s02" | "sigma2" | "third" | "fourth" | "ei" if tok.len() >= 3 => {
+                if let Ok(n) = tok[1].parse::<usize>() {
+                    let expr = tok[2..].join(" ");
+                    let p = paths.entry(n).or_default();
+                    p.number = n;
+                    match key.as_str() {
+                        "e0" => p.e0 = Some(expr),
+                        "delr" => p.deltar = Some(expr),
+                        "s02" => p.s02 = Some(expr),
+                        "sigma2" => p.sigma2 = Some(expr),
+                        "third" => p.third = Some(expr),
+                        "fourth" => p.fourth = Some(expr),
+                        "ei" => p.ei = Some(expr),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            // Otherwise scan for `key = value` window-parameter pairs.
+            _ => {
+                let mut i = 0;
+                while i + 2 < tok.len() {
+                    if tok[i + 1] == "=" {
+                        let k = tok[i].to_ascii_lowercase();
+                        let val = tok[i + 2];
+                        match k.as_str() {
+                            "kmin" => inp.kmin = val.parse().ok(),
+                            "kmax" => inp.kmax = val.parse().ok(),
+                            "dk" => inp.dk = val.parse().ok(),
+                            "rmin" => inp.rmin = val.parse().ok(),
+                            "rmax" => inp.rmax = val.parse().ok(),
+                            "dr" => inp.dr = val.parse().ok(),
+                            "kweight" => inp.kweight = val.parse().ok(),
+                            "iwindo" => inp.iwindo = val.parse().ok(),
+                            _ => {}
+                        }
+                        i += 3;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    inp.paths = paths.into_values().collect();
+    inp
 }
 
 /// Fit-transform (k/R window) settings for the FEFFIT fit.
@@ -753,6 +908,84 @@ impl FeffitUi {
         self.text_view = Some((title.into(), body));
     }
 
+    /// Apply a parsed [`FeffitInp`]'s non-path settings — FT windows, fit mode,
+    /// user functions, and variables — replacing the current configuration. The
+    /// path list is cleared; the app loads each `.dat` file and re-adds it with
+    /// [`add_inp_path`](Self::add_inp_path). Clears any stale result/plot.
+    pub fn apply_inp(&mut self, inp: &FeffitInp) {
+        if let Some(v) = inp.kmin {
+            self.ft.kmin = v;
+        }
+        if let Some(v) = inp.kmax {
+            self.ft.kmax = v;
+        }
+        if let Some(v) = inp.dk {
+            self.ft.dk = v;
+        }
+        if let Some(v) = inp.rmin {
+            self.ft.rmin = v;
+        }
+        if let Some(v) = inp.rmax {
+            self.ft.rmax = v;
+        }
+        if let Some(v) = inp.dr {
+            self.ft.dr = v;
+        }
+        if let Some(v) = inp.kweight {
+            self.ft.kweight = v;
+        }
+        // iwindo = 1 is the UWXAFS Hanning window (the only code XAFSView writes);
+        // other codes are left unmapped (no reference table) so the window keeps
+        // its current value.
+        if inp.iwindo == Some(1) {
+            self.ft.kwindow = Window::Hanning;
+            self.ft.rwindow = Window::Hanning;
+        }
+        if let Some(nofit) = inp.nofit {
+            self.fit_mode = if nofit { FitMode::NoFit } else { FitMode::Fit };
+        }
+        self.user_funcs = inp.user_funcs.clone();
+        self.params = inp
+            .vars
+            .iter()
+            .map(|v| ParamRow {
+                name: v.name.clone(),
+                kind: if v.guess {
+                    ParamKind::Vary
+                } else {
+                    ParamKind::Fixed
+                },
+                value: v.value,
+                expr: String::new(),
+            })
+            .collect();
+        self.paths.clear();
+        self.selected_path = 0;
+        self.result = None;
+        self.plot = None;
+    }
+
+    /// Add a path loaded for a `Load inp` import, applying the `.inp`'s
+    /// per-parameter expression overrides over the default first-shell wiring
+    /// (degen stays as read from the `.dat` file).
+    pub fn add_inp_path(&mut self, label: String, path: FeffPath, inp: &InpPath) {
+        let mut row = PathRow::new(label, path);
+        for (slot, ov) in [
+            (1, &inp.s02),
+            (2, &inp.e0),
+            (3, &inp.ei),
+            (4, &inp.deltar),
+            (5, &inp.sigma2),
+            (6, &inp.third),
+            (7, &inp.fourth),
+        ] {
+            if let Some(v) = ov {
+                row.specs[slot] = v.clone();
+            }
+        }
+        self.paths.push(row);
+    }
+
     /// Add a path file the app picked from a dialog.
     pub fn add_path(&mut self, label: String, path: FeffPath) {
         self.paths.push(PathRow::new(label, path));
@@ -1227,6 +1460,13 @@ impl FeffitUi {
                     },
                 ));
             }
+            if ui
+                .button("Load inp")
+                .on_hover_text("import a UWXAFS feffit.inp (windows, variables, paths)")
+                .clicked()
+            {
+                action = Some(FeffitAction::LoadInp);
+            }
             if ui.button("Load result").clicked() {
                 action = Some(FeffitAction::LoadResult);
             }
@@ -1611,6 +1851,111 @@ mod tests {
                 .contains("Correlations"),
             "correlations report has a header"
         );
+    }
+
+    const INP_SAMPLE: &str = r#"%%  feffit.inp
+ title  = C:\XAFSView\Feffit\Dummy67.chi    % output
+ data   = C:\XAFSView\Autobk\Dummy67k.chi   % input
+ Nofit = false
+   rmin    = 1.00  rmax    = 3.50  dr   = 0.20
+   kmin    = 3.00  kmax    = 12.00  dk   = 0.50
+   iwindo  = 1
+   kweight = 3
+ end
+%set  hbar_c = 1973
+   set           s02 =       0.901940
+%   guess             temp =       0.000000
+      guess      e1      =      1.58952200
+      guess      delr1      =      -0.00658600
+      set      N1      =      1.00000000
+      guess      sig1      =      0.00470500
+        path    1       ..\Feff8\feff0001.dat
+        Id      1       -, r=0.0000, amp=0.0, deg=0, nleg=0
+        e0      1       e1
+        delR    1       delr1
+        s02     1       s02 * N1
+        sigma2  1       sig1
+        path    2       ..\Feff8\feff0002.dat
+        e0      2       e1
+        delR    2       delr2
+        s02     2       s02 * N1
+        sigma2  2       sig2
+"#;
+
+    #[test]
+    fn parse_feffit_inp_extracts_windows_vars_and_active_paths() {
+        let inp = parse_feffit_inp(INP_SAMPLE);
+
+        // Window parameters (multiple `key = value` per line).
+        assert_eq!(inp.kmin, Some(3.0));
+        assert_eq!(inp.kmax, Some(12.0));
+        assert_eq!(inp.dk, Some(0.5));
+        assert_eq!(inp.rmin, Some(1.0));
+        assert_eq!(inp.rmax, Some(3.5));
+        assert_eq!(inp.dr, Some(0.2));
+        assert_eq!(inp.kweight, Some(3));
+        assert_eq!(inp.iwindo, Some(1));
+        assert_eq!(inp.nofit, Some(false));
+
+        // `%set` is a user function, not a comment.
+        assert!(inp.user_funcs.contains("hbar_c"));
+
+        // set → fixed, guess → free; the `%`-commented `temp` is skipped.
+        assert!(
+            inp.vars
+                .iter()
+                .any(|v| v.name == "s02" && !v.guess && (v.value - 0.901940).abs() < 1e-9),
+            "set s02 is a fixed variable"
+        );
+        assert!(
+            inp.vars.iter().any(|v| v.name == "e1" && v.guess),
+            "guess e1 is a free variable"
+        );
+        assert!(
+            inp.vars.iter().any(|v| v.name == "N1" && !v.guess),
+            "set N1 is a fixed variable"
+        );
+        assert!(
+            !inp.vars.iter().any(|v| v.name == "temp"),
+            "the %-commented guess is disabled"
+        );
+
+        // Two path entries, sorted by number, with their expression overrides.
+        assert_eq!(inp.paths.len(), 2);
+        assert_eq!(inp.paths[0].number, 1);
+        assert!(inp.paths[0].file.contains("feff0001.dat"));
+        assert_eq!(inp.paths[0].e0.as_deref(), Some("e1"));
+        assert_eq!(inp.paths[0].deltar.as_deref(), Some("delr1"));
+        assert_eq!(inp.paths[0].s02.as_deref(), Some("s02 * N1"));
+        assert_eq!(inp.paths[0].sigma2.as_deref(), Some("sig1"));
+        assert_eq!(inp.paths[1].number, 2);
+        assert!(inp.paths[1].file.contains("feff0002.dat"));
+        assert_eq!(inp.paths[1].deltar.as_deref(), Some("delr2"));
+    }
+
+    #[test]
+    fn apply_inp_replaces_windows_mode_and_variables() {
+        let inp = parse_feffit_inp(INP_SAMPLE);
+        let mut ui = FeffitUi::default();
+        ui.apply_inp(&inp);
+
+        assert_eq!(ui.fit_mode, FitMode::Fit, "Nofit=false → Fit mode");
+        assert_eq!(ui.ft.kmin, 3.0);
+        assert_eq!(ui.ft.rmax, 3.5);
+        assert_eq!(ui.ft.kweight, 3);
+        // Variables become parameter rows (set→Fixed, guess→Vary); paths are
+        // cleared for the app to reload from the `.dat` files.
+        assert!(
+            ui.params
+                .iter()
+                .any(|p| p.name == "e1" && p.kind == ParamKind::Vary)
+        );
+        assert!(
+            ui.params
+                .iter()
+                .any(|p| p.name == "s02" && p.kind == ParamKind::Fixed)
+        );
+        assert!(ui.paths.is_empty(), "paths cleared for app-side reload");
     }
 
     #[test]
