@@ -440,17 +440,18 @@ pub enum PlotPart {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FitMode {
     /// Forward-evaluate the model at the current guess values and overlay it on
-    /// the data — no least-squares optimisation, no statistics. The default.
+    /// the data — no least-squares optimisation, no statistics.
     NoFit,
-    /// Fourier-transform the data only (no paths, no model).
+    /// Fourier-transform the data only (no paths, no model). The default, matching
+    /// the original XAFSView (its "Fit" dropdown opens on "Only FT").
     OnlyFt,
     /// Run the least-squares fit, then overlay the best-fit model.
     Fit,
 }
 
 impl FitMode {
-    /// All modes in the dropdown's display order.
-    pub const ALL: [FitMode; 3] = [FitMode::NoFit, FitMode::OnlyFt, FitMode::Fit];
+    /// All modes in the dropdown's display order (the default, "Only FT", first).
+    pub const ALL: [FitMode; 3] = [FitMode::OnlyFt, FitMode::NoFit, FitMode::Fit];
 
     /// Dropdown label (matches the original's "Fit" ring text).
     pub fn label(self) -> &'static str {
@@ -726,7 +727,7 @@ impl Default for FeffitUi {
             part: PlotPart::Mag,
             selected_path: 0,
             user_funcs: String::new(),
-            fit_mode: FitMode::NoFit,
+            fit_mode: FitMode::OnlyFt,
             report_view: None,
             text_view: None,
             param_undo: None,
@@ -1828,6 +1829,8 @@ mod tests {
     #[test]
     fn run_errors_without_paths() {
         let mut ui = FeffitUi::default();
+        // A path-requiring mode (the default "Only FT" transforms data alone).
+        ui.fit_mode = FitMode::Fit;
         let (k, chi) = cu_kchi();
         assert!(ui.run(&k, &chi).is_err(), "no paths must error");
     }
@@ -1883,8 +1886,9 @@ mod tests {
     }
 
     #[test]
-    fn default_mode_is_no_fit() {
-        assert_eq!(FeffitUi::default().fit_mode, FitMode::NoFit);
+    fn default_mode_is_only_ft() {
+        // The original XAFSView's "Fit" dropdown opens on "Only FT".
+        assert_eq!(FeffitUi::default().fit_mode, FitMode::OnlyFt);
     }
 
     #[test]
