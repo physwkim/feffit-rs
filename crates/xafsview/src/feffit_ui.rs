@@ -144,6 +144,39 @@ fn default_specs(degen: impl std::fmt::Display) -> [String; 8] {
     ]
 }
 
+/// Standard global-variable names offered by the "Add ▾" menu, so the common fit
+/// parameters can be inserted by name (with a sensible starting value) instead of
+/// remembered and typed. Each entry is `(name, default value, hint)`.
+///
+/// The first four are exactly the variables the default path wiring references
+/// (see [`default_specs`]): `amp`→s02, `del_e0`→e0, `alpha`→Δr (`alpha*reff`),
+/// `sig2`→σ². `temp`/`debye_temp` are the inputs to the Debye-Waller
+/// `sigma2_debye`/`sigma2_eins` helpers, used via a `%set` user function.
+const STANDARD_VARS: [(&str, f64, &str); 6] = [
+    ("amp", 0.9, "S₀² amplitude — the default path s02"),
+    (
+        "del_e0",
+        0.0,
+        "ΔE₀ energy-origin shift — the default path e0",
+    ),
+    (
+        "alpha",
+        0.0,
+        "lattice expansion — the default path Δr (alpha·reff)",
+    ),
+    ("sig2", 0.003, "σ² Debye-Waller — the default path sigma2"),
+    (
+        "temp",
+        300.0,
+        "temperature (K) for the sigma2_debye/eins helpers",
+    ),
+    (
+        "debye_temp",
+        300.0,
+        "Debye temperature θ_D (K) for sigma2_debye",
+    ),
+];
+
 /// Parse the "user defined functions" box: each `%set NAME = EXPR` line yields a
 /// `(name, expr)` pair (blank lines and `%`-comments are ignored), the way the
 /// original XAFSView's UDF block defines extra named fit constants/constraints.
@@ -1316,9 +1349,31 @@ impl FeffitUi {
             let mut undo = false;
             ui.horizontal(|ui| {
                 ui.strong("Global variables");
-                if ui.button("Add").clicked() {
-                    self.params.push(ParamRow::var("new", 0.0));
-                }
+                // The "Add ▾" menu inserts a standard, pre-named variable (so the
+                // common parameters need not be remembered and typed), or a blank
+                // row to name yourself. A name already in the table is disabled.
+                ui.menu_button("Add ⏷", |ui| {
+                    for (name, val, hint) in STANDARD_VARS {
+                        let exists = self.params.iter().any(|p| p.name == name);
+                        if ui
+                            .add_enabled(!exists, egui::Button::new(name))
+                            .on_hover_text(hint)
+                            .clicked()
+                        {
+                            self.params.push(ParamRow::var(name, val));
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui
+                        .button("Custom…")
+                        .on_hover_text("add a blank row to name yourself")
+                        .clicked()
+                    {
+                        self.params.push(ParamRow::var("new", 0.0));
+                        ui.close();
+                    }
+                });
                 // "Use fit as guess" copies the best-fit values back onto the
                 // vary variables as new starting guesses; "Undo" reverts it.
                 if ui
@@ -1350,9 +1405,15 @@ impl FeffitUi {
                         .selected_text(kind_name(row.kind))
                         .width(64.0)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut row.kind, ParamKind::Vary, "vary");
-                            ui.selectable_value(&mut row.kind, ParamKind::Fixed, "fixed");
-                            ui.selectable_value(&mut row.kind, ParamKind::Expr, "expr");
+                            // The original XAFSView's terminology: "guess" = a
+                            // refined free variable (larch `vary`), "set" = held
+                            // fixed (larch `fixed`).
+                            ui.selectable_value(&mut row.kind, ParamKind::Vary, "guess")
+                                .on_hover_text("refined free variable");
+                            ui.selectable_value(&mut row.kind, ParamKind::Fixed, "set")
+                                .on_hover_text("held fixed at its value");
+                            ui.selectable_value(&mut row.kind, ParamKind::Expr, "expr")
+                                .on_hover_text("a constraint expression");
                         });
                     match row.kind {
                         ParamKind::Vary | ParamKind::Fixed => {
@@ -1601,10 +1662,13 @@ fn window_combo(ui: &mut egui::Ui, salt: &str, win: &mut Window) {
         });
 }
 
+/// The variable-kind labels, in the original XAFSView's terminology: a refined
+/// free variable is "guess" (larch `vary`), a held value is "set" (larch
+/// `fixed`), and a constraint is "expr".
 fn kind_name(k: ParamKind) -> &'static str {
     match k {
-        ParamKind::Vary => "vary",
-        ParamKind::Fixed => "fixed",
+        ParamKind::Vary => "guess",
+        ParamKind::Fixed => "set",
         ParamKind::Expr => "expr",
     }
 }
@@ -2064,6 +2128,25 @@ mod tests {
         let mut ui = FeffitUi::default();
         assert_eq!(ui.adopt_fit_as_guess(), 0);
         assert!(!ui.undo_guess(), "no snapshot recorded without a fit");
+    }
+
+    #[test]
+    fn standard_vars_cover_the_default_path_wiring() {
+        // The "Add ▾" menu must offer the variables the default path specs
+        // reference, so adding one by name actually resolves a loaded path.
+        let offered: Vec<&str> = STANDARD_VARS.iter().map(|(n, _, _)| *n).collect();
+        let specs = default_specs(1.0);
+        for needed in ["amp", "del_e0", "alpha", "sig2"] {
+            assert!(offered.contains(&needed), "Add menu offers {needed}");
+            assert!(
+                specs.iter().any(|s| s.contains(needed)),
+                "default path wiring references {needed}"
+            );
+        }
+        // The default variable seed is exactly those four (in order).
+        let ui = FeffitUi::default();
+        let seeded: Vec<&str> = ui.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(seeded, ["amp", "del_e0", "alpha", "sig2"]);
     }
 
     #[test]
