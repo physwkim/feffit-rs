@@ -144,16 +144,26 @@ impl XasGroup {
 
 /// Working directories the user configures on the Folders tab.
 ///
-/// XAFSView kept separate folders for data, scratch/work output, and FEFF runs;
-/// we keep the same split so file dialogs and batch output can default sensibly.
+/// Mirrors the original XAFSView project layout: a chosen "Sub base" project
+/// root holds the five working folders (`Data`, `Autobk`, `Feffit`, `Atoms`,
+/// `Results`). Selecting the sub base creates all five at once and points each
+/// field below at `<sub_base>/<Name>`, so file dialogs read from and outputs are
+/// written to the right place; each can still be overridden individually.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Folders {
-    /// Where raw/reduced data files are read from.
+    /// Project root; selecting it creates and fills the five folders below with
+    /// `<sub_base>/{Data,Autobk,Feffit,Atoms,Results}`.
+    pub sub_base: Option<PathBuf>,
+    /// `Data` — raw/reduced data files are read from here.
     pub data_dir: Option<PathBuf>,
-    /// Where reduced output and projects are written.
-    pub work_dir: Option<PathBuf>,
-    /// Where `feff.inp` / `feffNNNN.dat` live for fitting.
-    pub feff_dir: Option<PathBuf>,
+    /// `Autobk` — AUTOBK χ(k)/χ(R) outputs are written here.
+    pub autobk_dir: Option<PathBuf>,
+    /// `Feffit` — FEFFIT data/model (`.dat`/`.fit`) outputs are written here.
+    pub feffit_dir: Option<PathBuf>,
+    /// `Atoms` — `feff.inp` and the `feffNNNN.dat` path files live here.
+    pub atoms_dir: Option<PathBuf>,
+    /// `Results` — saved items and exports are written here.
+    pub results_dir: Option<PathBuf>,
 }
 
 /// The data half of the application state: loaded groups, current selection, and

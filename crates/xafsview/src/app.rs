@@ -3,7 +3,7 @@
 //! Phase 0 wires the skeleton and makes the **Folders** tab functional.
 
 use eframe::egui;
-use feffit::xasdata::{ColumnFile, Session, XasGroup};
+use feffit::xasdata::{ColumnFile, Folders, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
 use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindow};
@@ -389,7 +389,7 @@ impl XafsViewApp {
             .filter(|d| !d.as_os_str().is_empty())
             .map(std::path::Path::to_path_buf)
             .or_else(|| self.session.folders.data_dir.clone())
-            .or_else(|| self.session.folders.work_dir.clone())
+            .or_else(|| self.session.folders.autobk_dir.clone())
         else {
             return Err("no output folder".to_owned());
         };
@@ -487,7 +487,7 @@ impl XafsViewApp {
         let dir = self
             .session
             .folders
-            .work_dir
+            .autobk_dir
             .clone()
             .or_else(|| self.session.folders.data_dir.clone())
             .or_else(|| {
@@ -517,7 +517,7 @@ impl XafsViewApp {
 
     /// Write the FEFFIT transforms the original's Plot Data reads: the data in
     /// k/r/q space → `<stem>k.dat`/`<stem>r.dat`/`<stem>q.dat` and the model →
-    /// `<stem>k.fit`/`<stem>r.fit`/`<stem>q.fit`, into the work folder (falling
+    /// `<stem>k.fit`/`<stem>r.fit`/`<stem>q.fit`, into the Feffit folder (falling
     /// back to the data folder). Returns the number of files written (6).
     fn write_feffit_outputs(&self, plot: &FeffitPlot, stem: &str) -> std::io::Result<usize> {
         let stem = match stem.trim() {
@@ -527,7 +527,7 @@ impl XafsViewApp {
         let dir = self
             .session
             .folders
-            .work_dir
+            .feffit_dir
             .clone()
             .or_else(|| self.session.folders.data_dir.clone())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -720,7 +720,7 @@ impl XafsViewApp {
         if let Some(dir) = self
             .session
             .folders
-            .work_dir
+            .results_dir
             .clone()
             .or_else(|| self.session.folders.data_dir.clone())
         {
@@ -952,7 +952,7 @@ impl XafsViewApp {
     /// Open a dialog and add the chosen Feff path file(s) to the fit.
     fn add_feff_path(&mut self) {
         let mut dlg = rfd::FileDialog::new();
-        if let Some(dir) = &self.session.folders.feff_dir {
+        if let Some(dir) = &self.session.folders.atoms_dir {
             dlg = dlg.set_directory(dir);
         }
         let Some(paths) = dlg.pick_files() else {
@@ -980,7 +980,7 @@ impl XafsViewApp {
     /// Open a dialog and add the chosen Feff path file(s) to one batch config.
     fn add_feff_path_to_batch(&mut self, idx: usize) {
         let mut dlg = rfd::FileDialog::new();
-        if let Some(dir) = &self.session.folders.feff_dir {
+        if let Some(dir) = &self.session.folders.atoms_dir {
             dlg = dlg.set_directory(dir);
         }
         let Some(paths) = dlg.pick_files() else {
@@ -1005,17 +1005,17 @@ impl XafsViewApp {
         }
     }
 
-    /// Write the batch "Save Items" files to the work folder (the original's
+    /// Write the batch "Save Items" files to the Results folder (the original's
     /// results folder; falls back to the data folder), reporting the outcome.
     fn write_saved_items(&mut self, files: Vec<(String, String)>) {
         let Some(dir) = self
             .session
             .folders
-            .work_dir
+            .results_dir
             .clone()
             .or_else(|| self.session.folders.data_dir.clone())
         else {
-            self.status = "Set a work folder (Folders tab) before saving items.".to_owned();
+            self.status = "Set a Results folder (Folders tab) before saving items.".to_owned();
             return;
         };
         let mut written = 0usize;
@@ -1179,7 +1179,7 @@ impl XafsViewApp {
                                 )
                                 .on_hover_text(
                                     "AUTOBK Start writes <stem>k.chi (χ(k)) and \
-                                     <stem>r.chi (χ(R)) into the work folder",
+                                     <stem>r.chi (χ(R)) into the Autobk folder",
                                 );
                                 ui.end_row();
 
@@ -1441,9 +1441,32 @@ impl XafsViewApp {
         });
     }
 
-    /// The Folders tab: configure the data/work/feff working directories.
+    /// Point the working folders at a project root and report the outcome to the
+    /// status line. The folder creation + field mapping lives in the headless
+    /// [`set_project_folders`] so it can be unit-tested.
+    fn apply_sub_base(&mut self, root: std::path::PathBuf) {
+        let errors = set_project_folders(&mut self.session.folders, &root);
+        let made = 5 - errors.len();
+        self.status = if errors.is_empty() {
+            format!(
+                "Sub base set to {} — {made} working folders ready.",
+                root.display()
+            )
+        } else {
+            format!(
+                "Sub base {} — {made} folder(s) ready, errors: {}",
+                root.display(),
+                errors.join("; ")
+            )
+        };
+    }
+
+    /// The Folders tab: pick a project Sub base folder to create and fill the five
+    /// working folders (Data / Autobk / Feffit / Atoms / Results); each is also
+    /// editable individually.
     fn folders_panel(&mut self, ui: &mut egui::Ui) {
         let mut exit_clicked = false;
+        let mut sub_base_pick: Option<std::path::PathBuf> = None;
         egui::CentralPanel::default().show_inside(ui, |ui| {
             // `auto_shrink` off on the horizontal axis: otherwise the scroll area
             // collapses its width to the content, which clamps the path fields'
@@ -1458,19 +1481,61 @@ impl XafsViewApp {
                         });
                     });
                     ui.label(
-                    "Working directories used for file dialogs and output. Type a path or Browse.",
-                );
+                        "Pick a Sub base (project) folder: it creates and points the five \
+                         working folders at <sub base>/{Data, Autobk, Feffit, Atoms, Results}. \
+                         Each can still be changed individually below.",
+                    );
                     ui.add_space(8.0);
 
-                    // Only the folders this app actually uses (functional fields only):
-                    // the original's Base / Sub base / Autobk / Feffit_txt / IE Explorer
-                    // / Results folders have no engine mapping here.
                     // Size the path field from the *panel* width here (full width,
                     // since the scroll area's horizontal auto-shrink is off), not
                     // from inside the grid cell where the available width is tiny.
                     // Reserve room for the label + Browse columns, clamp so a narrow
                     // window still shows a usable field and a wide one doesn't sprawl.
                     let field_w = (ui.available_width() - 300.0).clamp(360.0, 760.0);
+
+                    // Sub base row: a Browse pick — or a committed typed path that
+                    // already exists and differs from the current one — creates the
+                    // five subfolders and fills the rows below. A half-typed path is
+                    // not turned into a tree: only an existing directory is accepted.
+                    egui::Grid::new("subbase_grid")
+                        .num_columns(3)
+                        .spacing([8.0, 8.0])
+                        .show(ui, |ui| {
+                            ui.label("Sub base folder");
+                            let mut text = self
+                                .session
+                                .folders
+                                .sub_base
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default();
+                            let resp = ui.add_sized(
+                                [field_w, ui.spacing().interact_size.y],
+                                egui::TextEdit::singleline(&mut text)
+                                    .hint_text("(pick a project folder)"),
+                            );
+                            if resp.lost_focus() && !text.trim().is_empty() {
+                                let p = std::path::PathBuf::from(text.trim());
+                                let unchanged =
+                                    self.session.folders.sub_base.as_deref() == Some(p.as_path());
+                                if !unchanged && p.is_dir() {
+                                    sub_base_pick = Some(p);
+                                }
+                            }
+                            if crate::widgets::action(ui, "Browse…", crate::widgets::BROWSE_BTN)
+                                .clicked()
+                                && let Some(picked) = rfd::FileDialog::new().pick_folder()
+                            {
+                                sub_base_pick = Some(picked);
+                            }
+                            ui.end_row();
+                        });
+
+                    ui.add_space(6.0);
+                    ui.weak("Working folders (auto-filled from the sub base; each editable):");
+                    ui.add_space(4.0);
+
                     egui::Grid::new("folders_grid")
                         .num_columns(3)
                         .spacing([8.0, 8.0])
@@ -1484,15 +1549,29 @@ impl XafsViewApp {
                             ui.end_row();
                             folder_row(
                                 ui,
-                                "Work folder",
-                                &mut self.session.folders.work_dir,
+                                "Autobk folder",
+                                &mut self.session.folders.autobk_dir,
                                 field_w,
                             );
                             ui.end_row();
                             folder_row(
                                 ui,
-                                "FEFF folder",
-                                &mut self.session.folders.feff_dir,
+                                "Feffit folder",
+                                &mut self.session.folders.feffit_dir,
+                                field_w,
+                            );
+                            ui.end_row();
+                            folder_row(
+                                ui,
+                                "Atoms folder",
+                                &mut self.session.folders.atoms_dir,
+                                field_w,
+                            );
+                            ui.end_row();
+                            folder_row(
+                                ui,
+                                "Results folder",
+                                &mut self.session.folders.results_dir,
                                 field_w,
                             );
                             ui.end_row();
@@ -1505,6 +1584,9 @@ impl XafsViewApp {
                     }
                 });
         });
+        if let Some(root) = sub_base_pick {
+            self.apply_sub_base(root);
+        }
         if exit_clicked {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -1566,7 +1648,7 @@ impl eframe::App for XafsViewApp {
                 match self.feff_tab.ui(
                     ui,
                     &mut self.feff_inp,
-                    self.session.folders.work_dir.as_deref(),
+                    self.session.folders.atoms_dir.as_deref(),
                 ) {
                     Some(FeffAction::ViewStructure) => self.plot_sites.open = true,
                     Some(FeffAction::Exit) => {
@@ -1651,6 +1733,31 @@ impl eframe::App for XafsViewApp {
                 .show(ui.ctx(), rs, &self.feff_inp, &path_files);
         }
     }
+}
+
+/// Create `<root>/{Data,Autobk,Feffit,Atoms,Results}` (idempotent — existing
+/// folders are reused) and point the matching [`Folders`] fields at them, in the
+/// fixed order Data→`data_dir`, Autobk→`autobk_dir`, Feffit→`feffit_dir`,
+/// Atoms→`atoms_dir`, Results→`results_dir`. A subfolder whose creation fails
+/// keeps the field's previous value; `sub_base` is set to `root` regardless.
+/// Returns one `"<Name>: <error>"` string per failed creation. Mirrors the
+/// original XAFSView "Sub base folder" auto-fill.
+fn set_project_folders(folders: &mut Folders, root: &std::path::Path) -> Vec<String> {
+    let mut errors: Vec<String> = Vec::new();
+    let mut make = |name: &str, slot: &mut Option<std::path::PathBuf>| {
+        let dir = root.join(name);
+        match std::fs::create_dir_all(&dir) {
+            Ok(()) => *slot = Some(dir),
+            Err(e) => errors.push(format!("{name}: {e}")),
+        }
+    };
+    make("Data", &mut folders.data_dir);
+    make("Autobk", &mut folders.autobk_dir);
+    make("Feffit", &mut folders.feffit_dir);
+    make("Atoms", &mut folders.atoms_dir);
+    make("Results", &mut folders.results_dir);
+    folders.sub_base = Some(root.to_path_buf());
+    errors
 }
 
 /// One labelled folder row: the current path (or "(not set)") and a Browse
@@ -1837,5 +1944,36 @@ mod tests {
 
         let _ = std::fs::remove_file(&a);
         let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn set_project_folders_creates_and_maps_the_five_subfolders() {
+        // A fresh project root: set_project_folders must create all five named
+        // subfolders and map each to the right field (Data→data_dir, …).
+        let root = std::env::temp_dir().join(format!("xafsview_subbase_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("make project root");
+
+        let mut folders = Folders::default();
+        let errors = set_project_folders(&mut folders, &root);
+        assert!(errors.is_empty(), "no creation errors: {errors:?}");
+
+        assert_eq!(folders.sub_base.as_deref(), Some(root.as_path()));
+        assert_eq!(folders.data_dir, Some(root.join("Data")));
+        assert_eq!(folders.autobk_dir, Some(root.join("Autobk")));
+        assert_eq!(folders.feffit_dir, Some(root.join("Feffit")));
+        assert_eq!(folders.atoms_dir, Some(root.join("Atoms")));
+        assert_eq!(folders.results_dir, Some(root.join("Results")));
+        for name in ["Data", "Autobk", "Feffit", "Atoms", "Results"] {
+            assert!(root.join(name).is_dir(), "{name} subfolder created");
+        }
+
+        // Idempotent: a second call on the same root reuses the folders (no
+        // error) and leaves the mapping unchanged.
+        let again = set_project_folders(&mut folders, &root);
+        assert!(again.is_empty(), "second call has no errors: {again:?}");
+        assert_eq!(folders.data_dir, Some(root.join("Data")));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
