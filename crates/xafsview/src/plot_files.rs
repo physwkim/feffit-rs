@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 
 use feffit::xasdata::ColumnFile;
 
-/// The four file-overlay types of the original's *File type* selector. (The
-/// analysis-mode types — `Normalize`, `*.result`, `res. all`, `*_Dearctan.dat`,
-/// `raw data`, `*.bkg` — are deferred.)
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// The file-overlay types of the original's *File type* selector. (The remaining
+/// analysis-mode / beamline-specific types — `Normalize`, `res. all`,
+/// `*_Dearctan.dat`, `raw data`, the intensity ratios, `*.XRF`, `XRD`, `UV-VIS`,
+/// … — are deferred.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     /// `μ(E)` files: `energy`, `μ`.
     Xmu,
@@ -30,16 +31,20 @@ pub enum FileType {
     Fit,
     /// AUTOBK background: `<stem>e.bkg` (energy, μ₀) and `<stem>k.bkg` (k, μ₀−μ).
     Bkg,
+    /// A saved Plot Data composite (`*.result`): the multi-curve file written by
+    /// "Save in single file", read back as one curve per saved trace.
+    Result,
 }
 
 impl FileType {
     /// All file types, in selector order.
-    pub const ALL: [FileType; 5] = [
+    pub const ALL: [FileType; 6] = [
         FileType::Xmu,
         FileType::Chi,
         FileType::Dat,
         FileType::Fit,
         FileType::Bkg,
+        FileType::Result,
     ];
 
     /// The selector label (the original's glob form).
@@ -50,6 +55,7 @@ impl FileType {
             FileType::Dat => "*.dat",
             FileType::Fit => "*.fit",
             FileType::Bkg => "*.bkg",
+            FileType::Result => "*.result",
         }
     }
 
@@ -61,6 +67,7 @@ impl FileType {
             FileType::Dat => &[GraphItem::DatK, GraphItem::DatR, GraphItem::DatQ],
             FileType::Fit => &[GraphItem::FitK, GraphItem::FitR, GraphItem::FitQ],
             FileType::Bkg => &[GraphItem::BkgE, GraphItem::BkgK],
+            FileType::Result => &[GraphItem::Result],
         }
     }
 
@@ -72,7 +79,7 @@ impl FileType {
 
 /// A graph item under a [`FileType`]: which file-name suffix it selects in the
 /// folder and how the file's columns become a curve.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphItem {
     /// `μ(E)` itself.
     XmuF,
@@ -100,6 +107,9 @@ pub enum GraphItem {
     BkgE,
     /// `<stem>k.bkg`: the AUTOBK background in k, μ₀−μ.
     BkgK,
+    /// A curve from a saved `*.result` composite (axis labels come from the
+    /// file, not from this item).
+    Result,
 }
 
 impl GraphItem {
@@ -119,6 +129,7 @@ impl GraphItem {
             GraphItem::FitQ => "q.fit",
             GraphItem::BkgE => "e.bkg",
             GraphItem::BkgK => "k.bkg",
+            GraphItem::Result => "result",
         }
     }
 
@@ -136,6 +147,7 @@ impl GraphItem {
             GraphItem::FitQ => "q.fit",
             GraphItem::BkgE => "e.bkg",
             GraphItem::BkgK => "k.bkg",
+            GraphItem::Result => ".result",
         }
     }
 
@@ -153,6 +165,8 @@ impl GraphItem {
             GraphItem::DatQ | GraphItem::FitQ => "q (Å⁻¹)",
             GraphItem::BkgE => "Energy (eV)",
             GraphItem::BkgK => "k (Å⁻¹)",
+            // Restored from the saved file by `load_result`; this is the fallback.
+            GraphItem::Result => "x",
         }
     }
 
@@ -167,6 +181,7 @@ impl GraphItem {
             GraphItem::DatQ | GraphItem::FitQ => "|χ(q)|",
             GraphItem::BkgE => "μ₀(E)",
             GraphItem::BkgK => "μ₀−μ",
+            GraphItem::Result => "y",
         }
     }
 
@@ -193,6 +208,9 @@ pub struct LoadedTrace {
     pub label: String,
     /// The graph item this was read as (carries the axis labels).
     pub item: GraphItem,
+    /// Axis labels restored from a `*.result` file, overriding `item`'s labels;
+    /// `None` for ordinary single-item files (which use `item`).
+    pub axis: Option<(String, String)>,
     /// x grid (energy / k / R / q).
     pub x: Vec<f64>,
     /// y curve, with k-weighting / derivative already applied.
@@ -226,9 +244,70 @@ pub fn load_trace(path: &Path, item: GraphItem, kweight: i32) -> Result<LoadedTr
         path: path.to_path_buf(),
         label: name,
         item,
+        axis: None,
         x,
         y,
     })
+}
+
+/// Read a `*.result` composite — the multi-curve file written by Plot Data's
+/// "Save in single file" — into one [`LoadedTrace`] per saved curve. The file's
+/// `# x-axis:` / `# y-axis:` header lines restore the axis labels (shared by
+/// every curve), and each curve's `# curve N: <label>` comment restores its
+/// legend label. Curves are separated by a blank line and carry two numeric
+/// columns; a `# k-weight` etc. is *not* re-applied — the saved values are final.
+pub fn load_result(path: &Path) -> Result<Vec<LoadedTrace>, String> {
+    let name = file_name(path);
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{name}: {e}"))?;
+
+    // Axis labels are written once, in the file header.
+    let header_value = |key: &str| {
+        text.lines().find_map(|l| {
+            l.trim_start()
+                .strip_prefix(key)
+                .map(|v| v.trim().to_owned())
+        })
+    };
+    let axis = match (header_value("# x-axis:"), header_value("# y-axis:")) {
+        (Some(x), Some(y)) => Some((x, y)),
+        _ => None,
+    };
+
+    let mut out: Vec<LoadedTrace> = Vec::new();
+    // Blocks are separated by a blank line; the first block also carries the
+    // file header comments (ignored by the column reader).
+    for block in text.split("\n\n") {
+        if block.trim().is_empty() {
+            continue;
+        }
+        let label = block
+            .lines()
+            .find_map(|l| l.trim_start().strip_prefix("# curve"))
+            .and_then(|rest| rest.split_once(':').map(|(_, lab)| lab.trim().to_owned()))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("{name} [{}]", out.len() + 1));
+
+        // A header-only block (no numeric rows) is skipped, not an error.
+        let Ok(cf) = ColumnFile::from_text(block) else {
+            continue;
+        };
+        let (Some(x), Some(y)) = (cf.column(0), cf.column(1)) else {
+            continue;
+        };
+        out.push(LoadedTrace {
+            path: path.to_path_buf(),
+            label,
+            item: GraphItem::Result,
+            axis: axis.clone(),
+            x: x.to_vec(),
+            y: y.to_vec(),
+        });
+    }
+
+    if out.is_empty() {
+        return Err(format!("{name}: no curves found"));
+    }
+    Ok(out)
 }
 
 /// The bare file name of `path` (for legends and error messages).

@@ -19,7 +19,7 @@ use egui::Color32;
 use feffit::xasdata::{average_curves, peak_in_range, x_at_y};
 use siplot::YAxis;
 
-use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_trace};
+use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_result, load_trace};
 
 /// The "Items" of the Multiple peaks catching window: which feature to locate
 /// in the search range. (The original's derivative-based "Peak @ x" needs the
@@ -696,7 +696,14 @@ impl PlotDataWindow {
         let mut prev = std::mem::take(&mut self.loaded);
         let mut failed = 0usize;
         for path in staged {
-            if let Some(pos) = prev.iter().position(|t| t.path == path) {
+            if item == GraphItem::Result {
+                // A `*.result` expands to many curves sharing one path, so the
+                // reuse-by-path shortcut does not apply — always (re)expand it.
+                match load_result(&path) {
+                    Ok(traces) => self.loaded.extend(traces),
+                    Err(_) => failed += 1,
+                }
+            } else if let Some(pos) = prev.iter().position(|t| t.path == path) {
                 self.loaded.push(prev.remove(pos));
             } else {
                 match load_trace(&path, item, kw) {
@@ -720,18 +727,32 @@ impl PlotDataWindow {
     fn reload_loaded(&mut self) {
         let kw = self.kweight;
         for t in &mut self.loaded {
+            // `*.result` curves carry final saved values (k-weight already baked
+            // in), and one path maps to many curves, so they are not re-read.
+            if t.item == GraphItem::Result {
+                continue;
+            }
             if let Ok(nt) = load_trace(&t.path, t.item, kw) {
                 *t = nt;
             }
         }
     }
 
-    /// The current x/y axis labels — taken from the loaded files' own graph item
-    /// so they track the data even if the picker's selector has since moved to a
-    /// different space; falls back to the selector when nothing is loaded.
-    fn axis_labels(&self) -> (&'static str, &'static str) {
-        let item = self.loaded.first().map_or(self.graph_item, |t| t.item);
-        (item.x_label(), item.y_label())
+    /// The current x/y axis labels — from a loaded `*.result`'s saved labels if
+    /// present, else the loaded files' own graph item (so they track the data
+    /// even if the picker's selector has since moved); falls back to the selector
+    /// when nothing is loaded.
+    fn axis_labels(&self) -> (String, String) {
+        match self.loaded.first() {
+            Some(t) => match &t.axis {
+                Some((x, y)) => (x.clone(), y.clone()),
+                None => (t.item.x_label().to_owned(), t.item.y_label().to_owned()),
+            },
+            None => (
+                self.graph_item.x_label().to_owned(),
+                self.graph_item.y_label().to_owned(),
+            ),
+        }
     }
 
     /// Build the displayed traces from the loaded files — palette colours and
@@ -777,13 +798,14 @@ impl PlotDataWindow {
             return;
         }
         let Some(path) = rfd::FileDialog::new()
-            .set_file_name("plotdata.dat")
+            .add_filter("Plot Data result", &["result"])
+            .set_file_name("plotdata.result")
             .save_file()
         else {
             return;
         };
         let (xlabel, ylabel) = self.axis_labels();
-        self.pick_status = match write_composite(&path, &traces, xlabel, ylabel) {
+        self.pick_status = match write_composite(&path, &traces, &xlabel, &ylabel) {
             Ok(()) => format!(
                 "Saved {} curve(s) to {}.",
                 traces.len(),
@@ -916,12 +938,17 @@ fn write_composite(
     use std::fmt::Write as _;
     let mut s = String::new();
     let _ = writeln!(s, "# XAFSView Plot Data — {} curve(s)", traces.len());
+    // Machine-parseable axis lines so `load_result` can restore the labels (they
+    // are shared by every curve in the composite).
+    let _ = writeln!(s, "# x-axis: {xlabel}");
+    let _ = writeln!(s, "# y-axis: {ylabel}");
     for (i, (label, x, y)) in traces.iter().enumerate() {
+        // A blank line separates curves (but not the first from the header), so
+        // each curve parses back as its own block.
         if i > 0 {
             s.push('\n');
         }
         let _ = writeln!(s, "# curve {}: {label}", i + 1);
-        let _ = writeln!(s, "#  {xlabel:<14}  {ylabel}");
         for (xx, yy) in x.iter().zip(y) {
             let _ = writeln!(s, "{xx:14.6}  {yy:18.10}");
         }
@@ -1024,6 +1051,36 @@ mod tests {
         assert!((got - 2.5).abs() < 1e-9, "got {got}");
         // The same target outside the restricted window is not found.
         assert_eq!(x_at_y_in_range(&x, &y, 2.5, 3.0, 4.0), None);
+    }
+
+    #[test]
+    fn result_round_trips_write_composite_into_one_trace_per_curve() {
+        use crate::plot_files::{GraphItem, load_result};
+
+        let p = std::env::temp_dir().join(format!("xafsview_rt_{}.result", std::process::id()));
+        let traces = vec![
+            ("first".to_owned(), vec![0.0, 1.0, 2.0], vec![1.0, 2.0, 3.0]),
+            ("second".to_owned(), vec![0.0, 0.5], vec![9.0, 8.0]),
+        ];
+        write_composite(&p, &traces, "k (Å⁻¹)", "kʷ·χ(k)").expect("write composite");
+
+        let loaded = load_result(&p).expect("load result");
+        assert_eq!(loaded.len(), 2, "one trace per saved curve");
+        // Labels and data round-trip per curve.
+        assert_eq!(loaded[0].label, "first");
+        assert_eq!(loaded[0].x, vec![0.0, 1.0, 2.0]);
+        assert_eq!(loaded[0].y, vec![1.0, 2.0, 3.0]);
+        assert_eq!(loaded[1].label, "second");
+        assert_eq!(loaded[1].y, vec![9.0, 8.0]);
+        // Both curves are tagged Result and carry the saved axis labels.
+        for t in &loaded {
+            assert_eq!(t.item, GraphItem::Result);
+            assert_eq!(
+                t.axis.as_ref().map(|(x, y)| (x.as_str(), y.as_str())),
+                Some(("k (Å⁻¹)", "kʷ·χ(k)"))
+            );
+        }
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
