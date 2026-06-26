@@ -17,36 +17,52 @@ use feffit::xasdata::{AutobkParams, FtParams, PreEdgeParams, Window};
 /// Which reduction stage to display on the plot.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GraphType {
-    /// Raw `mu(E)` with the AUTOBK background overlaid.
+    /// `XMU + BKG`: raw `mu(E)` with the AUTOBK background overlaid.
     MuBkg,
-    /// Edge-step normalized `mu(E)`.
-    Norm,
-    /// First derivative `d(mu)/dE`.
-    Deriv,
-    /// k-weighted EXAFS `kʷ·χ(k)`.
+    /// `*K.CHI`: k-weighted EXAFS `kʷ·χ(k)`.
     KChi,
-    /// Magnitude of the Fourier transform `|χ(R)|`.
+    /// `*R.CHI`: magnitude of the Fourier transform `|χ(R)|`.
     ChiR,
+    /// `XMU' + XMU''`: first and second derivative of `mu(E)`.
+    MuDeriv,
+    /// `BKG(E)'`: first derivative of the background `μ0(E)`.
+    BkgEDeriv,
+    /// `BKG(k)'`: first derivative of the k-space background (`μ0−μ`) in `k`.
+    BkgKDeriv,
+    /// `XMU' + BKG(E)'`: `mu'(E)` and the background derivative `μ0'(E)` overlaid.
+    MuBkgEDeriv,
+    /// `BKG(E)''`: second derivative of the background `μ0(E)`.
+    BkgEDeriv2,
+    /// `Normalize`: edge-step normalized (flattened) `mu(E)`.
+    Norm,
 }
 
 impl GraphType {
-    /// All graph types in display order.
-    pub const ALL: [GraphType; 5] = [
+    /// All graph types, in the original XAFSView "Graph type" order.
+    pub const ALL: [GraphType; 9] = [
         GraphType::MuBkg,
-        GraphType::Norm,
-        GraphType::Deriv,
         GraphType::KChi,
         GraphType::ChiR,
+        GraphType::MuDeriv,
+        GraphType::BkgEDeriv,
+        GraphType::BkgKDeriv,
+        GraphType::MuBkgEDeriv,
+        GraphType::BkgEDeriv2,
+        GraphType::Norm,
     ];
 
-    /// Short menu label.
+    /// Short menu label (matches the original's "Graph type" radio text).
     pub fn label(self) -> &'static str {
         match self {
             GraphType::MuBkg => "XMU + BKG",
-            GraphType::Norm => "norm",
-            GraphType::Deriv => "deriv",
-            GraphType::KChi => "kʷ·χ(k)",
-            GraphType::ChiR => "χ(R)",
+            GraphType::KChi => "*K.CHI",
+            GraphType::ChiR => "*R.CHI",
+            GraphType::MuDeriv => "XMU' + XMU''",
+            GraphType::BkgEDeriv => "BKG(E)'",
+            GraphType::BkgKDeriv => "BKG(k)'",
+            GraphType::MuBkgEDeriv => "XMU' + BKG(E)'",
+            GraphType::BkgEDeriv2 => "BKG(E)''",
+            GraphType::Norm => "Normalize",
         }
     }
 }
@@ -407,5 +423,37 @@ fn window_name(w: Window) -> &'static str {
         Window::Bes => "Kaiser (bes)",
         Window::Sine => "Sine",
         Window::Gaussian => "Gaussian",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Graph-type selector must mirror the original XAFSView list: the nine
+    /// entries, in order, with the original radio labels — every label distinct
+    /// and non-empty (drives the combo box via `GraphType::ALL`).
+    #[test]
+    fn graph_types_mirror_the_original_nine() {
+        let labels: Vec<&str> = GraphType::ALL.iter().map(|g| g.label()).collect();
+        assert_eq!(
+            labels,
+            [
+                "XMU + BKG",
+                "*K.CHI",
+                "*R.CHI",
+                "XMU' + XMU''",
+                "BKG(E)'",
+                "BKG(k)'",
+                "XMU' + BKG(E)'",
+                "BKG(E)''",
+                "Normalize",
+            ]
+        );
+        assert!(labels.iter().all(|l| !l.is_empty()));
+        let mut uniq = labels.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), labels.len(), "labels must be distinct");
     }
 }

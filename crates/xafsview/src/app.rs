@@ -826,6 +826,10 @@ impl XafsViewApp {
             return;
         };
 
+        // Derivative w.r.t. x the way the engine computes dμ/dE
+        // (`np.gradient(y)/np.gradient(x)`), shared by the derivative graph types.
+        use feffit::xasproc::mathutils::dmude as deriv;
+
         match graph {
             GraphType::MuBkg => {
                 self.plot.set_graph_x_label("Energy (eV)");
@@ -837,27 +841,6 @@ impl XafsViewApp {
                 if let Some(bkg) = &g.bkg {
                     self.plot
                         .add_curve_with_legend(&g.energy, bkg, ORANGE, "background");
-                }
-            }
-            GraphType::Norm => {
-                self.plot.set_graph_x_label("Energy (eV)");
-                self.plot
-                    .set_graph_y_label("normalized μ(E)", siplot::YAxis::Left);
-                // Athena/XAFSView convention: the "normalized" view shows the
-                // *flattened* μ (post-edge curvature removed, lifted to ~1),
-                // not the plain edge-step normalization (which keeps the
-                // post-edge slope). Fall back to `norm` only if flattening is
-                // somehow unavailable — `reduce` always sets them together.
-                if let Some(flat) = g.flat.as_ref().or(g.norm.as_ref()) {
-                    self.plot
-                        .add_curve_with_legend(&g.energy, flat, BLUE, "norm");
-                }
-            }
-            GraphType::Deriv => {
-                self.plot.set_graph_x_label("Energy (eV)");
-                self.plot.set_graph_y_label("d μ / dE", siplot::YAxis::Left);
-                if let Some(d) = &g.dmude {
-                    self.plot.add_curve_with_legend(&g.energy, d, BLUE, "dμ/dE");
                 }
             }
             GraphType::KChi => {
@@ -877,6 +860,88 @@ impl XafsViewApp {
                 self.plot.set_graph_y_label("|χ(R)|", siplot::YAxis::Left);
                 if let (Some(r), Some(mag)) = (&g.r, &g.chir_mag) {
                     self.plot.add_curve_with_legend(r, mag, BLUE, "|χ(R)|");
+                }
+            }
+            GraphType::MuDeriv => {
+                // XMU' + XMU'': first and second derivative of the raw μ(E).
+                // Works on just-loaded data — no AUTOBK needed.
+                self.plot.set_graph_x_label("Energy (eV)");
+                self.plot
+                    .set_graph_y_label("dμ/dE  ·  d²μ/dE²", siplot::YAxis::Left);
+                if !g.energy.is_empty() && !g.mu.is_empty() {
+                    let d1 = deriv(&g.mu, &g.energy);
+                    let d2 = deriv(&d1, &g.energy);
+                    self.plot
+                        .add_curve_with_legend(&g.energy, &d1, BLUE, "XMU'");
+                    self.plot
+                        .add_curve_with_legend(&g.energy, &d2, ORANGE, "XMU''");
+                }
+            }
+            GraphType::BkgEDeriv => {
+                // BKG(E)': first derivative of the background μ0(E).
+                self.plot.set_graph_x_label("Energy (eV)");
+                self.plot
+                    .set_graph_y_label("d(BKG)/dE", siplot::YAxis::Left);
+                if let Some(bkg) = &g.bkg {
+                    let d1 = deriv(bkg, &g.energy);
+                    self.plot
+                        .add_curve_with_legend(&g.energy, &d1, BLUE, "BKG(E)'");
+                }
+            }
+            GraphType::BkgKDeriv => {
+                // BKG(k)': derivative in k of the k-space background. The k-space
+                // background is μ0−μ = −edge_step·χ on the k grid (the `k.bkg`
+                // file's quantity).
+                self.plot.set_graph_x_label("k (Å⁻¹)");
+                self.plot
+                    .set_graph_y_label("d(BKG)/dk", siplot::YAxis::Left);
+                if let (Some(k), Some(chi), Some(step)) = (&g.k, &g.chi, g.edge_step) {
+                    let bkg_k: Vec<f64> = chi.iter().map(|&c| -step * c).collect();
+                    let d1 = deriv(&bkg_k, k);
+                    self.plot.add_curve_with_legend(k, &d1, BLUE, "BKG(k)'");
+                }
+            }
+            GraphType::MuBkgEDeriv => {
+                // XMU' + BKG(E)': raw-μ derivative and background derivative
+                // overlaid (compare where the spline tracks the edge).
+                self.plot.set_graph_x_label("Energy (eV)");
+                self.plot
+                    .set_graph_y_label("dμ/dE  ·  d(BKG)/dE", siplot::YAxis::Left);
+                if !g.energy.is_empty() && !g.mu.is_empty() {
+                    let dmu = deriv(&g.mu, &g.energy);
+                    self.plot
+                        .add_curve_with_legend(&g.energy, &dmu, BLUE, "XMU'");
+                }
+                if let Some(bkg) = &g.bkg {
+                    let dbkg = deriv(bkg, &g.energy);
+                    self.plot
+                        .add_curve_with_legend(&g.energy, &dbkg, ORANGE, "BKG(E)'");
+                }
+            }
+            GraphType::BkgEDeriv2 => {
+                // BKG(E)'': second derivative of the background μ0(E).
+                self.plot.set_graph_x_label("Energy (eV)");
+                self.plot
+                    .set_graph_y_label("d²(BKG)/dE²", siplot::YAxis::Left);
+                if let Some(bkg) = &g.bkg {
+                    let d1 = deriv(bkg, &g.energy);
+                    let d2 = deriv(&d1, &g.energy);
+                    self.plot
+                        .add_curve_with_legend(&g.energy, &d2, BLUE, "BKG(E)''");
+                }
+            }
+            GraphType::Norm => {
+                self.plot.set_graph_x_label("Energy (eV)");
+                self.plot
+                    .set_graph_y_label("normalized μ(E)", siplot::YAxis::Left);
+                // Athena/XAFSView convention: the "normalized" view shows the
+                // *flattened* μ (post-edge curvature removed, lifted to ~1),
+                // not the plain edge-step normalization (which keeps the
+                // post-edge slope). Fall back to `norm` only if flattening is
+                // somehow unavailable — `reduce` always sets them together.
+                if let Some(flat) = g.flat.as_ref().or(g.norm.as_ref()) {
+                    self.plot
+                        .add_curve_with_legend(&g.energy, flat, BLUE, "norm");
                 }
             }
         }
