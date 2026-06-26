@@ -171,10 +171,14 @@ impl Default for ReductionUi {
             clamp_hi: 1.0,
             graph: GraphType::MuBkg,
             pre_norm_auto: true,
+            // Manual-range fallbacks default to the original XAFSView pre-edge /
+            // normalization windows (Pre1/Pre2/Nor1/Nor2 = -200/-50/150/400), so
+            // unchecking "auto" reproduces the XAFSView edge step (~1.1% of the
+            // UWXAFS value on the KSW Mn data) instead of needing a manual retype.
             pre1: -200.0,
-            pre2: -30.0,
-            norm1: 100.0,
-            norm2: 300.0,
+            pre2: -50.0,
+            norm1: 150.0,
+            norm2: 400.0,
             loading: LoadingType::CalcXmu,
             theory: None,
             output_file: String::new(),
