@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use feffit::xasdata::ColumnFile;
+use feffit::xasproc::{PreEdgeParams, pre_edge};
 
 /// The file-overlay types of the original's *File type* selector. (The remaining
 /// analysis-mode / beamline-specific types — `Normalize`, `res. all`,
@@ -62,7 +63,12 @@ impl FileType {
     /// The graph items selectable under this file type, in order.
     pub fn items(self) -> &'static [GraphItem] {
         match self {
-            FileType::Xmu => &[GraphItem::XmuF, GraphItem::XmuD1, GraphItem::XmuD2],
+            FileType::Xmu => &[
+                GraphItem::XmuF,
+                GraphItem::XmuNorm,
+                GraphItem::XmuD1,
+                GraphItem::XmuD2,
+            ],
             FileType::Chi => &[GraphItem::ChiK, GraphItem::ChiR],
             FileType::Dat => &[GraphItem::DatK, GraphItem::DatR, GraphItem::DatQ],
             FileType::Fit => &[GraphItem::FitK, GraphItem::FitR, GraphItem::FitQ],
@@ -83,6 +89,9 @@ impl FileType {
 pub enum GraphItem {
     /// `μ(E)` itself.
     XmuF,
+    /// Edge-step **normalized** `μ(E)` (pre-edge subtracted, divided by the edge
+    /// step) — the original XAFSView "Normalize" view, reproducing `XANES.dat`.
+    XmuNorm,
     /// `dμ/dE`.
     XmuD1,
     /// `d²μ/dE²`.
@@ -117,6 +126,7 @@ impl GraphItem {
     pub fn label(self) -> &'static str {
         match self {
             GraphItem::XmuF => "f",
+            GraphItem::XmuNorm => "norm",
             GraphItem::XmuD1 => "f'",
             GraphItem::XmuD2 => "f''",
             GraphItem::ChiK => "k.chi",
@@ -136,7 +146,7 @@ impl GraphItem {
     /// The file-name suffix this item selects (case-insensitively) in a folder.
     pub fn suffix(self) -> &'static str {
         match self {
-            GraphItem::XmuF | GraphItem::XmuD1 | GraphItem::XmuD2 => ".xmu",
+            GraphItem::XmuF | GraphItem::XmuNorm | GraphItem::XmuD1 | GraphItem::XmuD2 => ".xmu",
             GraphItem::ChiK => "k.chi",
             GraphItem::ChiR => "r.chi",
             GraphItem::DatK => "k.dat",
@@ -159,7 +169,9 @@ impl GraphItem {
     /// The x-axis label for this item's space.
     pub fn x_label(self) -> &'static str {
         match self {
-            GraphItem::XmuF | GraphItem::XmuD1 | GraphItem::XmuD2 => "Energy (eV)",
+            GraphItem::XmuF | GraphItem::XmuNorm | GraphItem::XmuD1 | GraphItem::XmuD2 => {
+                "Energy (eV)"
+            }
             GraphItem::ChiK | GraphItem::DatK | GraphItem::FitK => "k (Å⁻¹)",
             GraphItem::ChiR | GraphItem::DatR | GraphItem::FitR => "R (Å)",
             GraphItem::DatQ | GraphItem::FitQ => "q (Å⁻¹)",
@@ -174,6 +186,7 @@ impl GraphItem {
     pub fn y_label(self) -> &'static str {
         match self {
             GraphItem::XmuF => "μ(E)",
+            GraphItem::XmuNorm => "norm μ(E)",
             GraphItem::XmuD1 => "dμ/dE",
             GraphItem::XmuD2 => "d²μ/dE²",
             GraphItem::ChiK | GraphItem::DatK | GraphItem::FitK => "kʷ·χ(k)",
@@ -230,6 +243,19 @@ pub fn load_trace(path: &Path, item: GraphItem, kweight: i32) -> Result<LoadedTr
     let v = cf
         .column(1)
         .ok_or_else(|| format!("{name}: needs at least two columns"))?;
+    // Normalized μ(E) is not a column transform — it runs the pre-edge / edge-step
+    // normalization (larch auto parameters) to reproduce the original's XANES.dat.
+    if item == GraphItem::XmuNorm {
+        let pe = pre_edge(&x, v, &PreEdgeParams::default());
+        return Ok(LoadedTrace {
+            path: path.to_path_buf(),
+            label: name,
+            item,
+            axis: None,
+            x: pe.energy,
+            y: pe.norm,
+        });
+    }
     let y = match item.deriv_order() {
         1 => derivative(&x, v),
         2 => derivative(&x, &derivative(&x, v)),
@@ -404,6 +430,28 @@ mod tests {
         let t = load_trace(&p, GraphItem::BkgK, 3).expect("load k.bkg");
         assert_eq!(t.x, k);
         assert_eq!(t.y, bkg, "k.bkg plots μ₀−μ as written, ignoring G_kweight");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn xmu_norm_runs_pre_edge_and_flattens_the_step_to_unity() {
+        // A logistic edge at 6539 eV: flat ≈0.1 below, flat ≈1.1 above ⇒ an edge
+        // step of ≈1.0. `norm` is (μ − pre-edge line)/step, so it must sit near 0
+        // well below the edge and near 1 well above it — the XANES.dat curve.
+        let p = tmp("step.xmu");
+        let e: Vec<f64> = (0..201).map(|i| 6400.0 + i as f64 * 2.0).collect();
+        let mu: Vec<f64> = e
+            .iter()
+            .map(|&x| 0.1 + 1.0 / (1.0 + (-(x - 6539.0) / 3.0).exp()))
+            .collect();
+        std::fs::write(&p, chik_string("t", &e, &mu)).expect("write xmu");
+
+        let t = load_trace(&p, GraphItem::XmuNorm, 0).expect("load xmu norm");
+        assert_eq!(t.item, GraphItem::XmuNorm);
+        assert_eq!(t.x.len(), e.len());
+        assert!(t.y[0] < 0.2, "pre-edge norm ≈0, got {}", t.y[0]);
+        let last = *t.y.last().unwrap();
+        assert!((last - 1.0).abs() < 0.2, "post-edge norm ≈1, got {last}");
         let _ = std::fs::remove_file(&p);
     }
 
