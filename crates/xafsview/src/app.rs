@@ -530,15 +530,15 @@ impl XafsViewApp {
             && !g.energy.is_empty()
             && bkg.len() == g.energy.len()
         {
-            std::fs::write(
-                dir.join(format!("{stem}e.bkg")),
+            write_file(
+                &dir.join(format!("{stem}e.bkg")),
                 crate::chi_io::xy_string(&g.label, " energy            bkg", &g.energy, bkg),
             )?;
         }
         if let (Some(k), Some(chi), Some(step)) = (g.k.as_deref(), g.chi.as_deref(), g.edge_step) {
             let bkg_k: Vec<f64> = chi.iter().map(|&c| -step * c).collect();
-            std::fs::write(
-                dir.join(format!("{stem}k.bkg")),
+            write_file(
+                &dir.join(format!("{stem}k.bkg")),
                 crate::chi_io::xy_string(&g.label, " k                 bkg", k, &bkg_k),
             )?;
         }
@@ -564,7 +564,7 @@ impl XafsViewApp {
         let files = plot.output_pairs(stem);
         let n = files.len();
         for (name, content) in files {
-            std::fs::write(dir.join(name), content)?;
+            write_file(&dir.join(name), content)?;
         }
         Ok(n)
     }
@@ -1148,7 +1148,7 @@ impl XafsViewApp {
         let mut written = 0usize;
         let mut failed = 0usize;
         for (name, content) in &files {
-            match std::fs::write(dir.join(name), content) {
+            match write_file(&dir.join(name), content) {
                 Ok(()) => written += 1,
                 Err(_) => failed += 1,
             }
@@ -2262,13 +2262,13 @@ fn write_xmu(
     for (&e, &m) in energy.iter().zip(mu) {
         let _ = writeln!(s, "{e:14.6}  {m:18.10}");
     }
-    std::fs::write(path, s)
+    write_file(path, s)
 }
 
 /// Serialize χ(k) as a two-column UWXAFS-style `.chi` file: `k` (Å⁻¹) and the
 /// unweighted `χ(k)` (k-weighting is applied at plot/FT time, not stored).
 fn write_chik(path: &std::path::Path, label: &str, k: &[f64], chi: &[f64]) -> std::io::Result<()> {
-    std::fs::write(path, crate::chi_io::chik_string(label, k, chi))
+    write_file(path, crate::chi_io::chik_string(label, k, chi))
 }
 
 /// Serialize a complex transform as a four-column file: the `axis` grid (`R` or
@@ -2283,7 +2283,7 @@ fn write_complex4(
     re: &[f64],
     im: &[f64],
 ) -> std::io::Result<()> {
-    std::fs::write(
+    write_file(
         path,
         crate::chi_io::complex4_string(label, axis, x, mag, re, im),
     )
@@ -2300,6 +2300,20 @@ fn write_chir(
     im: &[f64],
 ) -> std::io::Result<()> {
     write_complex4(path, label, "R", r, mag, re, im)
+}
+
+/// Write `content` to `path`, creating the parent directory tree first. The
+/// single write primitive for our output files (`.xmu` / `.chi` / `.bkg` /
+/// `.dat` / `.fit` / Save-Items), so "the destination folder exists" holds by
+/// construction at every writer — a configured-but-missing Feffit / Autobk /
+/// Results folder is created on demand instead of the write failing. The rfd
+/// save-dialog writers stay on `std::fs::write`: the user picked an existing
+/// directory there.
+fn write_file(path: &std::path::Path, content: impl AsRef<[u8]>) -> std::io::Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, content)
 }
 
 /// The file-name portion of a path as an owned string (for status messages).
@@ -2332,6 +2346,26 @@ mod tests {
         assert!((m[2] - 0.42).abs() < 1e-6, "mu {m:?}");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_file_creates_missing_parent_dirs() {
+        // The output writers route through `write_file`; a configured-but-missing
+        // destination folder (e.g. a Feffit folder set in the Folders tab that
+        // doesn't exist yet) must be created on demand rather than failing the
+        // write — the bug behind "Only FT produced no .dat files".
+        let root = std::env::temp_dir().join(format!("xafsview_write_file_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let nested = root.join("Feffit").join("missing").join("out.dat");
+        assert!(
+            !nested.parent().unwrap().exists(),
+            "parent absent before write"
+        );
+
+        write_file(&nested, "k r q\n").expect("create parents and write");
+        assert_eq!(std::fs::read_to_string(&nested).unwrap(), "k r q\n");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
