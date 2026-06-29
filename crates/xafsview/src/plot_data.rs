@@ -848,8 +848,12 @@ impl PlotDataWindow {
             return;
         }
         let mut dlg = rfd::FileDialog::new()
+            // The original's wide-table layout (`XANES.dat` / `k3-EXAFS.dat` /
+            // `RDF.dat`) is the default; `.result` keeps the round-trippable
+            // labelled-block format that `load_result` reads back.
+            .add_filter("Results table (wide)", &["dat"])
             .add_filter("Plot Data result", &["result"])
-            .set_file_name("plotdata.result");
+            .set_file_name("plotdata.dat");
         // Default to the Results folder, like the original XAFSView.
         if let Some(dir) = &self.results_dir {
             dlg = dlg.set_directory(dir);
@@ -858,10 +862,22 @@ impl PlotDataWindow {
             return;
         };
         let (xlabel, ylabel) = self.axis_labels();
-        self.pick_status = match write_composite(&path, &traces, &xlabel, &ylabel) {
+        // `.result` → the labelled-block format; any other extension → the
+        // original wide table.
+        let as_blocks = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("result"));
+        let result = if as_blocks {
+            write_composite(&path, &traces, &xlabel, &ylabel)
+        } else {
+            write_composite_table(&path, &traces, &xlabel)
+        };
+        self.pick_status = match result {
             Ok(()) => format!(
-                "Saved {} curve(s) to {}.",
+                "Saved {} curve(s) ({}) to {}.",
                 traces.len(),
+                if as_blocks { "blocks" } else { "table" },
                 file_name_of(&path)
             ),
             Err(e) => format!("Save failed: {e}"),
@@ -1014,6 +1030,91 @@ fn write_composite(
         let _ = writeln!(s, "# curve {}: {label}", i + 1);
         for (xx, yy) in x.iter().zip(y) {
             let _ = writeln!(s, "{xx:14.6}  {yy:18.10}");
+        }
+    }
+    std::fs::write(path, s)
+}
+
+/// True when every curve shares a bit-identical x grid (same length and same
+/// values). This — not the data type — is what the original uses to pick the
+/// wide-table layout: the FT outputs (`k3-EXAFS`, `RDF`) live on one fixed
+/// uniform grid and collapse to a shared x column, whereas per-scan XANES
+/// energies differ by calibration and stay as separate `(x, y)` pairs.
+fn shared_x_grid(traces: &[(String, Vec<f64>, Vec<f64>)]) -> bool {
+    let mut grids = traces.iter().map(|(_, x, _)| x);
+    match grids.next() {
+        Some(first) => grids.all(|x| x == first),
+        None => false,
+    }
+}
+
+/// Write the displayed curves as the original XAFSView "Save in single file"
+/// **wide table**: TAB-separated columns, a header label row, and `{:.6}` fixed
+/// values, with CRLF line endings — the LabVIEW byte layout of `XANES.dat` /
+/// `k3-EXAFS.dat` / `RDF.dat`.
+///
+/// When every curve shares a bit-identical x grid the table is one shared x
+/// column followed by one y column per curve ([`shared_x_grid`] → `k3-EXAFS` /
+/// `RDF`); otherwise each curve contributes its own `(x, y)` column pair
+/// (`XANES`, whose per-scan energy grids differ). The header row carries a
+/// trailing tab and the data rows do not, matching the original exactly; ragged
+/// columns (unequal lengths in the pairs layout) are padded with empty cells so
+/// the table stays rectangular.
+///
+/// The x-axis header uses our axis-label convention (e.g. `R (Å)`), not the
+/// LabVIEW strings (`R (angstrom)`); the per-curve labels are the file names,
+/// the same role the scan names play in the original.
+fn write_composite_table(
+    path: &std::path::Path,
+    traces: &[(String, Vec<f64>, Vec<f64>)],
+    xlabel: &str,
+) -> std::io::Result<()> {
+    let mut s = String::new();
+
+    let mut push_row = |cells: &[String], trailing_tab: bool| {
+        s.push_str(&cells.join("\t"));
+        if trailing_tab {
+            s.push('\t');
+        }
+        s.push_str("\r\n");
+    };
+
+    if shared_x_grid(traces) {
+        // Header: x-label then one curve label each, with the trailing tab.
+        let mut hdr = vec![xlabel.to_owned()];
+        hdr.extend(traces.iter().map(|(label, ..)| label.clone()));
+        push_row(&hdr, true);
+
+        // Rows: the shared x value then each curve's y at that index.
+        let x = &traces[0].1;
+        for (row, &xx) in x.iter().enumerate() {
+            let mut cells = vec![format!("{xx:.6}")];
+            cells.extend(traces.iter().map(|(_, _, y)| format!("{:.6}", y[row])));
+            push_row(&cells, false);
+        }
+    } else {
+        // Header: an (x-label, curve-label) pair per curve, with the trailing tab.
+        let mut hdr = Vec::with_capacity(traces.len() * 2);
+        for (label, ..) in traces {
+            hdr.push(xlabel.to_owned());
+            hdr.push(label.clone());
+        }
+        push_row(&hdr, true);
+
+        // Rows: each curve's (x, y) side by side; shorter curves pad with blanks.
+        let nrows = traces.iter().map(|(_, x, _)| x.len()).max().unwrap_or(0);
+        for row in 0..nrows {
+            let mut cells = Vec::with_capacity(traces.len() * 2);
+            for (_, x, y) in traces {
+                if row < x.len() {
+                    cells.push(format!("{:.6}", x[row]));
+                    cells.push(format!("{:.6}", y[row]));
+                } else {
+                    cells.push(String::new());
+                    cells.push(String::new());
+                }
+            }
+            push_row(&cells, false);
         }
     }
     std::fs::write(path, s)
@@ -1182,6 +1283,71 @@ mod tests {
         let b1 = ColumnFile::from_text(blocks[1]).expect("second block");
         assert_eq!(b1.column(0).unwrap(), &[0.0, 0.5]);
         assert_eq!(b1.column(1).unwrap(), &[9.0, 8.0]);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn shared_x_grid_is_bit_equality_across_curves() {
+        // Same grid ⇒ shared (k3-EXAFS / RDF); a single differing sample ⇒ pairs
+        // (XANES per-scan calibration). Empty set ⇒ not shared.
+        let same = vec![
+            ("a".to_owned(), vec![0.0, 1.0], vec![1.0, 2.0]),
+            ("b".to_owned(), vec![0.0, 1.0], vec![3.0, 4.0]),
+        ];
+        assert!(shared_x_grid(&same));
+        let diff = vec![
+            ("a".to_owned(), vec![0.0, 1.0], vec![1.0, 2.0]),
+            ("b".to_owned(), vec![0.0, 1.1], vec![3.0, 4.0]),
+        ];
+        assert!(!shared_x_grid(&diff));
+        assert!(!shared_x_grid(&[]));
+    }
+
+    #[test]
+    fn composite_table_shared_x_writes_one_x_column_and_crlf() {
+        let p =
+            std::env::temp_dir().join(format!("xafsview_tbl_shared_{}.dat", std::process::id()));
+        let traces = vec![
+            ("s0".to_owned(), vec![0.05, 0.10], vec![1.0, 2.0]),
+            ("s1".to_owned(), vec![0.05, 0.10], vec![3.0, 4.0]),
+        ];
+        write_composite_table(&p, &traces, "k (Å⁻¹)").expect("write table");
+
+        let text = std::fs::read_to_string(&p).expect("read back");
+        let lines: Vec<&str> = text.split("\r\n").collect();
+        // CRLF endings with a trailing empty element after the last "\r\n".
+        assert_eq!(*lines.last().unwrap(), "", "file ends with CRLF");
+        // Header: x-label then one label per curve, with a trailing tab.
+        assert_eq!(lines[0], "k (Å⁻¹)\ts0\ts1\t");
+        // Rows: shared x column + one y per curve, {:.6}, no trailing tab.
+        assert_eq!(lines[1], "0.050000\t1.000000\t3.000000");
+        assert_eq!(lines[2], "0.100000\t2.000000\t4.000000");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn composite_table_pairs_when_grids_differ() {
+        let p = std::env::temp_dir().join(format!("xafsview_tbl_pairs_{}.dat", std::process::id()));
+        // Different x grids (and different lengths) ⇒ (x, y) pair per curve, with
+        // the shorter curve padded with blank cells so the table stays rectangular.
+        let traces = vec![
+            (
+                "e0".to_owned(),
+                vec![6339.0, 6340.0, 6341.0],
+                vec![-0.0015, 0.0, 1.0],
+            ),
+            ("e1".to_owned(), vec![6339.1, 6340.1], vec![0.5, 0.6]),
+        ];
+        write_composite_table(&p, &traces, "Energy (eV)").expect("write table");
+
+        let text = std::fs::read_to_string(&p).expect("read back");
+        let lines: Vec<&str> = text.split("\r\n").collect();
+        // Header: an (x-label, curve-label) pair per curve, trailing tab.
+        assert_eq!(lines[0], "Energy (eV)\te0\tEnergy (eV)\te1\t");
+        assert_eq!(lines[1], "6339.000000\t-0.001500\t6339.100000\t0.500000");
+        assert_eq!(lines[2], "6340.000000\t0.000000\t6340.100000\t0.600000");
+        // Third row: second curve exhausted ⇒ its two cells are blank.
+        assert_eq!(lines[3], "6341.000000\t1.000000\t\t");
         let _ = std::fs::remove_file(&p);
     }
 }
