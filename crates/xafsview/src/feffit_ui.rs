@@ -674,12 +674,14 @@ impl FeffitPlot {
     /// on-disk writer and the batch `(name, content)` builder so both stay
     /// byte-identical.
     pub fn output_pairs(&self, stem: &str) -> Vec<(String, String)> {
-        use crate::chi_io::{chik_string, complex4_string};
+        use crate::chi_io::{chik_string, complex5_string};
         let (d, m) = (&self.data, &self.model);
         // Data transforms always exist after a successful run, so the three
         // `.dat` files always write. The `.fit` model files are added only
         // when a model was actually fit — one uniform rule (persist exactly
         // the transforms that exist), not a write-all-or-nothing gate.
+        // R-space files name their axis `r`; q-space files name it `k` (the q
+        // transform lives on a k-grid) — matching the reference UWXAFS files.
         let mut pairs = vec![
             (
                 format!("{stem}k.dat"),
@@ -687,11 +689,11 @@ impl FeffitPlot {
             ),
             (
                 format!("{stem}r.dat"),
-                complex4_string(stem, "R", &d.r, &d.chir_mag, &d.chir_re, &d.chir_im),
+                complex5_string(stem, "r", &d.r, &d.chir_mag, &d.chir_re, &d.chir_im),
             ),
             (
                 format!("{stem}q.dat"),
-                complex4_string(stem, "q", &d.q, &d.chiq_mag, &d.chiq_re, &d.chiq_im),
+                complex5_string(stem, "k", &d.q, &d.chiq_mag, &d.chiq_re, &d.chiq_im),
             ),
         ];
         if self.has_model {
@@ -701,11 +703,11 @@ impl FeffitPlot {
             ));
             pairs.push((
                 format!("{stem}r.fit"),
-                complex4_string(stem, "R", &m.r, &m.chir_mag, &m.chir_re, &m.chir_im),
+                complex5_string(stem, "r", &m.r, &m.chir_mag, &m.chir_re, &m.chir_im),
             ));
             pairs.push((
                 format!("{stem}q.fit"),
-                complex4_string(stem, "q", &m.q, &m.chiq_mag, &m.chiq_re, &m.chiq_im),
+                complex5_string(stem, "k", &m.q, &m.chiq_mag, &m.chiq_re, &m.chiq_im),
             ));
         }
         pairs

@@ -2273,13 +2273,14 @@ fn write_chik(path: &std::path::Path, label: &str, k: &[f64], chi: &[f64]) -> st
     write_file(path, crate::chi_io::chik_string(label, k, chi))
 }
 
-/// Serialize a complex transform as a four-column file: the `axis` grid (`R` or
-/// `q`), `|chi|`, `re`, `im`, all on the same grid. The first-column header
-/// names the axis so `r`- and `q`-space files are labelled correctly.
-fn write_complex4(
+/// Serialize a complex transform as a five-column UWXAFS file: the axis grid,
+/// `real`, `imag`, `ampl`, `phase`, all on the same grid. `sym` names the space
+/// (`"r"` for R-space, `"k"` for the q transform's k-grid) so r- and q-space
+/// files are labelled correctly.
+fn write_complex5(
     path: &std::path::Path,
     label: &str,
-    axis: &str,
+    sym: &str,
     x: &[f64],
     mag: &[f64],
     re: &[f64],
@@ -2287,12 +2288,12 @@ fn write_complex4(
 ) -> std::io::Result<()> {
     write_file(
         path,
-        crate::chi_io::complex4_string(label, axis, x, mag, re, im),
+        crate::chi_io::complex5_string(label, sym, x, mag, re, im),
     )
 }
 
-/// Serialize χ(R) as a four-column `.chi` file: `R` (Å), `|χ(R)|`, `Re χ(R)`,
-/// `Im χ(R)`, all on the same `R` grid.
+/// Serialize χ(R) as a five-column `.chi` file: `r` (Å), `real`, `imag`, `ampl`,
+/// `phase`, all on the same `R` grid (`phase = atan2(imag, real)`).
 fn write_chir(
     path: &std::path::Path,
     label: &str,
@@ -2301,7 +2302,7 @@ fn write_chir(
     re: &[f64],
     im: &[f64],
 ) -> std::io::Result<()> {
-    write_complex4(path, label, "R", r, mag, re, im)
+    write_complex5(path, label, "r", r, mag, re, im)
 }
 
 /// Write `content` to `path`, creating the parent directory tree first. The
@@ -2371,7 +2372,7 @@ mod tests {
     }
 
     #[test]
-    fn write_chik_is_two_columns_and_write_chir_is_four() {
+    fn write_chik_is_two_columns_and_write_chir_is_five() {
         let pid = std::process::id();
         let kp = std::env::temp_dir().join(format!("xafsview_chik_{pid}k.chi"));
         let rp = std::env::temp_dir().join(format!("xafsview_chir_{pid}r.chi"));
@@ -2393,9 +2394,14 @@ mod tests {
         assert!((ck.column(1).unwrap()[1] + 0.008).abs() < 1e-6, "χ value");
 
         let cr = ColumnFile::from_path(&rp).expect("read r.chi");
-        assert_eq!(cr.ncols(), 4, "χ(R) file is R + |χ| + re + im");
+        assert_eq!(cr.ncols(), 5, "χ(R) file is r + real + imag + ampl + phase");
         assert_eq!(cr.nrows(), 4);
         assert!((cr.column(0).unwrap()[2] - 0.10).abs() < 1e-3, "R grid");
+        // The amplitude column is index 3 (real=1, imag=2, ampl=3, phase=4).
+        assert!(
+            (cr.column(3).unwrap()[1] - 2.0e-2).abs() < 1e-6,
+            "|χ(R)| is column 3 in the 5-column layout"
+        );
 
         let _ = std::fs::remove_file(&kp);
         let _ = std::fs::remove_file(&rp);

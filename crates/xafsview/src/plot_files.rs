@@ -203,6 +203,22 @@ impl GraphItem {
         matches!(self, GraphItem::ChiK | GraphItem::DatK | GraphItem::FitK)
     }
 
+    /// The 0-based column holding this item's plotted value. The R/q-space
+    /// complex files store `axis, real, imag, ampl, phase`, so their magnitude
+    /// is column 3; every other file type plots column 1 (the value beside the
+    /// x grid). This must track the writer column order in
+    /// [`crate::chi_io::complex5_string`].
+    fn value_col(self) -> usize {
+        match self {
+            GraphItem::ChiR
+            | GraphItem::DatR
+            | GraphItem::DatQ
+            | GraphItem::FitR
+            | GraphItem::FitQ => 3,
+            _ => 1,
+        }
+    }
+
     /// Derivative order of the y column (0/1/2 — only the `*.xmu` items differ).
     fn deriv_order(self) -> u8 {
         match self {
@@ -231,8 +247,9 @@ pub struct LoadedTrace {
 }
 
 /// Read `path` as `item`, applying `kweight` to k-space items. The x grid is
-/// column 0 and the value is column 1; `*.xmu` `f'`/`f''` differentiate the
-/// value against the energy grid.
+/// column 0 and the value is [`GraphItem::value_col`] (column 1 for most files,
+/// column 3 — `ampl` — for the R/q-space complex files); `*.xmu` `f'`/`f''`
+/// differentiate the value against the energy grid.
 pub fn load_trace(path: &Path, item: GraphItem, kweight: i32) -> Result<LoadedTrace, String> {
     let name = file_name(path);
     let cf = ColumnFile::from_path(path).map_err(|e| format!("{name}: {e}"))?;
@@ -240,9 +257,10 @@ pub fn load_trace(path: &Path, item: GraphItem, kweight: i32) -> Result<LoadedTr
         .column(0)
         .ok_or_else(|| format!("{name}: no data columns"))?
         .to_vec();
+    let vcol = item.value_col();
     let v = cf
-        .column(1)
-        .ok_or_else(|| format!("{name}: needs at least two columns"))?;
+        .column(vcol)
+        .ok_or_else(|| format!("{name}: needs at least {} columns", vcol + 1))?;
     // Normalized μ(E) is not a column transform — it runs the pre-edge / edge-step
     // normalization (larch auto parameters) to reproduce the original's XANES.dat.
     if item == GraphItem::XmuNorm {
@@ -366,7 +384,7 @@ fn derivative(x: &[f64], y: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chi_io::{chik_string, complex4_string};
+    use crate::chi_io::{chik_string, complex5_string};
 
     fn tmp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("xafsview_pf_{}_{name}", std::process::id()))
@@ -386,16 +404,18 @@ mod tests {
     fn load_r_dat_reads_magnitude_column() {
         let p = tmp("r.dat");
         let r = [0.0, 0.1, 0.2];
+        // re/im chosen so |χ(R)| = ampl column (index 3) is exactly `mag`.
+        let re = [1.0, 0.0, -3.0];
+        let im = [0.0, 2.0, 0.0];
         let mag = [1.0, 2.0, 3.0];
-        std::fs::write(
-            &p,
-            complex4_string("t", "R", &r, &mag, &[0.0; 3], &[0.0; 3]),
-        )
-        .expect("write r.dat");
+        std::fs::write(&p, complex5_string("t", "r", &r, &mag, &re, &im)).expect("write r.dat");
 
         let t = load_trace(&p, GraphItem::DatR, 2).expect("load r.dat");
         assert_eq!(t.x, r);
-        assert_eq!(t.y, mag, "y is the |χ(R)| column, untouched by k-weight");
+        assert_eq!(
+            t.y, mag,
+            "y is the ampl column (index 3), untouched by k-weight"
+        );
         let _ = std::fs::remove_file(&p);
     }
 
