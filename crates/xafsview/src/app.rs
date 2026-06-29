@@ -85,7 +85,8 @@ pub struct XafsViewApp {
     /// Label of the group the last main-tab Feffit fit was run on, so "Send to
     /// Plot Data" names the fitted group even after the current group changes.
     feffit_fit_group: Option<String>,
-    /// The multi-FEFFIT batch window (one independent fit config per group).
+    /// The Feffit batch panel (right of the Feffit tab): runs the tab's config
+    /// against several checked groups, tabulates and saves the results.
     feffit_batch: FeffitBatch,
     /// The "Make μ(E) from files" staging picker (Plot Data-style two-pane add).
     batch_load: BatchLoadWindow,
@@ -174,7 +175,6 @@ impl XafsViewApp {
         plot.add_curve_with_legend(&x, &y, crate::plot::BLUE, "demo edge");
 
         let plot_data = PlotDataWindow::new(render_state);
-        let feffit_batch = FeffitBatch::new(render_state);
         let lcf = LcfWindow::new(render_state);
         let pca = PcaWindow::new(render_state);
         let xanes = XanesWindow::new(render_state);
@@ -194,7 +194,7 @@ impl XafsViewApp {
             reduction: ReductionUi::default(),
             feffit: FeffitUi::default(),
             feffit_fit_group: None,
-            feffit_batch,
+            feffit_batch: FeffitBatch::default(),
             batch_load: BatchLoadWindow::default(),
             edit_xmu: EditXmuState::default(),
             wavelet: WaveletWindow::default(),
@@ -988,14 +988,18 @@ impl XafsViewApp {
         }
     }
 
-    /// The Feffit tab: fit controls on the left, data-vs-model plot on the right.
+    /// The Feffit tab: fit controls on the left, the batch panel on the right,
+    /// the data-vs-model plot in the centre. The single editor *is* the batch
+    /// configuration — the right panel runs it against several checked groups
+    /// (the former "Feffit batch" window, folded in).
     fn feffit_tab(&mut self, ui: &mut egui::Ui) {
         let mut feffit_action = None;
+        let mut batch_action = None;
         // The original Feffit form's bottom "Exit" button is tab chrome, not part
-        // of the reusable control set the batch window also renders, so it lives
-        // in this wrapper rather than in `FeffitUi::controls`. Hide Log / Load
-        // result don't map to the engine and are omitted per the functional-only
-        // field rule; "Send to plot data" opens the group's Plot Data overlay.
+        // of the reusable control set, so it lives in this wrapper rather than in
+        // `FeffitUi::controls`. Hide Log / Load result don't map to the engine
+        // and are omitted per the functional-only field rule; "Send to plot
+        // data" opens the group's Plot Data overlay.
         let mut exit = false;
         egui::Panel::left("feffit_controls")
             .resizable(true)
@@ -1008,6 +1012,16 @@ impl XafsViewApp {
                     if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
                         exit = true;
                     }
+                });
+            });
+        egui::Panel::right("feffit_batch_panel")
+            .resizable(true)
+            .default_size(320.0)
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    batch_action = self
+                        .feffit_batch
+                        .panel(ui, &self.session.groups, &self.feffit);
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -1025,6 +1039,11 @@ impl XafsViewApp {
             Some(FeffitAction::SaveResult) => self.save_feffit_result(),
             Some(FeffitAction::LoadResult) => self.load_feffit_result(),
             Some(FeffitAction::LoadInp) => self.load_feffit_inp(),
+            None => {}
+        }
+        match batch_action {
+            Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
+            Some(BatchAction::SaveFeffitOutputs(files)) => self.write_saved_items(files),
             None => {}
         }
     }
@@ -1101,34 +1120,6 @@ impl XafsViewApp {
         }
         if added > 0 {
             self.status = format!("Added {added} Feff path(s).");
-        }
-    }
-
-    /// Open a dialog and add the chosen Feff path file(s) to one batch config.
-    fn add_feff_path_to_batch(&mut self, idx: usize) {
-        let mut dlg = rfd::FileDialog::new();
-        if let Some(dir) = &self.session.folders.atoms_dir {
-            dlg = dlg.set_directory(dir);
-        }
-        let Some(paths) = dlg.pick_files() else {
-            return;
-        };
-        let mut added = 0usize;
-        for path in paths {
-            match feffit::feffdat::FeffPath::from_path(&path) {
-                Ok(fp) => {
-                    let label = path
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "path".to_owned());
-                    self.feffit_batch.add_path_to(idx, label, fp);
-                    added += 1;
-                }
-                Err(e) => self.status = format!("Path load failed: {e}"),
-            }
-        }
-        if added > 0 {
-            self.status = format!("Added {added} Feff path(s) to batch group.");
         }
     }
 
@@ -1736,10 +1727,10 @@ impl XafsViewApp {
             // promoted to its own top-level menu-bar button below.
             let mut run_multi_autobk = false;
             let mut make_xmu_files = false;
-            let mut open_feffit_batch = false;
             ui.menu_button("Multiple_data", |ui| {
                 // Workflow order: build μ(E) for the files first, then reduce
-                // every loaded group.
+                // every loaded group. (Batch FEFFIT moved into the Feffit tab's
+                // right-hand panel.)
                 if ui.button("Make μ(E) from files…").clicked() {
                     make_xmu_files = true;
                     ui.close();
@@ -1748,15 +1739,7 @@ impl XafsViewApp {
                     run_multi_autobk = true;
                     ui.close();
                 }
-                ui.separator();
-                if ui.button("Feffit batch (per-group)…").clicked() {
-                    open_feffit_batch = true;
-                    ui.close();
-                }
             });
-            if open_feffit_batch {
-                self.feffit_batch.open = true;
-            }
             if run_multi_autobk {
                 self.run_multi_autobk();
             }
@@ -2119,19 +2102,6 @@ impl eframe::App for XafsViewApp {
             self.session.folders.results_dir.as_deref(),
             self.session.folders.data_dir.as_deref(),
         );
-
-        // The multi-FEFFIT batch window: each group has its own fit config seeded
-        // from the Feffit tab (the template). The add-path dialog and Save Items
-        // file writes bubble up for the app to service.
-        match self
-            .feffit_batch
-            .show(ui.ctx(), &self.session.groups, &self.feffit)
-        {
-            Some(BatchAction::AddPath(idx)) => self.add_feff_path_to_batch(idx),
-            Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
-            Some(BatchAction::SaveFeffitOutputs(files)) => self.write_saved_items(files),
-            None => {}
-        }
 
         // The "Make μ(E) from files" staging picker: OK builds a group per
         // staged file using the active import's column mapping + header-skip.
