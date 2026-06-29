@@ -23,31 +23,32 @@ use crate::xanes_ui::XanesWindow;
 /// Phase 0 and are filled in by their respective phases.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
+    /// Working-directory configuration — the entry point of the analysis flow.
+    Folders,
     /// Pre-edge / normalize / AUTOBK background removal (P1–P2).
     Autobk,
-    /// FEFFIT path fitting (P4).
-    Feffit,
-    /// FEFFIT text/parameter view (P4).
-    FeffitTxt,
     /// Crystal → feff.inp (P9).
     Atoms,
     /// Edit feff.inp / run FEFF (P9).
     Feff,
-    /// Working-directory configuration (this phase).
-    Folders,
+    /// FEFFIT path fitting (P4) — needs the FEFF paths built above it.
+    Feffit,
+    /// FEFFIT text/parameter view (P4).
+    FeffitTxt,
     /// Program/version information (mirrors XAFSView's About tab).
     About,
 }
 
 impl Tab {
-    /// All tabs in strip order.
+    /// All tabs in strip order — the EXAFS analysis flow, left to right:
+    /// set up folders → reduce data → build the structure → run FEFF → fit.
     const ALL: [Tab; 7] = [
+        Tab::Folders,
         Tab::Autobk,
-        Tab::Feffit,
-        Tab::FeffitTxt,
         Tab::Atoms,
         Tab::Feff,
-        Tab::Folders,
+        Tab::Feffit,
+        Tab::FeffitTxt,
         Tab::About,
     ];
 
@@ -179,7 +180,9 @@ impl XafsViewApp {
 
         Self {
             session: Session::new(),
-            tab: Tab::Autobk,
+            // Open on Folders — the flow entry point where the working
+            // directories are set before any data is loaded.
+            tab: Tab::Folders,
             plot,
             import: None,
             reduction: ReductionUi::default(),
@@ -203,7 +206,7 @@ impl XafsViewApp {
             plot_sites,
             feff_inp: String::new(),
             clean_undo: Vec::new(),
-            last_tab: Tab::Autobk,
+            last_tab: Tab::Folders,
             status: "Ready.".to_owned(),
             ui_scale: DEFAULT_UI_SCALE,
         }
@@ -1620,6 +1623,19 @@ impl XafsViewApp {
                 // so leave the picker unfiltered.
                 self.open_file(false);
             }
+            // Flow order: single-file cleaning (Smoothing) before the multi-file
+            // batch operations (Multiple_data).
+            let mut edit_clicked = false;
+            ui.menu_button("Smoothing", |ui| {
+                if ui.button("Edit μ(E) (deglitch / trim / smooth)…").clicked() {
+                    edit_clicked = true;
+                    ui.close();
+                }
+            });
+            if edit_clicked {
+                self.tab = Tab::Autobk;
+                self.open_edit_xmu();
+            }
             let mut open_plot_data = false;
             let mut run_multi_autobk = false;
             let mut make_xmu_files = false;
@@ -1660,38 +1676,27 @@ impl XafsViewApp {
                 self.tab = Tab::Autobk;
                 self.make_xmu_from_files();
             }
-            let mut edit_clicked = false;
-            ui.menu_button("Smoothing", |ui| {
-                if ui.button("Edit μ(E) (deglitch / trim / smooth)…").clicked() {
-                    edit_clicked = true;
-                    ui.close();
-                }
-            });
-            if edit_clicked {
-                self.tab = Tab::Autobk;
-                self.open_edit_xmu();
-            }
             ui.menu_button("Periodic table", |ui| {
                 if ui.button("Periodic table + atom data…").clicked() {
                     self.periodic.open = true;
                     ui.close();
                 }
             });
+            // Grouped by analysis stage, following the data flow: experiment /
+            // sample prep → XANES (energy) → EXAFS (k/R) → multi-spectrum →
+            // structure.
             ui.menu_button("Tools", |ui| {
-                if ui.button("Wavelet transform |W(k,R)|…").clicked() {
-                    self.wavelet.open = true;
+                // Experiment & sample preparation.
+                if ui.button("Ion chamber / gas absorption…").clicked() {
+                    self.ion_chamber.open = true;
+                    ui.close();
+                }
+                if ui.button("Powder weight…").clicked() {
+                    self.powder.open = true;
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("LCF (linear combination)…").clicked() {
-                    self.lcf.open = true;
-                    ui.close();
-                }
-                if ui.button("PCA (principal components)…").clicked() {
-                    self.pca.open = true;
-                    ui.close();
-                }
-                ui.separator();
+                // XANES (energy-domain) analysis.
                 if ui
                     .button("XANES tools (peak / cursors / arctan)…")
                     .clicked()
@@ -1704,16 +1709,23 @@ impl XafsViewApp {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Ion chamber / gas absorption…").clicked() {
-                    self.ion_chamber.open = true;
-                    ui.close();
-                }
-                if ui.button("Powder weight…").clicked() {
-                    self.powder.open = true;
+                // EXAFS (k / R-domain) analysis.
+                if ui.button("Wavelet transform |W(k,R)|…").clicked() {
+                    self.wavelet.open = true;
                     ui.close();
                 }
                 if ui.button("k ↔ E conversion…").clicked() {
                     self.ke_convert.open = true;
+                    ui.close();
+                }
+                ui.separator();
+                // Multi-spectrum / time-series analysis.
+                if ui.button("LCF (linear combination)…").clicked() {
+                    self.lcf.open = true;
+                    ui.close();
+                }
+                if ui.button("PCA (principal components)…").clicked() {
+                    self.pca.open = true;
                     ui.close();
                 }
                 if ui
@@ -1724,6 +1736,7 @@ impl XafsViewApp {
                     ui.close();
                 }
                 ui.separator();
+                // Structure visualization.
                 if ui.button("Plot Sites (3D cluster)…").clicked() {
                     self.plot_sites.open = true;
                     ui.close();
@@ -1918,8 +1931,8 @@ impl eframe::App for XafsViewApp {
             self.menu_bar(ui);
         });
 
-        // Horizontal tab strip directly under the menu bar, mirroring XAFSView's
-        // top tab row (Autobk … About) rather than a vertical side list.
+        // Horizontal tab strip directly under the menu bar, in analysis-flow
+        // order (Folders … About) rather than a vertical side list.
         egui::Panel::top("tabs").show_inside(ui, |ui| {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
