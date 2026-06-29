@@ -28,28 +28,31 @@ enum Tab {
     Folders,
     /// Pre-edge / normalize / AUTOBK background removal (P1–P2).
     Autobk,
-    /// Crystal → feff.inp (P9).
-    Atoms,
-    /// Edit feff.inp / run FEFF (P9).
-    Feff,
-    /// FEFFIT path fitting (P4) — needs the FEFF paths built above it.
+    /// FEFFIT path fitting (P4) — kept next to Autobk because reduce→fit is the
+    /// every-session path; the structure-building tabs that feed it (Atoms/Feff)
+    /// run less often and sit after it.
     Feffit,
     /// FEFFIT text/parameter view (P4).
     FeffitTxt,
+    /// Crystal → feff.inp (P9) — only when FEFF paths must be (re)generated.
+    Atoms,
+    /// Edit feff.inp / run FEFF (P9) — only when FEFF paths must be (re)generated.
+    Feff,
     /// Program/version information (mirrors XAFSView's About tab).
     About,
 }
 
 impl Tab {
     /// All tabs in strip order — the EXAFS analysis flow, left to right:
-    /// set up folders → reduce data → build the structure → run FEFF → fit.
+    /// set up folders → reduce data → fit; the structure-building tabs
+    /// (Atoms/Feff), used only when FEFF paths must be regenerated, follow the fit.
     const ALL: [Tab; 7] = [
         Tab::Folders,
         Tab::Autobk,
-        Tab::Atoms,
-        Tab::Feff,
         Tab::Feffit,
         Tab::FeffitTxt,
+        Tab::Atoms,
+        Tab::Feff,
         Tab::About,
     ];
 
