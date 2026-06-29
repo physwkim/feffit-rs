@@ -605,6 +605,9 @@ impl XafsViewApp {
                 "Open one file and choose its columns first, then batch the rest.".to_owned();
             return;
         };
+        // Apply the chooser's header-skip override to every batch file (None =
+        // each file auto-detects its own header).
+        let skip = self.import.as_ref().and_then(|i| i.header_skip);
         // Batch make-μ takes raw scan files; hide the .xmu / .chi outputs we
         // write back into the same folder (see add_scan_filter).
         let mut dlg = Self::add_scan_filter(rfd::FileDialog::new());
@@ -618,7 +621,7 @@ impl XafsViewApp {
         let mut files = Vec::with_capacity(paths.len());
         let mut read_errors = 0usize;
         for path in paths {
-            match feffit::xasdata::ColumnFile::from_path(&path) {
+            match feffit::xasdata::ColumnFile::from_path_skip(&path, skip) {
                 Ok(cf) => files.push(cf),
                 Err(_) => read_errors += 1,
             }

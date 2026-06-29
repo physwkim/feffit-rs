@@ -50,6 +50,11 @@ pub struct ImportState {
     /// "Output file numbering": when batching several files into μ(E), append a
     /// sequential number to each written `.xmu` so the outputs stay distinct.
     pub number_outputs: bool,
+    /// Forced header-line count, overriding the reader's auto-detection.
+    /// `None` = auto-detect (per file, so a batch with varying header counts is
+    /// handled); `Some(n)` = treat the first `n` lines as header for this file
+    /// *and* every batch file, the escape hatch for mis-detected headers.
+    pub header_skip: Option<usize>,
 }
 
 impl ImportState {
@@ -81,7 +86,27 @@ impl ImportState {
             mu_col: roles.mu.unwrap_or(0),
             channels,
             number_outputs: false,
+            header_skip: None,
             file,
+        }
+    }
+
+    /// Re-read the source file with the current [`header_skip`](Self::header_skip),
+    /// keeping the user's column-role picks (clamped to the new column count).
+    /// A no-op when the file was not read from a path.
+    fn reread_with_skip(&mut self) {
+        let Some(path) = self.file.path.clone() else {
+            return;
+        };
+        if let Ok(cf) = ColumnFile::from_path_skip(&path, self.header_skip) {
+            let last = cf.ncols().saturating_sub(1);
+            self.file = cf;
+            self.energy = self.energy.min(last);
+            self.i0 = self.i0.min(last);
+            self.it = self.it.min(last);
+            self.iref = self.iref.min(last);
+            self.mu_col = self.mu_col.min(last);
+            self.channels.resize(self.file.ncols().max(1), false);
         }
     }
 
@@ -122,11 +147,44 @@ impl ImportState {
         if let Some(p) = self.file.path.as_ref() {
             ui.label(format!("File: {}", p.display()));
         }
-        // The original "Change reading format" readout: header-line count and
-        // data-point count, the two numbers XAFSView shows for the loaded file.
+        // The original "Change reading format" readout, with the header-line
+        // count made editable: the reader auto-detects the header (everything
+        // before the first all-numeric line), but a numeric header line can fool
+        // it, so let the user force the skip. Editing forces that count and
+        // re-reads; "auto" returns to detection (the only mode that copes with a
+        // batch whose files have differing header counts).
+        let auto = self.file.header.len();
+        let mut reread = false;
+        ui.horizontal(|ui| {
+            ui.label("Header lines:");
+            let mut n = self.header_skip.unwrap_or(auto);
+            let max = self.file.header.len() + self.file.nrows();
+            if ui
+                .add(egui::DragValue::new(&mut n).range(0..=max))
+                .on_hover_text("Lines to treat as header (skip) before the data")
+                .changed()
+            {
+                self.header_skip = Some(n);
+                reread = true;
+            }
+            match self.header_skip {
+                Some(_) => {
+                    ui.weak(format!("(auto: {auto})"));
+                    if ui.small_button("auto").on_hover_text("Re-detect").clicked() {
+                        self.header_skip = None;
+                        reread = true;
+                    }
+                }
+                None => {
+                    ui.weak("(auto)");
+                }
+            }
+        });
+        if reread {
+            self.reread_with_skip();
+        }
         ui.weak(format!(
-            "{} header lines · {} columns × {} data points",
-            self.file.header.len(),
+            "{} columns × {} data points",
             self.file.ncols(),
             self.file.nrows()
         ));

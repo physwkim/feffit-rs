@@ -61,29 +61,48 @@ impl From<std::io::Error> for ReadError {
 }
 
 impl ColumnFile {
-    /// Read and parse a column file from disk.
+    /// Read and parse a column file from disk (header auto-detected).
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ReadError> {
+        Self::from_path_skip(path, None)
+    }
+
+    /// Read and parse a column file from disk, optionally forcing the first
+    /// `skip` lines to be the header (see [`Self::from_text_skip`]).
+    pub fn from_path_skip(path: impl AsRef<Path>, skip: Option<usize>) -> Result<Self, ReadError> {
         let path = path.as_ref();
         // Decode leniently: raw files from Korean beamlines carry CP949/EUC-KR
         // header text that a strict UTF-8 read would reject, failing the whole
         // load even though the numeric data is ASCII.
         let text = crate::textio::read_to_string_lenient(path)?;
-        let mut cf = Self::from_text(&text)?;
+        let mut cf = Self::from_text_skip(&text, skip)?;
         cf.path = Some(path.to_path_buf());
         Ok(cf)
     }
 
-    /// Parse a column file from an in-memory string.
+    /// Parse a column file from an in-memory string (header auto-detected).
     pub fn from_text(text: &str) -> Result<Self, ReadError> {
+        Self::from_text_skip(text, None)
+    }
+
+    /// Parse a column file, optionally **forcing** the header to be the first
+    /// `skip` lines instead of auto-detecting it. With `None` the header is
+    /// everything before the first all-numeric line (the default). With
+    /// `Some(n)` the data scan begins at line `n`, so the first `n` lines are
+    /// the header regardless of their content — the escape hatch for files
+    /// where a header line is itself numeric (auto-detection would otherwise
+    /// start the data block too early). `n` is clamped to the line count.
+    pub fn from_text_skip(text: &str, skip: Option<usize>) -> Result<Self, ReadError> {
         let lines: Vec<&str> = text.lines().collect();
+        let start = skip.map_or(0, |n| n.min(lines.len()));
 
         // First pass: find the contiguous data block. A line is "data" when it
         // is non-empty and every token parses as a float. The block runs from
-        // the first such line to the last consecutive such line (a non-float
-        // line afterwards is a footer and ends the block).
+        // the first such line (at or after the forced `start`) to the last
+        // consecutive such line (a non-float line afterwards is a footer and
+        // ends the block).
         let mut first_data: Option<usize> = None;
         let mut rows: Vec<Vec<f64>> = Vec::new();
-        for (i, line) in lines.iter().enumerate() {
+        for (i, line) in lines.iter().enumerate().skip(start) {
             match parse_floats(line) {
                 Some(vals) if !vals.is_empty() => {
                     if first_data.is_none() {
@@ -301,6 +320,32 @@ mod tests {
         assert_eq!(cf.labels, vec!["energy", "i0", "it"]);
         assert_eq!(cf.column(0), Some([100.0, 200.0].as_slice()));
         assert_eq!(cf.label_index("I0"), Some(1));
+    }
+
+    #[test]
+    fn forced_header_skip_overrides_a_numeric_header_line() {
+        // A header line that is itself all-numeric (e.g. a scan-parameter dump)
+        // fools auto-detection into starting the data block there.
+        let text = "# scan params\n100 200\nenergy mu\n1.0 0.1\n2.0 0.2\n3.0 0.3\n";
+
+        // Auto: "100 200" parses as floats, so it is taken as the first data row
+        // and the block ends at the non-numeric "energy mu" footer.
+        let auto = ColumnFile::from_text(text).unwrap();
+        assert_eq!(auto.nrows(), 1);
+        assert_eq!(auto.column(0).unwrap()[0], 100.0);
+
+        // Forcing 3 header lines skips past "100 200" and the "energy mu" label
+        // line; the data block is the three real rows, labelled from the header.
+        let forced = ColumnFile::from_text_skip(text, Some(3)).unwrap();
+        assert_eq!(forced.nrows(), 3);
+        assert_eq!(forced.column(0).unwrap(), &[1.0, 2.0, 3.0]);
+        assert_eq!(forced.labels, vec!["energy", "mu"]);
+
+        // A skip past the end clamps and finds no data rather than panicking.
+        assert!(matches!(
+            ColumnFile::from_text_skip(text, Some(999)),
+            Err(ReadError::NoData)
+        ));
     }
 
     #[test]
