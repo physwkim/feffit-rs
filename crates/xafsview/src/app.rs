@@ -1636,16 +1636,13 @@ impl XafsViewApp {
                 self.tab = Tab::Autobk;
                 self.open_edit_xmu();
             }
-            let mut open_plot_data = false;
+            // Multiple_data holds the batch *processing* actions only; Plot Data
+            // (a cross-stage viewer, kept open simultaneously in the original) is
+            // promoted to its own top-level menu-bar button below.
             let mut run_multi_autobk = false;
             let mut make_xmu_files = false;
             let mut open_feffit_batch = false;
             ui.menu_button("Multiple_data", |ui| {
-                if ui.button("Plot Data…").clicked() {
-                    open_plot_data = true;
-                    ui.close();
-                }
-                ui.separator();
                 // Workflow order: build μ(E) for the files first, then reduce
                 // every loaded group.
                 if ui.button("Make μ(E) from files…").clicked() {
@@ -1664,10 +1661,6 @@ impl XafsViewApp {
             });
             if open_feffit_batch {
                 self.feffit_batch.open = true;
-            }
-            if open_plot_data {
-                self.plot_data.open = true;
-                self.plot_data.mark_dirty();
             }
             if run_multi_autobk {
                 self.run_multi_autobk();
@@ -1770,6 +1763,14 @@ impl XafsViewApp {
                     });
                 }
             });
+            // Plot Data is a co-primary viewer, not a dropdown action: a flat
+            // top-level button opens it directly (no submenu), set apart from the
+            // menus by a separator.
+            ui.separator();
+            if ui.button("Plot Data").clicked() {
+                self.plot_data.open = true;
+                self.plot_data.mark_dirty();
+            }
         });
     }
 
