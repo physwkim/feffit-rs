@@ -7,6 +7,7 @@ use feffit::xasdata::{ColumnFile, Folders, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
 use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindow};
+use crate::batch_load::{BatchLoadAction, BatchLoadWindow};
 use crate::calc_ui::{IonChamberWindow, KeConvertWindow, PeriodicTableWindow, PowderWindow};
 use crate::clean_ui::{CleanAction, EditXmuState};
 use crate::feffit_batch::{BatchAction, FeffitBatch};
@@ -83,6 +84,8 @@ pub struct XafsViewApp {
     feffit_fit_group: Option<String>,
     /// The multi-FEFFIT batch window (one independent fit config per group).
     feffit_batch: FeffitBatch,
+    /// The "Make μ(E) from files" staging picker (Plot Data-style two-pane add).
+    batch_load: BatchLoadWindow,
     /// The Edit-μ(E) window (deglitch / trim / smooth) state.
     edit_xmu: EditXmuState,
     /// The Morlet wavelet-transform window (|W(k,R)| heatmap of χ(k)).
@@ -189,6 +192,7 @@ impl XafsViewApp {
             feffit: FeffitUi::default(),
             feffit_fit_group: None,
             feffit_batch,
+            batch_load: BatchLoadWindow::default(),
             edit_xmu: EditXmuState::default(),
             wavelet: WaveletWindow::default(),
             plot_data,
@@ -597,9 +601,24 @@ impl XafsViewApp {
         self.replot_graph();
     }
 
-    /// Pick several files of the same column layout and build a μ(E) group from
-    /// each using the active import's column mapping (XAFSView batch make-xmu).
+    /// Open the "Make μ(E) from files" staging picker (Plot Data-style two-pane
+    /// add/remove), so several raw scan files can be chosen — and a wrong pick
+    /// moved back out — before the groups are built on OK. Requires an open
+    /// import so the column mapping is known; OK routes to [`build_xmu_from_paths`].
     fn make_xmu_from_files(&mut self) {
+        if self.import.is_none() {
+            self.status =
+                "Open one file and choose its columns first, then batch the rest.".to_owned();
+            return;
+        }
+        self.batch_load
+            .open_on(self.session.folders.data_dir.clone());
+    }
+
+    /// Build a μ(E) group from each path using the active import's column
+    /// mapping and header-skip, add them to the session, and write each `.xmu`.
+    /// The staging picker's OK routes here.
+    fn build_xmu_from_paths(&mut self, paths: Vec<std::path::PathBuf>) {
         let Some(spec) = self.import.as_ref().map(|i| i.to_spec()) else {
             self.status =
                 "Open one file and choose its columns first, then batch the rest.".to_owned();
@@ -608,15 +627,6 @@ impl XafsViewApp {
         // Apply the chooser's header-skip override to every batch file (None =
         // each file auto-detects its own header).
         let skip = self.import.as_ref().and_then(|i| i.header_skip);
-        // Batch make-μ takes raw scan files; hide the .xmu / .chi outputs we
-        // write back into the same folder (see add_scan_filter).
-        let mut dlg = Self::add_scan_filter(rfd::FileDialog::new());
-        if let Some(dir) = &self.session.folders.data_dir {
-            dlg = dlg.set_directory(dir);
-        }
-        let Some(paths) = dlg.pick_files() else {
-            return;
-        };
 
         let mut files = Vec::with_capacity(paths.len());
         let mut read_errors = 0usize;
@@ -1402,11 +1412,21 @@ impl XafsViewApp {
     fn loaded_data_list(&mut self, ui: &mut egui::Ui) -> bool {
         let n = self.session.groups.len();
         let mut changed = false;
+        let mut add_clicked = false;
         egui::CollapsingHeader::new(format!("Loaded data ({n})"))
             .default_open(true)
             .show(ui, |ui| {
+                // ADD opens the Plot Data-style staging picker (needs an open
+                // import for the column mapping); same affordance as Plot Data.
+                if ui
+                    .button("Add data files…")
+                    .on_hover_text("Stage several raw scan files, then build μ(E) for each")
+                    .clicked()
+                {
+                    add_clicked = true;
+                }
                 if n == 0 {
-                    ui.weak("No data — open a file or use Make μ(E) from files.");
+                    ui.weak("No data — open a file, then Add data files.");
                     return;
                 }
                 let current = self.session.current;
@@ -1450,6 +1470,9 @@ impl XafsViewApp {
                     changed = true;
                 }
             });
+        if add_clicked {
+            self.make_xmu_from_files();
+        }
         changed
     }
 
@@ -2105,6 +2128,12 @@ impl eframe::App for XafsViewApp {
             Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
             Some(BatchAction::SaveFeffitOutputs(files)) => self.write_saved_items(files),
             None => {}
+        }
+
+        // The "Make μ(E) from files" staging picker: OK builds a group per
+        // staged file using the active import's column mapping + header-skip.
+        if let Some(BatchLoadAction::Load(paths)) = self.batch_load.ui(ui.ctx()) {
+            self.build_xmu_from_paths(paths);
         }
 
         // The LCF and PCA windows each overlay several groups onto one common

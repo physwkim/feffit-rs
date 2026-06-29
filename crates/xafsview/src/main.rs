@@ -8,6 +8,7 @@
 mod analysis_ui;
 mod app;
 mod atoms_ui;
+mod batch_load;
 mod calc_ui;
 mod chi_io;
 mod clean_ui;

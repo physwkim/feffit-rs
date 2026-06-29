@@ -20,6 +20,7 @@ use feffit::xasdata::{average_curves, peak_in_range, x_at_y};
 use siplot::YAxis;
 
 use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_result, load_trace};
+use crate::widgets::{file_name_of, select_list};
 
 /// The "Items" of the Multiple peaks catching window: which feature to locate
 /// in the search range. (The original's derivative-based "Peak @ x" needs the
@@ -971,40 +972,6 @@ impl PlotDataWindow {
 /// and the clicked row — the standard "click one, shift-click another, select
 /// everything between" behaviour — without moving the anchor, so successive
 /// shift-clicks all extend from the same origin.
-fn select_list(
-    ui: &mut egui::Ui,
-    list: &[PathBuf],
-    hi: &mut HashSet<PathBuf>,
-    anchor: &mut Option<usize>,
-) {
-    let shift = ui.input(|i| i.modifiers.shift);
-    for (idx, path) in list.iter().enumerate() {
-        let selected = hi.contains(path);
-        if ui.selectable_label(selected, file_name_of(path)).clicked() {
-            match (shift, *anchor) {
-                (true, Some(a)) => {
-                    for p in &list[a.min(idx)..=a.max(idx)] {
-                        hi.insert(p.clone());
-                    }
-                }
-                _ => {
-                    if !hi.remove(path) {
-                        hi.insert(path.clone());
-                    }
-                    *anchor = Some(idx);
-                }
-            }
-        }
-    }
-}
-
-/// The bare file name of `path`, for picker lists and legends.
-fn file_name_of(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
-
 /// Write the displayed curves to one file as labelled two-column (`x  y`)
 /// blocks separated by a blank line, so each block parses independently even
 /// when the curves are on different x grids.

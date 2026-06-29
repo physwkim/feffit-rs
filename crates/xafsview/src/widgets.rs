@@ -4,6 +4,9 @@
 //! *Exit* is reddish — the colour/size language visible in 그림 1-2-1-1 (Autobk),
 //! 그림 1-2-2-2 (Feffit), 그림 1-2-4 (Atoms), 그림 1-2-5 (Feff), 그림 1-2-6 (Folders).
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use eframe::egui::{self, Color32, Response, Vec2};
 
 /// Uniform button size for a bottom action row (Feffit / Feff / Atoms forms).
@@ -40,6 +43,45 @@ pub fn primary(ui: &mut egui::Ui, text: &str, size: Vec2, enabled: bool) -> Resp
 /// The reddish "Exit" button.
 pub fn exit(ui: &mut egui::Ui, size: Vec2) -> Response {
     ui.add(egui::Button::new("Exit").fill(EXIT_FILL).min_size(size))
+}
+
+/// The bare file name of `path`, for picker lists and legends.
+pub fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Render `list` as a multi-select column of file-name rows: a plain click
+/// toggles a row, and a shift-click extends an inclusive range from the last
+/// plain-clicked row (`anchor`). `hi` holds the highlighted paths. Shared by the
+/// Plot Data file picker and the Make-μ(E) batch picker (their two-pane transfer
+/// lists). Resetting the lists should clear `anchor`, which stales on change.
+pub fn select_list(
+    ui: &mut egui::Ui,
+    list: &[PathBuf],
+    hi: &mut HashSet<PathBuf>,
+    anchor: &mut Option<usize>,
+) {
+    let shift = ui.input(|i| i.modifiers.shift);
+    for (idx, path) in list.iter().enumerate() {
+        let selected = hi.contains(path);
+        if ui.selectable_label(selected, file_name_of(path)).clicked() {
+            match (shift, *anchor) {
+                (true, Some(a)) => {
+                    for p in &list[a.min(idx)..=a.max(idx)] {
+                        hi.insert(p.clone());
+                    }
+                }
+                _ => {
+                    if !hi.remove(path) {
+                        hi.insert(path.clone());
+                    }
+                    *anchor = Some(idx);
+                }
+            }
+        }
+    }
 }
 
 /// A small square "remove" button: a bordered box with an ✕ painted inside.
