@@ -1391,6 +1391,65 @@ impl XafsViewApp {
         };
     }
 
+    /// The "Loaded data" list in the Autobk sidebar: every loaded group as a
+    /// click-to-select row with a ✕ to remove it, plus "Clear all". Groups are
+    /// otherwise append-only, so this is the one place to switch the current
+    /// group or drop a wrongly-loaded one. Returns `true` when the current
+    /// selection changed (caller replots).
+    fn loaded_data_list(&mut self, ui: &mut egui::Ui) -> bool {
+        let n = self.session.groups.len();
+        let mut changed = false;
+        egui::CollapsingHeader::new(format!("Loaded data ({n})"))
+            .default_open(true)
+            .show(ui, |ui| {
+                if n == 0 {
+                    ui.weak("No data — open a file or use Make μ(E) from files.");
+                    return;
+                }
+                let current = self.session.current;
+                let mut select = None;
+                let mut remove = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("loaded_data_list")
+                    .max_height(140.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (i, g) in self.session.groups.iter().enumerate() {
+                            ui.push_id(i, |ui| {
+                                ui.horizontal(|ui| {
+                                    if crate::widgets::delete_box(ui)
+                                        .on_hover_text("Remove this data")
+                                        .clicked()
+                                    {
+                                        remove = Some(i);
+                                    }
+                                    if ui.selectable_label(current == Some(i), &g.label).clicked() {
+                                        select = Some(i);
+                                    }
+                                });
+                            });
+                        }
+                    });
+                if ui.button("Clear all").clicked() {
+                    self.session.groups.clear();
+                    self.session.current = None;
+                    self.plot_data.mark_dirty();
+                    changed = true;
+                }
+                // Apply the row actions after the read-only iteration above.
+                if let Some(i) = select {
+                    self.session.current = Some(i);
+                    changed = true;
+                }
+                if let Some(i) = remove {
+                    self.session.remove_group(i);
+                    self.plot_data.mark_dirty();
+                    changed = true;
+                }
+            });
+        changed
+    }
+
     /// The Autobk tab: import + reduction controls on the left, plot on the right.
     fn autobk_tab(&mut self, ui: &mut egui::Ui) {
         let mut open_clicked = false;
@@ -1428,6 +1487,13 @@ impl XafsViewApp {
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Autobk");
+
+                        // The loaded-data list (select / remove / clear groups);
+                        // a selection or removal repopulates the plot.
+                        if self.loaded_data_list(ui) {
+                            self.replot_graph();
+                        }
+                        ui.separator();
 
                         // info rows: Title (group label) / Data File / Theory
                         egui::Grid::new("autobk_info")

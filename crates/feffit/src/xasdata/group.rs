@@ -203,6 +203,30 @@ impl Session {
         idx
     }
 
+    /// Remove the group at `idx` (no-op, returning `None`, when out of range),
+    /// keeping `current` valid by construction:
+    /// - a selection *after* the removed slot shifts down by one,
+    /// - a selection *before* it is unchanged,
+    /// - removing the selected group falls to the group that slid into its slot
+    ///   (or the new last group when it was last),
+    /// - emptying the session clears the selection.
+    pub fn remove_group(&mut self, idx: usize) -> Option<XasGroup> {
+        if idx >= self.groups.len() {
+            return None;
+        }
+        let removed = self.groups.remove(idx);
+        self.current = match self.current {
+            None => None,
+            Some(_) if self.groups.is_empty() => None,
+            Some(c) if c > idx => Some(c - 1),
+            Some(c) if c < idx => Some(c),
+            // c == idx: the selected group was removed; keep the slot, clamped to
+            // the new last index (so a removed *last* group selects its predecessor).
+            Some(c) => Some(c.min(self.groups.len() - 1)),
+        };
+        Some(removed)
+    }
+
     /// The currently selected group, if any.
     pub fn current_group(&self) -> Option<&XasGroup> {
         self.current.and_then(|i| self.groups.get(i))
@@ -242,6 +266,58 @@ mod tests {
         let j = s.add_group(XasGroup::from_mu("b", vec![3.0], vec![0.3]));
         assert_eq!(j, 1);
         assert_eq!(s.current_group().unwrap().label, "b");
+    }
+
+    #[test]
+    fn remove_group_keeps_current_valid_at_every_boundary() {
+        let mk = |n: &str| XasGroup::from_mu(n, vec![1.0], vec![0.1]);
+        let setup = || {
+            let mut s = Session::new();
+            s.add_group(mk("a")); // 0
+            s.add_group(mk("b")); // 1
+            s.add_group(mk("c")); // 2
+            s
+        };
+
+        // Out of range: no-op, returns None.
+        let mut s = setup();
+        assert!(s.remove_group(9).is_none());
+        assert_eq!(s.groups.len(), 3);
+
+        // Remove BEFORE current (current=2): selection shifts down to 1.
+        let mut s = setup();
+        s.current = Some(2);
+        assert_eq!(s.remove_group(0).unwrap().label, "a");
+        assert_eq!(s.current, Some(1));
+        assert_eq!(s.current_group().unwrap().label, "c");
+
+        // Remove AFTER current (current=0): selection unchanged.
+        let mut s = setup();
+        s.current = Some(0);
+        s.remove_group(2);
+        assert_eq!(s.current, Some(0));
+        assert_eq!(s.current_group().unwrap().label, "a");
+
+        // Remove the SELECTED middle group: slot falls to the group that slid in.
+        let mut s = setup();
+        s.current = Some(1);
+        s.remove_group(1);
+        assert_eq!(s.current, Some(1));
+        assert_eq!(s.current_group().unwrap().label, "c");
+
+        // Remove the SELECTED LAST group: slot clamps to the new last.
+        let mut s = setup();
+        s.current = Some(2);
+        s.remove_group(2);
+        assert_eq!(s.current, Some(1));
+        assert_eq!(s.current_group().unwrap().label, "b");
+
+        // Remove the only remaining group: selection clears.
+        let mut s = Session::new();
+        s.add_group(mk("solo"));
+        s.remove_group(0);
+        assert!(s.groups.is_empty());
+        assert_eq!(s.current, None);
     }
 
     #[test]
