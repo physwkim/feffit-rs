@@ -93,6 +93,25 @@ pub struct XasGroup {
     pub chiq_re: Option<Vec<f64>>,
     /// `Im chi(q)`.
     pub chiq_im: Option<Vec<f64>>,
+
+    // --- provenance (for the output-file headers) --------------------------
+    /// Raw comment/header lines of the source file this group was read from,
+    /// kept verbatim so the `.chi`/`.dat`/`.fit` writers can echo the original
+    /// beamline header into their provenance block. Empty when the group was
+    /// not built from a file with a header (e.g. `from_chi`).
+    #[serde(default)]
+    pub source_header: Vec<String>,
+    /// Pre-edge fit range `[pre1, pre2]` (eV, relative to `e0`) used by the last
+    /// normalize, recorded for the output provenance header. `None` until
+    /// normalize has run.
+    #[serde(default)]
+    pub pre1: Option<f64>,
+    #[serde(default)]
+    pub pre2: Option<f64>,
+    /// `rbkg` (Å) used by the last AUTOBK, recorded for the output provenance
+    /// header. `None` until AUTOBK has run.
+    #[serde(default)]
+    pub rbkg: Option<f64>,
 }
 
 impl XasGroup {
@@ -131,6 +150,11 @@ impl XasGroup {
     pub fn clear_derived(&mut self) {
         self.e0 = None;
         self.edge_step = None;
+        // Reduction-parameter provenance (recorded by normalize/AUTOBK); the raw
+        // `source_header` is kept — it describes the source file, not a stage.
+        self.pre1 = None;
+        self.pre2 = None;
+        self.rbkg = None;
         self.pre_edge = None;
         self.post_edge = None;
         self.norm = None;

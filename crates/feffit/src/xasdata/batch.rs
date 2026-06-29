@@ -68,6 +68,9 @@ pub fn make_xmu_batch(files: &[ColumnFile], spec: &MuSpec) -> Vec<Result<XasGrou
                 .unwrap_or_else(|| "group".to_owned());
             let mut g = XasGroup::from_mu(label, energy, mu);
             g.filename = cf.path.clone();
+            // Keep the raw source header so the output writers can echo the
+            // original beamline metadata into their provenance block.
+            g.source_header = cf.header.clone();
             Ok(g)
         })
         .collect()

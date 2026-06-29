@@ -342,6 +342,9 @@ impl XafsViewApp {
         };
         let spec = import.to_spec();
         let input_path = import.file.path.clone();
+        // Keep the raw source header so the AUTOBK / FEFFIT writers can echo the
+        // original beamline metadata into their provenance block.
+        let source_header = import.file.header.clone();
         match feffit::xasdata::build_mu(&import.file, &spec) {
             Ok((energy, mu)) => {
                 let label = input_path
@@ -368,6 +371,7 @@ impl XafsViewApp {
                 // fall back to the source folder instead of the launch directory.
                 let mut g = XasGroup::from_mu(label, energy, mu);
                 g.filename = input_path;
+                g.source_header = source_header;
                 self.session.add_group(g);
                 self.status = format!("Built μ(E): {n} points{xmu}");
                 self.reduction.graph = GraphType::MuBkg;
@@ -439,6 +443,8 @@ impl XafsViewApp {
             if g.mu.is_empty() {
                 return None;
             }
+            // normalize / autobk_group also record the pre-edge range and rbkg
+            // they used onto the group (for the output provenance header).
             feffit::xasdata::normalize(g, &pre);
             feffit::xasdata::autobk_group(g, &bk, 1.0);
             feffit::xasdata::xftf_group(g, &ft);
@@ -509,15 +515,25 @@ impl XafsViewApp {
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let k_path = dir.join(format!("{stem}k.chi"));
         let r_path = dir.join(format!("{stem}r.chi"));
+        // AUTOBK χ files carry the same provenance header as the FEFFIT outputs,
+        // built from the group plus the reduce-tab FT params (this is the FT the
+        // χ(R) here came from).
+        let header = crate::chi_io::provenance_header(
+            g,
+            self.reduction.kmin,
+            self.reduction.kmax,
+            self.reduction.kweight,
+            self.reduction.dk,
+        );
         write_chik(
             &k_path,
-            &g.label,
+            &header,
             g.k.as_deref().unwrap_or(&[]),
             g.chi.as_deref().unwrap_or(&[]),
         )?;
         write_chir(
             &r_path,
-            &g.label,
+            &header,
             g.r.as_deref().unwrap_or(&[]),
             g.chir_mag.as_deref().unwrap_or(&[]),
             g.chir_re.as_deref().unwrap_or(&[]),
@@ -532,14 +548,14 @@ impl XafsViewApp {
         {
             write_file(
                 &dir.join(format!("{stem}e.bkg")),
-                crate::chi_io::xy_string(&g.label, " energy            bkg", &g.energy, bkg),
+                crate::chi_io::xy_string(&header, " energy            bkg", &g.energy, bkg),
             )?;
         }
         if let (Some(k), Some(chi), Some(step)) = (g.k.as_deref(), g.chi.as_deref(), g.edge_step) {
             let bkg_k: Vec<f64> = chi.iter().map(|&c| -step * c).collect();
             write_file(
                 &dir.join(format!("{stem}k.bkg")),
-                crate::chi_io::xy_string(&g.label, " k                 bkg", k, &bkg_k),
+                crate::chi_io::xy_string(&header, " k                 bkg", k, &bkg_k),
             )?;
         }
         Ok((k_path, r_path))
@@ -555,7 +571,15 @@ impl XafsViewApp {
             s => s,
         };
         let dir = self.feffit_output_dir();
-        let files = plot.output_pairs(stem);
+        // run_feffit fits the current group and writes immediately, so the
+        // current group is the fitted one — build the provenance header from it
+        // plus the Feffit-tab FT params.
+        let (kmin, kmax, kweight, dk) = self.feffit.header_ft();
+        let header = match self.session.current_group() {
+            Some(g) => crate::chi_io::provenance_header(g, kmin, kmax, kweight, dk),
+            None => format!("# {stem}\r\n"),
+        };
+        let files = plot.output_pairs(stem, &header);
         let n = files.len();
         for (name, content) in files {
             write_file(&dir.join(name), content)?;
@@ -2269,8 +2293,8 @@ fn write_xmu(
 
 /// Serialize χ(k) as a two-column UWXAFS-style `.chi` file: `k` (Å⁻¹) and the
 /// unweighted `χ(k)` (k-weighting is applied at plot/FT time, not stored).
-fn write_chik(path: &std::path::Path, label: &str, k: &[f64], chi: &[f64]) -> std::io::Result<()> {
-    write_file(path, crate::chi_io::chik_string(label, k, chi))
+fn write_chik(path: &std::path::Path, header: &str, k: &[f64], chi: &[f64]) -> std::io::Result<()> {
+    write_file(path, crate::chi_io::chik_string(header, k, chi))
 }
 
 /// Serialize a complex transform as a five-column UWXAFS file: the axis grid,
@@ -2279,7 +2303,7 @@ fn write_chik(path: &std::path::Path, label: &str, k: &[f64], chi: &[f64]) -> st
 /// files are labelled correctly.
 fn write_complex5(
     path: &std::path::Path,
-    label: &str,
+    header: &str,
     sym: &str,
     x: &[f64],
     mag: &[f64],
@@ -2288,7 +2312,7 @@ fn write_complex5(
 ) -> std::io::Result<()> {
     write_file(
         path,
-        crate::chi_io::complex5_string(label, sym, x, mag, re, im),
+        crate::chi_io::complex5_string(header, sym, x, mag, re, im),
     )
 }
 
@@ -2296,13 +2320,13 @@ fn write_complex5(
 /// `phase`, all on the same `R` grid (`phase = atan2(imag, real)`).
 fn write_chir(
     path: &std::path::Path,
-    label: &str,
+    header: &str,
     r: &[f64],
     mag: &[f64],
     re: &[f64],
     im: &[f64],
 ) -> std::io::Result<()> {
-    write_complex5(path, label, "r", r, mag, re, im)
+    write_complex5(path, header, "r", r, mag, re, im)
 }
 
 /// Write `content` to `path`, creating the parent directory tree first. The
@@ -2379,13 +2403,13 @@ mod tests {
 
         let k = [2.0, 2.05, 2.10];
         let chi = [0.012, -0.008, 0.003];
-        write_chik(&kp, "demo", &k, &chi).expect("write k.chi");
+        write_chik(&kp, "# demo\r\n", &k, &chi).expect("write k.chi");
 
         let r = [0.0, 0.05, 0.10, 0.15];
         let mag = [1.0e-2, 2.0e-2, 1.5e-2, 5.0e-3];
         let re = [1.0e-2, 0.0, -1.5e-2, 5.0e-3];
         let im = [0.0, 2.0e-2, 0.0, 0.0];
-        write_chir(&rp, "demo", &r, &mag, &re, &im).expect("write r.chi");
+        write_chir(&rp, "# demo\r\n", &r, &mag, &re, &im).expect("write r.chi");
 
         let ck = ColumnFile::from_path(&kp).expect("read k.chi");
         assert_eq!(ck.ncols(), 2, "χ(k) file is k + chi");

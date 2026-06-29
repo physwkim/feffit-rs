@@ -21,6 +21,10 @@ pub fn normalize(group: &mut XasGroup, params: &PreEdgeParams) {
     let out = pre_edge(&group.energy, &group.mu, params);
     group.e0 = Some(out.e0);
     group.edge_step = Some(out.edge_step);
+    // Record the (resolved, e0-relative) pre-edge range used, for the output
+    // provenance header — the same kind of provenance as e0/edge_step above.
+    group.pre1 = Some(out.pre1);
+    group.pre2 = Some(out.pre2);
     group.pre_edge = Some(out.pre_edge);
     group.post_edge = Some(out.post_edge);
     group.norm = Some(out.norm);
@@ -57,6 +61,8 @@ pub fn autobk_group(group: &mut XasGroup, params: &AutobkParams, err_sigma: f64)
 
     group.e0 = Some(out.ek0);
     group.edge_step = Some(out.edge_step);
+    // Record the rbkg AUTOBK settled on, for the output provenance header.
+    group.rbkg = Some(out.rbkg);
     group.bkg = Some(out.bkg);
     group.k = Some(out.k);
     group.chi = Some(out.chi);

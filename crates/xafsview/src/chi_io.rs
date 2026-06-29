@@ -1,11 +1,73 @@
 //! Serializers for the column-text data files XAFSView writes (`.chi`, `.dat`,
-//! `.fit`, `.bkg`): a `# label` line, a `# column-names` line, then numeric
-//! columns in the UWXAFS feffit/AUTOBK layout — Fortran `E13.7` numbers and CRLF
-//! line endings, matching the reference files byte-for-byte in *format* (the
-//! values themselves differ slightly because our FT engine is not the UWXAFS
-//! one). Kept in one place so the on-disk single-fit writers (`app.rs`) and the
-//! batch `(filename, content)` builder (`feffit_batch.rs`) emit byte-identical
-//! files instead of drifting two copies of the format.
+//! `.fit`, `.bkg`): a multi-line `#` provenance header, a `# column-names` line,
+//! then numeric columns in the UWXAFS feffit/AUTOBK layout — Fortran `E13.7`
+//! numbers and CRLF line endings, matching the reference files byte-for-byte in
+//! *format* (the values themselves differ slightly because our FT engine is not
+//! the UWXAFS one). Kept in one place so the on-disk single-fit writers
+//! (`app.rs`) and the batch `(filename, content)` builder (`feffit_batch.rs`)
+//! emit byte-identical files instead of drifting two copies of the format.
+//!
+//! The serializers take the provenance `header` (a CRLF-terminated block of `#`
+//! lines) pre-built by [`provenance_header`]; the caller owns it because the
+//! reduction parameters and the raw source header it embeds live on the
+//! [`XasGroup`], not on the transform output.
+
+use feffit::xasdata::XasGroup;
+
+/// Build the provenance header block the original XAFSView writes above every
+/// `.chi`/`.dat`/`.fit`/`.bkg` file: the data title, χ source, reduction
+/// parameters (e0 / pre-edge range / edge step, the FT k-range / k-weight / dk,
+/// and rbkg), then the raw source-file header echoed verbatim, and a separator.
+/// Returns a CRLF-terminated block (each line `#`-prefixed) ready to hand to the
+/// serializers.
+///
+/// Byte-parity with the reference is intentionally partial: the numeric values
+/// are ours (our FT engine differs), and the original's beamline block is a
+/// buggy fixed-width reflow we do not reproduce — we pass the source header
+/// through verbatim instead. Lines whose inputs are absent (e.g. e0 before
+/// normalize) are omitted rather than written with placeholder values.
+pub(crate) fn provenance_header(
+    g: &XasGroup,
+    kmin: f64,
+    kmax: f64,
+    kweight: i32,
+    dk: f64,
+) -> String {
+    let mut s =
+        String::with_capacity(256 + g.source_header.iter().map(|h| h.len() + 4).sum::<usize>());
+    push_crlf(&mut s, &format!("# data  : {}", g.label));
+    let src = g
+        .filename
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(in-memory)".to_owned());
+    push_crlf(&mut s, &format!("# chi: from {src}"));
+    push_crlf(&mut s, "# using simple minimization");
+    if let (Some(e0), Some(step)) = (g.e0, g.edge_step) {
+        let (p1, p2) = (g.pre1.unwrap_or(0.0), g.pre2.unwrap_or(0.0));
+        push_crlf(
+            &mut s,
+            &format!("# e0 = {e0:.2}; pre-edge range =[{p1:.1} {p2:.1}]; edge step = {step:.3}"),
+        );
+    }
+    let kw = kweight as f64;
+    push_crlf(
+        &mut s,
+        &format!(
+            "# k range=[{kmin:.2} {kmax:.2}]; k weight= {kw:.2}; sills  dk1, dk2  = {dk:.2} {dk:.2}"
+        ),
+    );
+    if let Some(rbkg) = g.rbkg {
+        push_crlf(&mut s, &format!("# bkg r =[0.00 {rbkg:.2}]"));
+    }
+    // The beamline block: the raw source header echoed verbatim as comments
+    // (the original reflows it with fixed-width quirks we do not reproduce).
+    for line in &g.source_header {
+        push_crlf(&mut s, &format!("# {}", line.trim_end()));
+    }
+    push_crlf(&mut s, &format!("# {}", "-".repeat(70)));
+    s
+}
 
 /// Format `v` in Fortran `E13.7` form — `0.dddddddE±ee`, a normalized mantissa
 /// in `[0.1, 1.0)` with 7 digits and a 2-digit signed exponent, exactly 13 chars
@@ -43,9 +105,9 @@ fn push_crlf(s: &mut String, line: &str) {
 /// Two-column k-space body — `k`, `χ(k)` — in the UWXAFS `.chi`/`.dat`/`.fit`
 /// layout: a `2x,E13.7,3x,E13.7` row (column widths 15 then 16) under the fixed
 /// `#     k              chi(k)` header, CRLF throughout.
-pub(crate) fn chik_string(label: &str, k: &[f64], chi: &[f64]) -> String {
-    let mut s = String::with_capacity(k.len() * 34 + 96);
-    push_crlf(&mut s, &format!("# {label}"));
+pub(crate) fn chik_string(header: &str, k: &[f64], chi: &[f64]) -> String {
+    let mut s = String::with_capacity(header.len() + k.len() * 34 + 96);
+    s.push_str(header);
     push_crlf(&mut s, "#     k              chi(k)          ");
     for (&kk, &cc) in k.iter().zip(chi) {
         push_crlf(
@@ -60,9 +122,9 @@ pub(crate) fn chik_string(label: &str, k: &[f64], chi: &[f64]) -> String {
 /// AUTOBK background files the original XAFSView writes: `e.bkg` (energy, μ₀) and
 /// `k.bkg` (k, μ₀−μ). Same Fortran `E13.7` / CRLF numeric layout as the
 /// `.chi`/`.dat`/`.fit` k-space files (`2x,E13.7,3x,E13.7`).
-pub(crate) fn xy_string(label: &str, columns: &str, x: &[f64], y: &[f64]) -> String {
-    let mut s = String::with_capacity(x.len() * 34 + 96);
-    push_crlf(&mut s, &format!("# {label}"));
+pub(crate) fn xy_string(header: &str, columns: &str, x: &[f64], y: &[f64]) -> String {
+    let mut s = String::with_capacity(header.len() + x.len() * 34 + 96);
+    s.push_str(header);
     push_crlf(&mut s, &format!("# {columns}"));
     for (&xx, &yy) in x.iter().zip(y) {
         push_crlf(
@@ -81,15 +143,15 @@ pub(crate) fn xy_string(label: &str, columns: &str, x: &[f64], y: &[f64]) -> Str
 /// letter, matching the reference. `ampl` is the supplied magnitude (≡ |re+i·im|)
 /// and `phase` is derived as `atan2(im, re)`.
 pub(crate) fn complex5_string(
-    label: &str,
+    header: &str,
     sym: &str,
     x: &[f64],
     mag: &[f64],
     re: &[f64],
     im: &[f64],
 ) -> String {
-    let mut s = String::with_capacity(x.len() * 80 + 128);
-    push_crlf(&mut s, &format!("# {label}"));
+    let mut s = String::with_capacity(header.len() + x.len() * 80 + 128);
+    s.push_str(header);
     push_crlf(
         &mut s,
         &format!(
@@ -125,6 +187,43 @@ mod tests {
     }
 
     #[test]
+    fn provenance_header_echoes_source_and_includes_reduction_params() {
+        let mut g = XasGroup::from_mu("sample", vec![6500.0], vec![0.1]);
+        g.e0 = Some(6539.0);
+        g.edge_step = Some(1.553);
+        g.pre1 = Some(-200.0);
+        g.pre2 = Some(-50.0);
+        g.rbkg = Some(1.2);
+        g.source_header =
+            vec!["Data were taken at HFXAFS in PLS-II\tNumber of Points : 459".to_owned()];
+        let h = provenance_header(&g, 0.0, 12.2, 3, 0.0);
+
+        // Every line is a CRLF-terminated comment.
+        assert!(h.ends_with("\r\n"));
+        assert!(h.lines().all(|l| l.starts_with('#')), "header={h}");
+        assert!(h.contains("# data  : sample"));
+        assert!(h.contains("# using simple minimization"));
+        assert!(h.contains("# e0 = 6539.00; pre-edge range =[-200.0 -50.0]; edge step = 1.553"));
+        assert!(h.contains("# k range=[0.00 12.20]; k weight= 3.00; sills  dk1, dk2  = 0.00 0.00"));
+        assert!(h.contains("# bkg r =[0.00 1.20]"));
+        // The raw source header is echoed verbatim (tabs and all), prefixed `# `.
+        assert!(h.contains("# Data were taken at HFXAFS in PLS-II\tNumber of Points : 459"));
+        // The separator closes the block.
+        assert!(h.contains(&format!("# {}", "-".repeat(70))));
+    }
+
+    #[test]
+    fn provenance_header_omits_e0_line_before_normalize() {
+        // A group with no e0/edge_step (not yet normalized) omits the e0 line
+        // rather than writing placeholder values.
+        let g = XasGroup::from_chi("c", vec![1.0], vec![0.1]);
+        let h = provenance_header(&g, 3.0, 14.0, 2, 1.0);
+        assert!(!h.contains("# e0 ="), "no e0 line before normalize: {h}");
+        assert!(!h.contains("# bkg r ="), "no rbkg line before autobk: {h}");
+        assert!(h.contains("# k range=[3.00 14.00]"));
+    }
+
+    #[test]
     fn fortran_e13_7_matches_the_reference_field() {
         // Values lifted from the reference UWXAFS files; each renders to exactly
         // 13 characters with the leading zero dropped on negatives.
@@ -140,7 +239,7 @@ mod tests {
 
     #[test]
     fn chik_string_has_two_columns_crlf_and_31_char_rows() {
-        let s = chik_string("t", &[0.05, 2.0], &[4.961208, 0.2]);
+        let s = chik_string("# t\r\n", &[0.05, 2.0], &[4.961208, 0.2]);
         assert_eq!(first_data_row(&s).split_whitespace().count(), 2);
         // Every line is CRLF-terminated.
         assert!(s.lines().count() >= 3 && s.ends_with("\r\n"));
@@ -152,7 +251,12 @@ mod tests {
 
     #[test]
     fn xy_string_has_two_columns_and_the_given_header() {
-        let s = xy_string("t", " energy            bkg", &[1.0, 2.0], &[0.1, 0.2]);
+        let s = xy_string(
+            "# t\r\n",
+            " energy            bkg",
+            &[1.0, 2.0],
+            &[0.1, 0.2],
+        );
         assert!(s.contains("energy"), "column header expected: {s}");
         assert_eq!(first_data_row(&s).split_whitespace().count(), 2);
         assert!(s.ends_with("\r\n"));
@@ -161,7 +265,7 @@ mod tests {
     #[test]
     fn complex5_string_has_five_columns_names_the_axis_and_derives_phase() {
         // q-space: axis column named `k`, titles `chi(k)`; phase = atan2(im, re).
-        let s = complex5_string("t", "k", &[1.0], &[0.5], &[0.3], &[0.4]);
+        let s = complex5_string("# t\r\n", "k", &[1.0], &[0.5], &[0.3], &[0.4]);
         assert!(s.contains("ampl[chi(k)]"), "q-axis header expected: {s}");
         let row = first_data_row(&s);
         assert_eq!(row.split_whitespace().count(), 5);

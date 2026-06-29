@@ -153,7 +153,7 @@ impl FeffitBatch {
             )
             .clicked()
         {
-            let files = self.feffit_output_files();
+            let files = self.feffit_output_files(groups, template);
             if !files.is_empty() {
                 bubble = Some(BatchAction::SaveFeffitOutputs(files));
             }
@@ -231,10 +231,25 @@ impl FeffitBatch {
 
     /// Collect the FEFFIT k/r/q `.dat`/`.fit` files for every run that has a
     /// fit result, as `(filename, content)` pairs named from the group label.
-    fn feffit_output_files(&self) -> Vec<(String, String)> {
+    /// Each file carries the provenance header built from its source group (for
+    /// the reduction params + raw source header) and the shared `template`'s FT
+    /// params — the same header the single-fit writer produces.
+    fn feffit_output_files(
+        &self,
+        groups: &[XasGroup],
+        template: &FeffitUi,
+    ) -> Vec<(String, String)> {
+        let (kmin, kmax, kweight, dk) = template.header_ft();
         self.runs
             .iter()
-            .filter_map(|run| run.ui.plot().map(|p| p.output_pairs(&run.label)))
+            .filter_map(|run| {
+                let plot = run.ui.plot()?;
+                let header = match groups.get(run.group_idx) {
+                    Some(g) => crate::chi_io::provenance_header(g, kmin, kmax, kweight, dk),
+                    None => format!("# {}\r\n", run.label),
+                };
+                Some(plot.output_pairs(&run.label, &header))
+            })
             .flatten()
             .collect()
     }
@@ -399,7 +414,10 @@ mod tests {
             "each run produced a transform"
         );
         // The data .dat transforms are now saveable across the run groups.
-        assert!(!b.feffit_output_files().is_empty());
+        assert!(
+            !b.feffit_output_files(&groups, &FeffitUi::default())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -407,6 +425,6 @@ mod tests {
         // No runs yet → no fitted transforms to save (mirrors the disabled Save
         // buttons; the builder defends the same invariant).
         let b = FeffitBatch::default();
-        assert!(b.feffit_output_files().is_empty());
+        assert!(b.feffit_output_files(&[], &FeffitUi::default()).is_empty());
     }
 }

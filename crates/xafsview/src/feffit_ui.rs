@@ -673,7 +673,7 @@ impl FeffitPlot {
     /// Single owner of the field→file mapping, shared by the single-fit
     /// on-disk writer and the batch `(name, content)` builder so both stay
     /// byte-identical.
-    pub fn output_pairs(&self, stem: &str) -> Vec<(String, String)> {
+    pub fn output_pairs(&self, stem: &str, header: &str) -> Vec<(String, String)> {
         use crate::chi_io::{chik_string, complex5_string};
         let (d, m) = (&self.data, &self.model);
         // Data transforms always exist after a successful run, so the three
@@ -682,32 +682,34 @@ impl FeffitPlot {
         // the transforms that exist), not a write-all-or-nothing gate.
         // R-space files name their axis `r`; q-space files name it `k` (the q
         // transform lives on a k-grid) — matching the reference UWXAFS files.
+        // `header` is the shared provenance block (built by the caller from the
+        // group + FT params), emitted byte-identically into all six files.
         let mut pairs = vec![
             (
                 format!("{stem}k.dat"),
-                chik_string(stem, &self.data_k, &self.data_chi),
+                chik_string(header, &self.data_k, &self.data_chi),
             ),
             (
                 format!("{stem}r.dat"),
-                complex5_string(stem, "r", &d.r, &d.chir_mag, &d.chir_re, &d.chir_im),
+                complex5_string(header, "r", &d.r, &d.chir_mag, &d.chir_re, &d.chir_im),
             ),
             (
                 format!("{stem}q.dat"),
-                complex5_string(stem, "k", &d.q, &d.chiq_mag, &d.chiq_re, &d.chiq_im),
+                complex5_string(header, "k", &d.q, &d.chiq_mag, &d.chiq_re, &d.chiq_im),
             ),
         ];
         if self.has_model {
             pairs.push((
                 format!("{stem}k.fit"),
-                chik_string(stem, &self.data_k, &self.model_chi),
+                chik_string(header, &self.data_k, &self.model_chi),
             ));
             pairs.push((
                 format!("{stem}r.fit"),
-                complex5_string(stem, "r", &m.r, &m.chir_mag, &m.chir_re, &m.chir_im),
+                complex5_string(header, "r", &m.r, &m.chir_mag, &m.chir_re, &m.chir_im),
             ));
             pairs.push((
                 format!("{stem}q.fit"),
-                complex5_string(stem, "k", &m.q, &m.chiq_mag, &m.chiq_re, &m.chiq_im),
+                complex5_string(header, "k", &m.q, &m.chiq_mag, &m.chiq_re, &m.chiq_im),
             ));
         }
         pairs
@@ -911,6 +913,12 @@ impl FeffitUi {
     /// The last fit's plot arrays, if a fit has been run.
     pub fn plot(&self) -> Option<&FeffitPlot> {
         self.plot.as_ref()
+    }
+
+    /// The forward-FT window params `(kmin, kmax, kweight, dk)` used for the fit,
+    /// for the `.dat`/`.fit` provenance header (see [`crate::chi_io::provenance_header`]).
+    pub fn header_ft(&self) -> (f64, f64, i32, f64) {
+        (self.ft.kmin, self.ft.kmax, self.ft.kweight, self.ft.dk)
     }
 
     /// The active plot space and part.
@@ -2187,7 +2195,7 @@ mod tests {
         let names: Vec<String> = ft
             .plot()
             .unwrap()
-            .output_pairs("g")
+            .output_pairs("g", "# g\r\n")
             .into_iter()
             .map(|(n, _)| n)
             .collect();
@@ -2204,7 +2212,7 @@ mod tests {
         let names: Vec<String> = fit
             .plot()
             .unwrap()
-            .output_pairs("g")
+            .output_pairs("g", "# g\r\n")
             .into_iter()
             .map(|(n, _)| n)
             .collect();

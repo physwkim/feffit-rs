@@ -408,7 +408,8 @@ mod tests {
         let re = [1.0, 0.0, -3.0];
         let im = [0.0, 2.0, 0.0];
         let mag = [1.0, 2.0, 3.0];
-        std::fs::write(&p, complex5_string("t", "r", &r, &mag, &re, &im)).expect("write r.dat");
+        std::fs::write(&p, complex5_string("# t\r\n", "r", &r, &mag, &re, &im))
+            .expect("write r.dat");
 
         let t = load_trace(&p, GraphItem::DatR, 2).expect("load r.dat");
         assert_eq!(t.x, r);
@@ -419,12 +420,53 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
+    /// A file carrying the real multi-line `#` provenance header — including a
+    /// verbatim source-header line with embedded tabs — must still parse: every
+    /// `#` line (reduction params + echoed beamline block + separator) is skipped
+    /// as a comment and the numeric columns read back unchanged. This locks the
+    /// integration between [`crate::chi_io::provenance_header`] and the reader.
+    #[test]
+    fn provenance_header_block_is_skipped_and_columns_round_trip() {
+        use crate::chi_io::provenance_header;
+        use feffit::xasdata::XasGroup;
+
+        let p = tmp("prov_r.dat");
+        let r = [0.0, 0.1, 0.2];
+        let re = [1.0, 0.0, -3.0];
+        let im = [0.0, 2.0, 0.0];
+        let mag = [1.0, 2.0, 3.0];
+
+        let mut g = XasGroup::from_chi("sample", vec![1.0], vec![0.1]);
+        g.e0 = Some(6539.0);
+        g.edge_step = Some(1.553);
+        g.pre1 = Some(-200.0);
+        g.pre2 = Some(-50.0);
+        g.rbkg = Some(1.2);
+        // A verbatim source line with tabs — the riskiest header content for the
+        // numeric reader (it must NOT mistake the tab-split tokens for data).
+        g.source_header = vec![
+            "Data were taken at HFXAFS in PLS-II\tNumber of Points : 459\tEo : 6539.0".to_owned(),
+        ];
+        let header = provenance_header(&g, 0.0, 12.2, 3, 0.0);
+        // Sanity: the header really is multi-line and carries the tab line.
+        assert!(header.lines().count() > 5, "multi-line header: {header}");
+        assert!(header.contains('\t'), "verbatim tab line present");
+
+        std::fs::write(&p, complex5_string(&header, "r", &r, &mag, &re, &im))
+            .expect("write prov_r.dat");
+
+        let t = load_trace(&p, GraphItem::DatR, 2).expect("load prov_r.dat");
+        assert_eq!(t.x, r, "axis column read past the provenance block");
+        assert_eq!(t.y, mag, "ampl column read past the provenance block");
+        let _ = std::fs::remove_file(&p);
+    }
+
     #[test]
     fn load_k_chi_applies_kweight() {
         let p = tmp("k.chi");
         let k = [1.0, 2.0, 4.0];
         let chi = [1.0, 1.0, 1.0];
-        std::fs::write(&p, chik_string("t", &k, &chi)).expect("write k.chi");
+        std::fs::write(&p, chik_string("# t\r\n", &k, &chi)).expect("write k.chi");
 
         let t = load_trace(&p, GraphItem::ChiK, 2).expect("load k.chi");
         // k²·χ with χ ≡ 1 ⇒ y = k².
@@ -446,7 +488,7 @@ mod tests {
         let p = tmp("k.bkg");
         let k = [1.0, 2.0, 4.0];
         let bkg = [0.5, 0.4, 0.3];
-        std::fs::write(&p, chik_string("t", &k, &bkg)).expect("write k.bkg");
+        std::fs::write(&p, chik_string("# t\r\n", &k, &bkg)).expect("write k.bkg");
         let t = load_trace(&p, GraphItem::BkgK, 3).expect("load k.bkg");
         assert_eq!(t.x, k);
         assert_eq!(t.y, bkg, "k.bkg plots μ₀−μ as written, ignoring G_kweight");
@@ -464,7 +506,7 @@ mod tests {
             .iter()
             .map(|&x| 0.1 + 1.0 / (1.0 + (-(x - 6539.0) / 3.0).exp()))
             .collect();
-        std::fs::write(&p, chik_string("t", &e, &mu)).expect("write xmu");
+        std::fs::write(&p, chik_string("# t\r\n", &e, &mu)).expect("write xmu");
 
         let t = load_trace(&p, GraphItem::XmuNorm, 0).expect("load xmu norm");
         assert_eq!(t.item, GraphItem::XmuNorm);
@@ -481,7 +523,7 @@ mod tests {
         // y = 3x ⇒ dy/dx ≡ 3 everywhere (incl. the one-sided ends).
         let e = [0.0, 1.0, 2.0, 3.0];
         let mu = [0.0, 3.0, 6.0, 9.0];
-        std::fs::write(&p, chik_string("t", &e, &mu)).expect("write xmu");
+        std::fs::write(&p, chik_string("# t\r\n", &e, &mu)).expect("write xmu");
 
         let t = load_trace(&p, GraphItem::XmuD1, 0).expect("load xmu f'");
         for d in &t.y {
