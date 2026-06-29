@@ -554,19 +554,51 @@ impl XafsViewApp {
             "" => "feffit",
             s => s,
         };
-        let dir = self
-            .session
-            .folders
-            .feffit_dir
-            .clone()
-            .or_else(|| self.session.folders.data_dir.clone())
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let dir = self.feffit_output_dir();
         let files = plot.output_pairs(stem);
         let n = files.len();
         for (name, content) in files {
             write_file(&dir.join(name), content)?;
         }
         Ok(n)
+    }
+
+    /// The folder the FEFFIT `.dat`/`.fit` transforms are written to: the Feffit
+    /// folder, falling back to the data folder, then the working directory. The
+    /// single owner of "where FEFFIT transforms go", shared by the single-fit
+    /// writer and the batch panel's "Save χ data+fit" so both land where the
+    /// original XAFSView writes them (the Feffit sub-folder).
+    fn feffit_output_dir(&self) -> std::path::PathBuf {
+        self.session
+            .folders
+            .feffit_dir
+            .clone()
+            .or_else(|| self.session.folders.data_dir.clone())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    }
+
+    /// Write the batch panel's FEFFIT `.dat`/`.fit` transforms (one set per
+    /// fitted group) to the Feffit folder — the same destination the single-fit
+    /// `write_feffit_outputs` uses — reporting the outcome.
+    fn write_feffit_output_files(&mut self, files: Vec<(String, String)>) {
+        let dir = self.feffit_output_dir();
+        let mut written = 0usize;
+        let mut failed = 0usize;
+        for (name, content) in &files {
+            match write_file(&dir.join(name), content) {
+                Ok(()) => written += 1,
+                Err(_) => failed += 1,
+            }
+        }
+        let extra = if failed > 0 {
+            format!(" ({failed} failed)")
+        } else {
+            String::new()
+        };
+        self.status = format!(
+            "Saved {written} χ data+fit file(s) to {}{extra}.",
+            dir.display()
+        );
     }
 
     /// Run normalize → AUTOBK → FT on every loaded group with one shared set of
@@ -1043,7 +1075,7 @@ impl XafsViewApp {
         }
         match batch_action {
             Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
-            Some(BatchAction::SaveFeffitOutputs(files)) => self.write_saved_items(files),
+            Some(BatchAction::SaveFeffitOutputs(files)) => self.write_feffit_output_files(files),
             None => {}
         }
     }
