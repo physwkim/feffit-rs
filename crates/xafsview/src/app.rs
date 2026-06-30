@@ -90,6 +90,10 @@ pub struct XafsViewApp {
     feffit_batch: FeffitBatch,
     /// The "Make μ(E) from files" staging picker (Plot Data-style two-pane add).
     batch_load: BatchLoadWindow,
+    /// Whether the detached "Data" window (the loaded-group manager: the list,
+    /// "Add data files…", and "Clear all") is shown. The Autobk sidebar keeps
+    /// only a compact current-group combo; the full list lives here.
+    data_window_open: bool,
     /// The Edit-μ(E) window (deglitch / trim / smooth) state.
     edit_xmu: EditXmuState,
     /// The Morlet wavelet-transform window (|W(k,R)| heatmap of χ(k)).
@@ -196,6 +200,7 @@ impl XafsViewApp {
             feffit_fit_group: None,
             feffit_batch: FeffitBatch::default(),
             batch_load: BatchLoadWindow::default(),
+            data_window_open: false,
             edit_xmu: EditXmuState::default(),
             wavelet: WaveletWindow::default(),
             plot_data,
@@ -1454,18 +1459,71 @@ impl XafsViewApp {
         };
     }
 
-    /// The "Loaded data" list in the Autobk sidebar: every loaded group as a
-    /// click-to-select row with a ✕ to remove it, plus "Clear all". Groups are
-    /// otherwise append-only, so this is the one place to switch the current
-    /// group or drop a wrongly-loaded one. Returns `true` when the current
+    /// The compact current-group selector in the Autobk sidebar: a combo to
+    /// switch the active spectrum inline (the most frequent action during
+    /// reduction) plus a "Data…" button that opens the full [`data_manager_window`]
+    /// (the loaded-group list + Add + Clear all). Returns `true` when the
     /// selection changed (caller replots).
-    fn loaded_data_list(&mut self, ui: &mut egui::Ui) -> bool {
+    ///
+    /// [`data_manager_window`]: Self::data_manager_window
+    fn current_group_selector(&mut self, ui: &mut egui::Ui) -> bool {
         let n = self.session.groups.len();
         let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Data");
+            let current = self.session.current;
+            let text = current
+                .and_then(|i| self.session.groups.get(i))
+                .map(|g| g.label.as_str())
+                .unwrap_or("— no data —");
+            let mut select = None;
+            egui::ComboBox::from_id_salt("current_group_combo")
+                .selected_text(text)
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    for (i, g) in self.session.groups.iter().enumerate() {
+                        if ui.selectable_label(current == Some(i), &g.label).clicked() {
+                            select = Some(i);
+                        }
+                    }
+                });
+            if let Some(i) = select {
+                self.session.current = Some(i);
+                changed = true;
+            }
+            if ui
+                .button(format!("Data… ({n})"))
+                .on_hover_text("Open the data manager: add, remove, or clear loaded groups")
+                .clicked()
+            {
+                self.data_window_open = true;
+            }
+        });
+        changed
+    }
+
+    /// The detached "Data" window: the loaded-group manager moved out of the
+    /// Autobk sidebar (which keeps only the compact [`current_group_selector`]).
+    /// Hosts "Add data files…", every loaded group as a click-to-select row with
+    /// a ✕ to remove it, and "Clear all". Groups are otherwise append-only, so
+    /// this is the one place to add, switch, or drop them. Returns `true` when
+    /// the selection changed (caller replots).
+    ///
+    /// [`current_group_selector`]: Self::current_group_selector
+    fn data_manager_window(&mut self, ctx: &egui::Context) -> bool {
+        if !self.data_window_open {
+            return false;
+        }
+        let mut keep_open = true;
+        let mut changed = false;
         let mut add_clicked = false;
-        egui::CollapsingHeader::new(format!("Loaded data ({n})"))
-            .default_open(true)
-            .show(ui, |ui| {
+        crate::window::detached(
+            ctx,
+            "data_manager",
+            "Data",
+            &mut keep_open,
+            [320.0, 420.0],
+            |ui| {
                 // ADD opens the Plot Data-style staging picker (needs an open
                 // import for the column mapping); same affordance as Plot Data.
                 if ui
@@ -1475,6 +1533,8 @@ impl XafsViewApp {
                 {
                     add_clicked = true;
                 }
+                ui.separator();
+                let n = self.session.groups.len();
                 if n == 0 {
                     ui.weak("No data — open a file, then Add data files.");
                     return;
@@ -1483,9 +1543,8 @@ impl XafsViewApp {
                 let mut select = None;
                 let mut remove = None;
                 egui::ScrollArea::vertical()
-                    .id_salt("loaded_data_list")
-                    .max_height(140.0)
-                    .auto_shrink([false, true])
+                    .id_salt("data_manager_list")
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for (i, g) in self.session.groups.iter().enumerate() {
                             ui.push_id(i, |ui| {
@@ -1503,6 +1562,7 @@ impl XafsViewApp {
                             });
                         }
                     });
+                ui.separator();
                 if ui.button("Clear all").clicked() {
                     self.session.groups.clear();
                     self.session.current = None;
@@ -1519,7 +1579,9 @@ impl XafsViewApp {
                     self.plot_data.mark_dirty();
                     changed = true;
                 }
-            });
+            },
+        );
+        self.data_window_open = keep_open;
         if add_clicked {
             self.make_xmu_from_files();
         }
@@ -1564,9 +1626,11 @@ impl XafsViewApp {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Autobk");
 
-                        // The loaded-data list (select / remove / clear groups);
-                        // a selection or removal repopulates the plot.
-                        if self.loaded_data_list(ui) {
+                        // Compact current-group selector; the full loaded-group
+                        // manager (add / remove / clear) lives in the detached
+                        // "Data" window opened from here. A switch repopulates
+                        // the plot.
+                        if self.current_group_selector(ui) {
                             self.replot_graph();
                         }
                         ui.separator();
@@ -2158,6 +2222,14 @@ impl eframe::App for XafsViewApp {
             self.session.folders.results_dir.as_deref(),
             self.session.folders.data_dir.as_deref(),
         );
+
+        // The detached "Data" window: the loaded-group manager (list + Add +
+        // Clear all) moved out of the Autobk sidebar. A select/remove/clear
+        // here repopulates the plot.
+        let ctx = ui.ctx().clone();
+        if self.data_manager_window(&ctx) {
+            self.replot_graph();
+        }
 
         // The "Make μ(E) from files" staging picker: OK builds a group per
         // staged file using the active import's column mapping + header-skip.
