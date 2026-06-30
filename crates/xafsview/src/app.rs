@@ -1638,6 +1638,13 @@ impl XafsViewApp {
             .session
             .current_group()
             .is_some_and(|g| !g.mu.is_empty());
+        // "Autobk Start" can run even before Calc XMU: with a file open but no
+        // μ(E) yet, it builds μ(E) first (auto Calc XMU) so one click does the
+        // whole reduction. Edit μ(E) keeps the stricter `has_mu` gate — it edits
+        // an existing spectrum, so there is nothing to auto-build.
+        let import_open = self.import.is_some();
+        let start_autocalc = !has_mu && import_open;
+        let can_start = has_mu || import_open;
         let data_file = self
             .session
             .current_group()
@@ -1751,7 +1758,15 @@ impl XafsViewApp {
                             if widgets::action(ui, "Open New file", CHUNKY_BTN).clicked() {
                                 open_clicked = true;
                             }
-                            if widgets::primary(ui, "Autobk Start", CHUNKY_BTN, has_mu).clicked() {
+                            let start = widgets::primary(ui, "Autobk Start", CHUNKY_BTN, can_start);
+                            let start = if start_autocalc {
+                                start.on_hover_text(
+                                    "No μ(E) yet — builds it (Calc XMU), then AUTOBK",
+                                )
+                            } else {
+                                start
+                            };
+                            if start.clicked() {
                                 start_clicked = true;
                             }
                         });
@@ -1827,6 +1842,12 @@ impl XafsViewApp {
         // the new value the moment the drag/edit ends. A bare graph-type switch is
         // the cheap replot. Start wins when it and an edit land on the same frame.
         if start_clicked {
+            // No μ(E) for the current group but a file is open → build it first
+            // (the original requires a separate Calc XMU click), then run the
+            // full reduction + χ-file write on the freshly-built spectrum.
+            if start_autocalc {
+                self.calc_xmu();
+            }
             self.run_reduction();
         } else if has_mu && change.refit {
             self.recompute_reduction();
