@@ -1,14 +1,18 @@
-//! The standalone **Plot Data** window: a *file viewer*. Browse a folder, pick
-//! processed output files by *File type* (`*.xmu` / `*.chi` / `*.dat` / `*.fit`)
-//! and *Graph item*, and overlay them on one plot — with vertical stacking, an
+//! The **Plot Data** dock: a *file viewer*. Browse a folder, pick processed
+//! output files by *File type* (`*.xmu` / `*.chi` / `*.dat` / `*.fit`) and
+//! *Graph item*, and overlay them on one plot — with vertical stacking, an
 //! averaged trace, display smoothing, and a multi-peak readout. Mirrors
-//! XAFSView's *Plot Data* window, which shows data read from files rather than
-//! the in-memory session groups.
+//! XAFSView's *Plot Data*, which shows data read from files rather than the
+//! in-memory session groups.
 //!
-//! It owns its own plot (separate from the tabs' shared plot) so it can float
-//! independently. Save / zoom / legend come from the siplot toolbar; the data
-//! work (averaging, peak finding) is the headless [`xasdata`] code. A Feffit fit
-//! can also be sent here for a quick data-vs-model look ([`set_fit_overlay`]).
+//! Toggled from the "Plot Data" menu button, it docks as a right-hand panel on
+//! the graph tabs (Autobk / Feffit): while open its overlay takes over the
+//! central graph (in the dock's chosen space) and the tab's own single-spectrum
+//! view yields until it is closed. It still owns its own plot, drawn in the
+//! shared central area via [`dock_plot`](PlotDataWindow::dock_plot). Save / zoom
+//! / legend come from the siplot toolbar; the data work (averaging, peak
+//! finding) is the headless [`xasdata`] code. A Feffit fit can also be sent here
+//! for a quick data-vs-model look ([`set_fit_overlay`]).
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -65,9 +69,10 @@ struct FitOverlay {
     model: Vec<f64>,
 }
 
-/// The Plot Data window state and its own plot.
+/// The Plot Data dock state and its own plot. (Type name kept for continuity;
+/// it now renders as a docked panel, not a standalone OS window.)
 pub struct PlotDataWindow {
-    /// Whether the window is shown.
+    /// Whether the dock is shown (toggled from the "Plot Data" menu button).
     pub open: bool,
     plot: crate::plot::Plot,
     /// k-weight applied to any loaded k-space file (their χ is stored unweighted).
@@ -184,7 +189,7 @@ impl PlotDataWindow {
     }
 
     /// Take a Feffit fit's data + model curves (the Feffit form's "Send to plot
-    /// data"). The window opens showing the fit; untick "Show Feffit fit" or
+    /// data"). The dock opens showing the fit; untick "Show Feffit fit" or
     /// "Clear fit" to return to the loaded files.
     pub fn set_fit_overlay(
         &mut self,
@@ -208,68 +213,61 @@ impl PlotDataWindow {
         self.dirty = true;
     }
 
-    /// Render the window.
-    pub fn show(
+    /// Keep the configured Results/Data folders fresh (for the save dialog and
+    /// the file-picker defaults). Call once per frame, before the dock renders,
+    /// in case the user reconfigures folders.
+    pub fn set_dirs(
         &mut self,
-        ctx: &egui::Context,
         results_dir: Option<&std::path::Path>,
         data_dir: Option<&std::path::Path>,
     ) {
-        // Track the configured Results/Data folders so the save dialog and file
-        // picker can default there (kept fresh in case the user reconfigures
-        // folders).
         self.results_dir = results_dir.map(std::path::Path::to_path_buf);
         self.data_dir = data_dir.map(std::path::Path::to_path_buf);
-        if !self.open {
-            return;
-        }
+    }
 
-        let mut open = self.open;
-        crate::window::detached(
-            ctx,
-            "plot_data",
-            "Plot Data",
-            &mut open,
-            [760.0, 520.0],
-            |ui| {
-                egui::Panel::left("plot_data_controls")
-                    .resizable(true)
-                    .default_size(240.0)
-                    .show_inside(ui, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            self.controls(ui);
-                        });
-                    });
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    if self.dirty {
-                        self.rebuild();
-                        self.dirty = false;
-                    }
-                    crate::plot::show(&mut self.plot, ui);
-                    // A legend click toggles which curve is highlighted (re-drawn
-                    // emphasized on the next rebuild); clicking the active entry
-                    // clears it.
-                    if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
-                        self.highlighted = if self.highlighted.as_deref() == Some(label.as_str()) {
-                            None
-                        } else {
-                            Some(label)
-                        };
-                        self.dirty = true;
-                    }
-                });
-            },
-        );
-        self.open = open;
-        // The picker is its own sibling OS viewport (not nested in Plot Data's),
-        // so it can be dragged outside the Plot Data window.
-        self.file_picker(ctx);
+    /// The dock's control column (Feffit-fit toggle, file selectors, k-weight,
+    /// stacking, averaging, peak search, save). Rendered in the right-hand Plot
+    /// Data dock panel on the graph tabs.
+    pub fn dock_controls(&mut self, ui: &mut egui::Ui) {
+        self.controls(ui);
+    }
+
+    /// The dock's overlay plot: rebuild the composite when dirty, draw it, and
+    /// handle legend-click highlighting. Rendered in the central graph area while
+    /// the dock is open — it replaces the tab's own single-spectrum view.
+    pub fn dock_plot(&mut self, ui: &mut egui::Ui) {
+        if self.dirty {
+            self.rebuild();
+            self.dirty = false;
+        }
+        crate::plot::show(&mut self.plot, ui);
+        // A legend click toggles which curve is highlighted (re-drawn emphasized
+        // on the next rebuild); clicking the active entry clears it.
+        if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
+            self.highlighted = if self.highlighted.as_deref() == Some(label.as_str()) {
+                None
+            } else {
+                Some(label)
+            };
+            self.dirty = true;
+        }
     }
 
     /// The left-hand control column: the file selectors, stacking, averaging,
     /// and peak search.
     fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Plot Data");
+        ui.horizontal(|ui| {
+            ui.heading("Plot Data");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("Close")
+                    .on_hover_text("Close the Plot Data dock (returns the tab's own graph)")
+                    .clicked()
+                {
+                    self.open = false;
+                }
+            });
+        });
 
         // A Feffit fit sent here overrides the file plot while shown.
         if let Some(ov) = &self.overlay {
@@ -480,8 +478,8 @@ impl PlotDataWindow {
     /// right "Selected Data" pane holds the staged picks. `=>` / `<=` move the
     /// highlighted rows between panes (multi-select by clicking), `OK` loads the
     /// selection. Shown as its own OS viewport (via [`crate::window::detached`])
-    /// so it can be dragged outside the Plot Data window.
-    fn file_picker(&mut self, ctx: &egui::Context) {
+    /// so it can be dragged outside the Plot Data dock.
+    pub fn file_picker(&mut self, ctx: &egui::Context) {
         if !self.picker_open {
             return;
         }

@@ -103,7 +103,8 @@ pub struct XafsViewApp {
     edit_xmu: EditXmuState,
     /// The Morlet wavelet-transform window (|W(k,R)| heatmap of χ(k)).
     wavelet: WaveletWindow,
-    /// The standalone Plot Data window (multi-group overlay), with its own plot.
+    /// The Plot Data dock (file/group overlay): a right-hand panel on the graph
+    /// tabs that takes over the central graph while open, with its own plot.
     plot_data: PlotDataWindow,
     /// The linear-combination-fitting window (its own plot).
     lcf: LcfWindow,
@@ -1055,10 +1056,29 @@ impl XafsViewApp {
         }
     }
 
-    /// The Feffit tab: fit controls on the left, the batch panel on the right,
-    /// the data-vs-model plot in the centre. The single editor *is* the batch
-    /// configuration — the right panel runs it against several checked groups
-    /// (the former "Feffit batch" window, folded in).
+    /// When the Plot Data dock is open, render its controls as a right-hand panel
+    /// and return `true` so the caller draws the overlay in the central graph
+    /// area instead of the tab's own plot. Used by the graph tabs (Autobk /
+    /// Feffit); toggled from the "Plot Data" menu button.
+    fn plot_data_dock(&mut self, ui: &mut egui::Ui) -> bool {
+        if !self.plot_data.open {
+            return false;
+        }
+        egui::Panel::right("plot_data_dock")
+            .resizable(true)
+            .default_size(260.0)
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.plot_data.dock_controls(ui);
+                });
+            });
+        true
+    }
+
+    /// The Feffit tab: fit controls on the left, the data-vs-model plot in the
+    /// centre. The single editor *is* the batch configuration; "Batch…" opens the
+    /// batch in a detached window. While the Plot Data dock is open, the centre
+    /// shows its overlay instead of this tab's plot.
     fn feffit_tab(&mut self, ui: &mut egui::Ui) {
         let mut feffit_action = None;
         // The original Feffit form's bottom "Exit" button is tab chrome, not part
@@ -1095,8 +1115,15 @@ impl XafsViewApp {
                     });
                 });
             });
+        // When open, the Plot Data dock takes a right-hand panel and the central
+        // graph (its overlay replaces the data-vs-model view until it is closed).
+        let dock = self.plot_data_dock(ui);
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            crate::plot::show(&mut self.plot, ui);
+            if dock {
+                self.plot_data.dock_plot(ui);
+            } else {
+                crate::plot::show(&mut self.plot, ui);
+            }
         });
 
         if exit {
@@ -1330,7 +1357,7 @@ impl XafsViewApp {
         }
     }
 
-    /// Hand the last Feffit fit's data + model curves to the Plot Data window
+    /// Hand the last Feffit fit's data + model curves to the Plot Data dock
     /// (the Feffit form's "Send to plot data"), in the currently-selected space.
     fn send_feffit_to_plot_data(&mut self) {
         let label = match &self.feffit_fit_group {
@@ -1783,6 +1810,10 @@ impl XafsViewApp {
                     });
                 });
             });
+        // The Plot Data dock (when open) takes a right-hand panel and the central
+        // graph: its overlay replaces this tab's single-spectrum view, so the
+        // FT-window band below is skipped while it is shown.
+        let dock = self.plot_data_dock(ui);
         // Draggable FT-window band over the curve: the forward k-window
         // (kmin/kmax) on the kʷ·χ(k) graph, the reverse R-window (rmin/rmax) on
         // the |χ(R)| graph. Other graphs show no band — `set_window` is simply not
@@ -1790,18 +1821,24 @@ impl XafsViewApp {
         // bound and recomputes live, the same `change.refit` path a finished
         // DragValue edit takes (kmin/kmax feed both the AUTOBK background window
         // and the FT, so a full recompute is the correct cost either way).
-        let active_window = match self.reduction.graph {
-            GraphType::KChi => Some((self.reduction.kmin, self.reduction.kmax)),
-            GraphType::ChiR => Some((self.reduction.rmin, self.reduction.rmax)),
-            _ => None,
-        };
-        if let Some((min, max)) = active_window {
-            crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
+        if !dock {
+            let active_window = match self.reduction.graph {
+                GraphType::KChi => Some((self.reduction.kmin, self.reduction.kmax)),
+                GraphType::ChiR => Some((self.reduction.rmin, self.reduction.rmax)),
+                _ => None,
+            };
+            if let Some((min, max)) = active_window {
+                crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
+            }
         }
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            crate::plot::show(&mut self.plot, ui);
+            if dock {
+                self.plot_data.dock_plot(ui);
+            } else {
+                crate::plot::show(&mut self.plot, ui);
+            }
         });
-        if let Some(w) = crate::plot::take_window_drag(&mut self.plot) {
+        if !dock && let Some(w) = crate::plot::take_window_drag(&mut self.plot) {
             // A left-edge drag past the right (or vice versa) inverts the pair;
             // re-order so min < max, and keep the lower bound off negative k/R.
             let (lo, hi) = if w.min <= w.max {
@@ -2016,12 +2053,17 @@ impl XafsViewApp {
                 }
             });
             // Plot Data is a co-primary viewer, not a dropdown action: a flat
-            // top-level button opens it directly (no submenu), set apart from the
-            // menus by a separator.
+            // top-level button toggles its right-hand dock on the graph tabs, set
+            // apart from the menus by a separator.
             ui.separator();
-            if ui.button("Plot Data").clicked() {
-                self.plot_data.open = true;
-                self.plot_data.mark_dirty();
+            if ui
+                .selectable_label(self.plot_data.open, "Plot Data")
+                .clicked()
+            {
+                self.plot_data.open = !self.plot_data.open;
+                if self.plot_data.open {
+                    self.plot_data.mark_dirty();
+                }
             }
         });
     }
@@ -2218,6 +2260,13 @@ impl eframe::App for XafsViewApp {
             });
         });
 
+        // Keep the Plot Data dock's folder defaults fresh before it renders
+        // inside the graph tabs (Autobk / Feffit) via `plot_data_dock`.
+        self.plot_data.set_dirs(
+            self.session.folders.results_dir.as_deref(),
+            self.session.folders.data_dir.as_deref(),
+        );
+
         egui::CentralPanel::default().show_inside(ui, |ui| match self.tab {
             Tab::Folders => self.folders_panel(ui),
             Tab::Autobk => self.autobk_tab(ui),
@@ -2269,13 +2318,10 @@ impl eframe::App for XafsViewApp {
             None => {}
         }
 
-        // The Plot Data window overlays several groups; it owns its own plot and
-        // reads (but does not mutate) the session's groups.
-        self.plot_data.show(
-            ui.ctx(),
-            self.session.folders.results_dir.as_deref(),
-            self.session.folders.data_dir.as_deref(),
-        );
+        // The Plot Data dock's controls + overlay plot now render inside the
+        // graph tabs (see `plot_data_dock`); only its file picker — a transient
+        // two-pane dialog in its own sub-window — renders here.
+        self.plot_data.file_picker(ui.ctx());
 
         // The detached "Data" window: the loaded-group manager (list + Add +
         // Clear all) moved out of the Autobk sidebar. A select/remove/clear
