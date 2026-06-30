@@ -5,8 +5,9 @@
 //! XAFSView's *Plot Data*, which shows data read from files rather than the
 //! in-memory session groups.
 //!
-//! It is a permanent right-hand control panel on the graph tabs (Autobk /
-//! Feffit) — no window, no toggle. There is one shared graph per tab
+//! Its controls live at the bottom of each graph tab's left controls panel
+//! (Autobk / Feffit), below the tab's own controls — no window, no toggle, so the
+//! central graph keeps the full width. There is one shared graph per tab
 //! ([`crate::app`]'s `plot`); this panel does not own a plot of its own but
 //! *overlays* its loaded-file curves (stacked, optionally averaged, with peak
 //! markers) onto that single graph via [`overlay_onto`](PlotDataWindow::overlay_onto),
@@ -241,10 +242,10 @@ impl PlotDataWindow {
         self.data_dir = data_dir.map(std::path::Path::to_path_buf);
     }
 
-    /// The panel's control column (Feffit-fit toggle, file selectors, k-weight,
-    /// stacking, averaging, peak search, save). Rendered in the right-hand Plot
-    /// Data panel on the graph tabs.
-    pub fn dock_controls(&mut self, ui: &mut egui::Ui) {
+    /// The Plot Data control column (Feffit-fit toggle, file selectors, k-weight,
+    /// stacking, averaging, peak search, save). Rendered at the bottom of the
+    /// graph tab's left controls panel, below the tab's own controls.
+    pub fn controls_ui(&mut self, ui: &mut egui::Ui) {
         self.controls(ui);
     }
 
