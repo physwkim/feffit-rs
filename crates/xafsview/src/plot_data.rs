@@ -1,27 +1,26 @@
-//! The **Plot Data** dock: a *file viewer*. Browse a folder, pick processed
+//! The **Plot Data** panel: a *file viewer*. Browse a folder, pick processed
 //! output files by *File type* (`*.xmu` / `*.chi` / `*.dat` / `*.fit`) and
 //! *Graph item*, and overlay them on one plot — with vertical stacking, an
 //! averaged trace, display smoothing, and a multi-peak readout. Mirrors
 //! XAFSView's *Plot Data*, which shows data read from files rather than the
 //! in-memory session groups.
 //!
-//! Toggled from the "Plot Data" menu button, it docks as a right-hand panel on
-//! the graph tabs (Autobk / Feffit): while open its overlay takes over the
-//! central graph (in the dock's chosen space) and the tab's own single-spectrum
-//! view yields until it is closed. It still owns its own plot, drawn in the
-//! shared central area via [`dock_plot`](PlotDataWindow::dock_plot). Save / zoom
-//! / legend come from the siplot toolbar; the data work (averaging, peak
-//! finding) is the headless [`xasdata`] code. A Feffit fit can also be sent here
-//! for a quick data-vs-model look ([`set_fit_overlay`]).
+//! It is a permanent right-hand control panel on the graph tabs (Autobk /
+//! Feffit) — no window, no toggle. There is one shared graph per tab
+//! ([`crate::app`]'s `plot`); this panel does not own a plot of its own but
+//! *overlays* its loaded-file curves (stacked, optionally averaged, with peak
+//! markers) onto that single graph via [`overlay_onto`](PlotDataWindow::overlay_onto),
+//! which the tab's replot calls after drawing its own base curves. Save / zoom /
+//! legend come from the siplot toolbar; the data work (averaging, peak finding)
+//! is the headless [`xasdata`] code. A Feffit fit can also be sent here for a
+//! quick data-vs-model look ([`set_fit_overlay`]).
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use eframe::egui;
-use eframe::egui_wgpu::RenderState;
 use egui::Color32;
 use feffit::xasdata::{average_curves, peak_in_range, x_at_y};
-use siplot::YAxis;
 
 use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_result, load_trace};
 use crate::widgets::{file_name_of, select_list};
@@ -58,23 +57,19 @@ pub(crate) const FIT_DATA: Color32 = crate::plot::BLUE;
 pub(crate) const FIT_MODEL: Color32 = crate::plot::RED;
 
 /// A Feffit fit handed over from the Feffit tab's "Send to Plot Data": its data
-/// and model curves in the chosen space, with that space's axis labels. When
-/// shown it takes over the plot (its axes differ from the file items).
+/// and model curves in the chosen space. Drawn on top of the loaded files on the
+/// tab's shared graph (which owns the axis labels), not on its own axes.
 struct FitOverlay {
     label: String,
-    xlabel: &'static str,
-    ylabel: &'static str,
     x: Vec<f64>,
     data: Vec<f64>,
     model: Vec<f64>,
 }
 
-/// The Plot Data dock state and its own plot. (Type name kept for continuity;
-/// it now renders as a docked panel, not a standalone OS window.)
+/// The Plot Data panel state. (Type name kept for continuity; it is now a
+/// docked control panel that overlays onto the tab's shared graph, not a
+/// standalone window owning its own plot.)
 pub struct PlotDataWindow {
-    /// Whether the dock is shown (toggled from the "Plot Data" menu button).
-    pub open: bool,
-    plot: crate::plot::Plot,
     /// k-weight applied to any loaded k-space file (their χ is stored unweighted).
     kweight: i32,
     /// Vertical offset added to trace `i` (`i · stack`), in data units.
@@ -94,12 +89,12 @@ pub struct PlotDataWindow {
     peaks: Vec<(String, f64, f64)>,
     /// A Feffit fit sent here via "Send to Plot Data", if any.
     overlay: Option<FitOverlay>,
-    /// Whether the sent fit takes over the plot (vs the loaded files).
+    /// Whether the sent fit is drawn (on top of the loaded files).
     show_overlay: bool,
-    /// The legend label of the curve highlighted by a legend click (drawn with a
-    /// thicker line, brought to front). `None` = nothing highlighted; clicking
-    /// the same entry again clears it. Plot Data only — the shared plot reports
-    /// the click, other tabs ignore it.
+    /// The legend label of the loaded-file (or "average") curve highlighted by a
+    /// legend click on the shared graph (drawn with a thicker line, brought to
+    /// front). `None` = nothing highlighted; clicking the same entry again clears
+    /// it. Clicks on the tab's own base curves are ignored.
     highlighted: Option<String>,
 
     // --- file viewer --------------------------------------------------------
@@ -129,8 +124,8 @@ pub struct PlotDataWindow {
     /// Outcome of the last load (shown in the Files section).
     pick_status: String,
     /// The configured "Results" folder (`Folders.results_dir`), kept in sync by
-    /// the app each frame via [`Self::show`]. "Save in single file" defaults its
-    /// dialog here, matching the original XAFSView.
+    /// the app each frame via [`Self::set_dirs`]. "Save in single file" defaults
+    /// its dialog here, matching the original XAFSView.
     results_dir: Option<PathBuf>,
     /// The configured "Data" folder (`Folders.data_dir`, under the Sub base),
     /// kept in sync the same way. The file picker opens here and the "Browse…"
@@ -141,15 +136,17 @@ pub struct PlotDataWindow {
     dirty: bool,
 }
 
+impl Default for PlotDataWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlotDataWindow {
-    /// Build the window with its own plot (use a distinct `PlotId` from the
-    /// tabs' shared plot).
-    pub fn new(render_state: &RenderState) -> Self {
-        let mut plot = crate::plot::Plot::new(render_state, 1);
-        plot.set_graph_title("Plot Data");
+    /// Build the panel state. It overlays onto the tab's shared graph and owns no
+    /// plot of its own.
+    pub fn new() -> Self {
         Self {
-            open: false,
-            plot,
             kweight: 2,
             stack: 0.0,
             show_average: false,
@@ -183,38 +180,57 @@ impl PlotDataWindow {
         }
     }
 
-    /// Request a rebuild on the next show.
+    /// Request a replot of the shared graph (the overlay changed: new files, a
+    /// control edit, a sent fit). The owning tab replots when [`take_dirty`] next
+    /// reports `true`.
+    ///
+    /// [`take_dirty`]: Self::take_dirty
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
+    /// Clear and report the dirty flag — `true` when the shared graph must be
+    /// rebuilt to reflect a changed overlay. The tab calls this after rendering
+    /// the panel and, on `true`, replots (which re-runs [`overlay_onto`]).
+    ///
+    /// [`overlay_onto`]: Self::overlay_onto
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
+    }
+
+    /// Toggle the legend-click highlight for an overlay curve (a loaded file or
+    /// the "average"). Clicks on the tab's own base curves are ignored, so a base
+    /// legend click does not disturb an overlay highlight. Marks the graph dirty
+    /// when it changes anything.
+    pub fn toggle_highlight(&mut self, label: String) {
+        let is_overlay = label == "average" || self.loaded.iter().any(|t| t.label == label);
+        if !is_overlay {
+            return;
+        }
+        self.highlighted = if self.highlighted.as_deref() == Some(label.as_str()) {
+            None
+        } else {
+            Some(label)
+        };
+        self.dirty = true;
+    }
+
     /// Take a Feffit fit's data + model curves (the Feffit form's "Send to plot
-    /// data"). The dock opens showing the fit; untick "Show Feffit fit" or
-    /// "Clear fit" to return to the loaded files.
-    pub fn set_fit_overlay(
-        &mut self,
-        label: String,
-        xlabel: &'static str,
-        ylabel: &'static str,
-        x: Vec<f64>,
-        data: Vec<f64>,
-        model: Vec<f64>,
-    ) {
+    /// data"). The fit is drawn on top of the loaded files; untick "Show Feffit
+    /// fit" or "Clear fit" to remove it.
+    pub fn set_fit_overlay(&mut self, label: String, x: Vec<f64>, data: Vec<f64>, model: Vec<f64>) {
         self.overlay = Some(FitOverlay {
             label,
-            xlabel,
-            ylabel,
             x,
             data,
             model,
         });
         self.show_overlay = true;
-        self.open = true;
         self.dirty = true;
     }
 
     /// Keep the configured Results/Data folders fresh (for the save dialog and
-    /// the file-picker defaults). Call once per frame, before the dock renders,
+    /// the file-picker defaults). Call once per frame, before the panel renders,
     /// in case the user reconfigures folders.
     pub fn set_dirs(
         &mut self,
@@ -225,49 +241,17 @@ impl PlotDataWindow {
         self.data_dir = data_dir.map(std::path::Path::to_path_buf);
     }
 
-    /// The dock's control column (Feffit-fit toggle, file selectors, k-weight,
+    /// The panel's control column (Feffit-fit toggle, file selectors, k-weight,
     /// stacking, averaging, peak search, save). Rendered in the right-hand Plot
-    /// Data dock panel on the graph tabs.
+    /// Data panel on the graph tabs.
     pub fn dock_controls(&mut self, ui: &mut egui::Ui) {
         self.controls(ui);
     }
 
-    /// The dock's overlay plot: rebuild the composite when dirty, draw it, and
-    /// handle legend-click highlighting. Rendered in the central graph area while
-    /// the dock is open — it replaces the tab's own single-spectrum view.
-    pub fn dock_plot(&mut self, ui: &mut egui::Ui) {
-        if self.dirty {
-            self.rebuild();
-            self.dirty = false;
-        }
-        crate::plot::show(&mut self.plot, ui);
-        // A legend click toggles which curve is highlighted (re-drawn emphasized
-        // on the next rebuild); clicking the active entry clears it.
-        if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
-            self.highlighted = if self.highlighted.as_deref() == Some(label.as_str()) {
-                None
-            } else {
-                Some(label)
-            };
-            self.dirty = true;
-        }
-    }
-
-    /// The left-hand control column: the file selectors, stacking, averaging,
-    /// and peak search.
+    /// The control column: the file selectors, stacking, averaging, and peak
+    /// search.
     fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading("Plot Data");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("Close")
-                    .on_hover_text("Close the Plot Data dock (returns the tab's own graph)")
-                    .clicked()
-                {
-                    self.open = false;
-                }
-            });
-        });
+        ui.heading("Plot Data");
 
         // A Feffit fit sent here overrides the file plot while shown.
         if let Some(ov) = &self.overlay {
@@ -478,7 +462,7 @@ impl PlotDataWindow {
     /// right "Selected Data" pane holds the staged picks. `=>` / `<=` move the
     /// highlighted rows between panes (multi-select by clicking), `OK` loads the
     /// selection. Shown as its own OS viewport (via [`crate::window::detached`])
-    /// so it can be dragged outside the Plot Data dock.
+    /// so it can be dragged outside the Plot Data panel.
     pub fn file_picker(&mut self, ctx: &egui::Context) {
         if !self.picker_open {
             return;
@@ -822,7 +806,11 @@ impl PlotDataWindow {
             } else {
                 t.y.clone()
             };
-            let color = palette[traces.len() % palette.len()];
+            // The shared tab graph already uses PALETTE[0]=BLUE (and often
+            // [1]=ORANGE) for its own base curve(s); start the file palette past
+            // them so an overlaid file does not share a base curve's colour.
+            const BASE_PALETTE_SPAN: usize = 2;
+            let color = palette[(traces.len() + BASE_PALETTE_SPAN) % palette.len()];
             traces.push((t.label.clone(), t.x.clone(), y, color));
         }
         traces
@@ -883,53 +871,53 @@ impl PlotDataWindow {
         };
     }
 
-    /// Rebuild every plotted curve from the loaded files and current settings.
-    /// Add one trace to the plot, drawn emphasized when it is the curve the user
-    /// highlighted by clicking its legend entry (thicker line, on top).
-    fn add_trace(&mut self, label: &str, x: &[f64], y: &[f64], color: Color32) {
+    /// Add one overlay trace to `plot`, drawn emphasized when it is the curve the
+    /// user highlighted by clicking its legend entry (thicker line, on top).
+    fn add_trace(
+        &self,
+        plot: &mut crate::plot::Plot,
+        label: &str,
+        x: &[f64],
+        y: &[f64],
+        color: Color32,
+    ) {
         if self.highlighted.as_deref() == Some(label) {
-            self.plot.add_emphasized_curve(x, y, color, label);
+            plot.add_emphasized_curve(x, y, color, label);
         } else {
-            self.plot.add_curve_with_legend(x, y, color, label);
+            plot.add_curve_with_legend(x, y, color, label);
         }
     }
 
-    fn rebuild(&mut self) {
-        self.plot.clear();
-
-        // Background colour (the "Change BG color" swap): a dark canvas or the
-        // default light one, applied via the shared `set_theme` so the axes and
-        // grid track the background too. `fg` is the overlay (average) colour,
-        // kept legible against the chosen background.
+    /// Overlay the panel's curves onto the tab's shared graph: a sent Feffit fit
+    /// (when shown), the loaded files (stacked, optionally 5-point-smoothed), an
+    /// optional average, and peak markers. The tab draws its own base curves and
+    /// sets the axis labels first; this appends on top and does *not* clear or
+    /// relabel, so the single graph's space stays the tab's. The canvas follows
+    /// the "Change BG color" toggle (dark house canvas by default).
+    pub fn overlay_onto(&self, plot: &mut crate::plot::Plot) {
+        // The single shared graph's canvas follows the "Change BG color" toggle:
+        // the cohesive dark canvas by default (dark_bg = true, matching every
+        // other plot), the white "Change BG" canvas when unticked. `fg` is the
+        // average-overlay colour, kept legible against the chosen background.
         let fg = if self.dark_bg {
             Color32::from_gray(0xe0)
         } else {
             Color32::from_rgb(0x20, 0x20, 0x20)
         };
-        crate::plot::set_theme(&mut self.plot, !self.dark_bg);
+        crate::plot::set_theme(plot, !self.dark_bg);
 
-        // A sent Feffit fit takes over the plot (its space/axes differ from the
-        // file items), so draw it alone and skip the file traces.
+        // A sent Feffit fit is drawn on top of the files (its space may differ
+        // from the tab's; it plots on the tab's axes like any other overlay).
         if self.show_overlay
             && let Some(ov) = &self.overlay
+            && !ov.x.is_empty()
         {
-            self.plot.set_graph_x_label(ov.xlabel);
-            self.plot.set_graph_y_label(ov.ylabel, YAxis::Left);
-            if !ov.x.is_empty() {
-                self.plot
-                    .add_curve_with_legend(&ov.x, &ov.data, FIT_DATA, "fit data");
-                // "Only FT" overlays carry no model curve.
-                if !ov.model.is_empty() {
-                    self.plot
-                        .add_curve_with_legend(&ov.x, &ov.model, FIT_MODEL, "fit model");
-                }
+            plot.add_curve_with_legend(&ov.x, &ov.data, FIT_DATA, "fit data");
+            // "Only FT" overlays carry no model curve.
+            if !ov.model.is_empty() {
+                plot.add_curve_with_legend(&ov.x, &ov.model, FIT_MODEL, "fit model");
             }
-            return;
         }
-
-        let (xlabel, ylabel) = self.axis_labels();
-        self.plot.set_graph_x_label(xlabel);
-        self.plot.set_graph_y_label(ylabel, YAxis::Left);
 
         // Palette colours and smoothing, before any stacking offset (shared with
         // the "Save in single file" path).
@@ -949,16 +937,15 @@ impl PlotDataWindow {
         // Stack the individual traces (offset i·stack) and draw.
         for (idx, (label, x, y, color)) in traces.into_iter().enumerate() {
             let ys = stack_offset_y(y, idx, self.stack);
-            self.add_trace(&label, &x, &ys, color);
+            self.add_trace(plot, &label, &x, &ys, color);
         }
 
         if let Some((x, y)) = avg {
-            self.add_trace("average", &x, &y, fg);
+            self.add_trace(plot, "average", &x, &y, fg);
         }
 
         for (_, px, _) in &self.peaks {
-            self.plot
-                .add_x_marker(*px, Color32::from_rgb(0x80, 0x80, 0x80));
+            plot.add_x_marker(*px, Color32::from_rgb(0x80, 0x80, 0x80));
         }
     }
 }

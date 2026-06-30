@@ -103,8 +103,8 @@ pub struct XafsViewApp {
     edit_xmu: EditXmuState,
     /// The Morlet wavelet-transform window (|W(k,R)| heatmap of χ(k)).
     wavelet: WaveletWindow,
-    /// The Plot Data dock (file/group overlay): a right-hand panel on the graph
-    /// tabs that takes over the central graph while open, with its own plot.
+    /// The Plot Data panel: a permanent right-hand panel on the graph tabs that
+    /// overlays loaded files onto the single shared tab graph (it owns no plot).
     plot_data: PlotDataWindow,
     /// The linear-combination-fitting window (its own plot).
     lcf: LcfWindow,
@@ -184,7 +184,7 @@ impl XafsViewApp {
             .collect();
         plot.add_curve_with_legend(&x, &y, crate::plot::BLUE, "demo edge");
 
-        let plot_data = PlotDataWindow::new(render_state);
+        let plot_data = PlotDataWindow::new();
         let lcf = LcfWindow::new(render_state);
         let pca = PcaWindow::new(render_state);
         let xanes = XanesWindow::new(render_state);
@@ -906,9 +906,21 @@ impl XafsViewApp {
     /// Redraw the shared plot for the active group according to the selected
     /// [`GraphType`]. Curves that need a stage not yet computed are skipped.
     fn replot_graph(&mut self) {
+        // Rebuild the single shared graph: the tab's own base curves first, then
+        // the Plot Data panel's loaded-file overlay on top. The overlay is always
+        // appended — even when there is no current group (so loaded files still
+        // show), since `replot_graph_base` early-returns before drawing any base.
+        self.plot.clear_curves();
+        self.replot_graph_base();
+        self.plot_data.overlay_onto(&mut self.plot);
+    }
+
+    /// Draw the Autobk tab's own base curves for the selected graph type into the
+    /// (already-cleared) shared plot. Called only by [`replot_graph`], which then
+    /// appends the Plot Data overlay.
+    fn replot_graph_base(&mut self) {
         use crate::plot::{BLUE, ORANGE};
 
-        self.plot.clear_curves();
         let graph = self.reduction.graph;
         let kweight = self.reduction.kweight;
         let Some(g) = self.session.current_group() else {
@@ -1056,15 +1068,12 @@ impl XafsViewApp {
         }
     }
 
-    /// When the Plot Data dock is open, render its controls as a right-hand panel
-    /// and return `true` so the caller draws the overlay in the central graph
-    /// area instead of the tab's own plot. Used by the graph tabs (Autobk /
-    /// Feffit); toggled from the "Plot Data" menu button.
-    fn plot_data_dock(&mut self, ui: &mut egui::Ui) -> bool {
-        if !self.plot_data.open {
-            return false;
-        }
-        egui::Panel::right("plot_data_dock")
+    /// Render the permanent Plot Data control panel on the right of a graph tab
+    /// and report whether the shared graph must be replotted (the overlay
+    /// changed: new files, a control edit, a sent fit). Added before the central
+    /// panel so the side panel reserves its width first.
+    fn plot_data_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        egui::Panel::right("plot_data_panel")
             .resizable(true)
             .default_size(260.0)
             .show_inside(ui, |ui| {
@@ -1072,13 +1081,13 @@ impl XafsViewApp {
                     self.plot_data.dock_controls(ui);
                 });
             });
-        true
+        self.plot_data.take_dirty()
     }
 
-    /// The Feffit tab: fit controls on the left, the data-vs-model plot in the
-    /// centre. The single editor *is* the batch configuration; "Batch…" opens the
-    /// batch in a detached window. While the Plot Data dock is open, the centre
-    /// shows its overlay instead of this tab's plot.
+    /// The Feffit tab: fit controls on the left, the permanent Plot Data panel on
+    /// the right, the data-vs-model plot in the centre. The single editor *is* the
+    /// batch configuration; "Batch…" opens the batch in a detached window. The
+    /// Plot Data panel overlays loaded files onto the same central graph.
     fn feffit_tab(&mut self, ui: &mut egui::Ui) {
         let mut feffit_action = None;
         // The original Feffit form's bottom "Exit" button is tab chrome, not part
@@ -1115,16 +1124,20 @@ impl XafsViewApp {
                     });
                 });
             });
-        // When open, the Plot Data dock takes a right-hand panel and the central
-        // graph (its overlay replaces the data-vs-model view until it is closed).
-        let dock = self.plot_data_dock(ui);
+        // The permanent Plot Data panel on the right; its overlay is drawn onto
+        // the single shared graph by `replot_feffit`, so a panel change replots
+        // before the graph is shown this frame.
+        if self.plot_data_panel(ui) {
+            self.replot_feffit();
+        }
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            if dock {
-                self.plot_data.dock_plot(ui);
-            } else {
-                crate::plot::show(&mut self.plot, ui);
-            }
+            crate::plot::show(&mut self.plot, ui);
         });
+        // A legend click on an overlay (loaded-file / average) curve toggles its
+        // highlight; the next replot redraws it emphasized.
+        if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
+            self.plot_data.toggle_highlight(label);
+        }
 
         if exit {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1309,11 +1322,22 @@ impl XafsViewApp {
     /// Redraw the shared plot with the last fit's data vs model in the selected
     /// space/part.
     fn replot_feffit(&mut self) {
+        // Rebuild the single shared graph: the data-vs-model base curves first,
+        // then the Plot Data panel's loaded-file overlay on top (appended even
+        // when there is no fit to plot, so loaded files still show).
+        self.plot.clear_curves();
+        self.replot_feffit_base();
+        self.plot_data.overlay_onto(&mut self.plot);
+    }
+
+    /// Draw the Feffit tab's own data-vs-model base curves into the
+    /// (already-cleared) shared plot. Called only by [`replot_feffit`], which
+    /// then appends the Plot Data overlay.
+    fn replot_feffit_base(&mut self) {
         use crate::feffit_ui::PlotSpace;
         use crate::plot::{GREEN, ORANGE};
         use crate::plot_data::{FIT_DATA, FIT_MODEL};
 
-        self.plot.clear_curves();
         let (space, part) = self.feffit.plot_selection();
         let Some(p) = self.feffit.plot() else {
             return;
@@ -1357,7 +1381,7 @@ impl XafsViewApp {
         }
     }
 
-    /// Hand the last Feffit fit's data + model curves to the Plot Data dock
+    /// Hand the last Feffit fit's data + model curves to the Plot Data panel
     /// (the Feffit form's "Send to plot data"), in the currently-selected space.
     fn send_feffit_to_plot_data(&mut self) {
         let label = match &self.feffit_fit_group {
@@ -1370,11 +1394,12 @@ impl XafsViewApp {
             return;
         };
         let has_model = p.has_model;
-        let (x, data_y, model_y, xlabel, ylabel) = p.series(space, part);
+        // The shared graph owns the axis labels, so the fit's own labels are
+        // dropped — it is drawn on top of the loaded files on the tab's axes.
+        let (x, data_y, model_y, _xlabel, _ylabel) = p.series(space, part);
         // "Only FT" has no model — send an empty model so Plot Data draws data alone.
         let model_y = if has_model { model_y } else { Vec::new() };
-        self.plot_data
-            .set_fit_overlay(label, xlabel, ylabel, x, data_y, model_y);
+        self.plot_data.set_fit_overlay(label, x, data_y, model_y);
         self.status = "Sent the Feffit fit (data + model) to Plot Data.".to_owned();
     }
 
@@ -1810,10 +1835,12 @@ impl XafsViewApp {
                     });
                 });
             });
-        // The Plot Data dock (when open) takes a right-hand panel and the central
-        // graph: its overlay replaces this tab's single-spectrum view, so the
-        // FT-window band below is skipped while it is shown.
-        let dock = self.plot_data_dock(ui);
+        // The permanent Plot Data panel on the right; its overlay is drawn onto
+        // the single shared graph by `replot_graph`, so a panel change replots
+        // before the band + graph are shown this frame.
+        if self.plot_data_panel(ui) {
+            self.replot_graph();
+        }
         // Draggable FT-window band over the curve: the forward k-window
         // (kmin/kmax) on the kʷ·χ(k) graph, the reverse R-window (rmin/rmax) on
         // the |χ(R)| graph. Other graphs show no band — `set_window` is simply not
@@ -1821,24 +1848,18 @@ impl XafsViewApp {
         // bound and recomputes live, the same `change.refit` path a finished
         // DragValue edit takes (kmin/kmax feed both the AUTOBK background window
         // and the FT, so a full recompute is the correct cost either way).
-        if !dock {
-            let active_window = match self.reduction.graph {
-                GraphType::KChi => Some((self.reduction.kmin, self.reduction.kmax)),
-                GraphType::ChiR => Some((self.reduction.rmin, self.reduction.rmax)),
-                _ => None,
-            };
-            if let Some((min, max)) = active_window {
-                crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
-            }
+        let active_window = match self.reduction.graph {
+            GraphType::KChi => Some((self.reduction.kmin, self.reduction.kmax)),
+            GraphType::ChiR => Some((self.reduction.rmin, self.reduction.rmax)),
+            _ => None,
+        };
+        if let Some((min, max)) = active_window {
+            crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
         }
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            if dock {
-                self.plot_data.dock_plot(ui);
-            } else {
-                crate::plot::show(&mut self.plot, ui);
-            }
+            crate::plot::show(&mut self.plot, ui);
         });
-        if !dock && let Some(w) = crate::plot::take_window_drag(&mut self.plot) {
+        if let Some(w) = crate::plot::take_window_drag(&mut self.plot) {
             // A left-edge drag past the right (or vice versa) inverts the pair;
             // re-order so min < max, and keep the lower bound off negative k/R.
             let (lo, hi) = if w.min <= w.max {
@@ -1859,6 +1880,11 @@ impl XafsViewApp {
                 _ => {}
             }
             change.refit = true;
+        }
+        // A legend click on an overlay (loaded-file / average) curve toggles its
+        // highlight; the next replot redraws it emphasized.
+        if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
+            self.plot_data.toggle_highlight(label);
         }
 
         if open_clicked {
@@ -2052,19 +2078,6 @@ impl XafsViewApp {
                     });
                 }
             });
-            // Plot Data is a co-primary viewer, not a dropdown action: a flat
-            // top-level button toggles its right-hand dock on the graph tabs, set
-            // apart from the menus by a separator.
-            ui.separator();
-            if ui
-                .selectable_label(self.plot_data.open, "Plot Data")
-                .clicked()
-            {
-                self.plot_data.open = !self.plot_data.open;
-                if self.plot_data.open {
-                    self.plot_data.mark_dirty();
-                }
-            }
         });
     }
 
@@ -2260,8 +2273,8 @@ impl eframe::App for XafsViewApp {
             });
         });
 
-        // Keep the Plot Data dock's folder defaults fresh before it renders
-        // inside the graph tabs (Autobk / Feffit) via `plot_data_dock`.
+        // Keep the Plot Data panel's folder defaults fresh before it renders
+        // inside the graph tabs (Autobk / Feffit) via `plot_data_panel`.
         self.plot_data.set_dirs(
             self.session.folders.results_dir.as_deref(),
             self.session.folders.data_dir.as_deref(),
@@ -2318,9 +2331,10 @@ impl eframe::App for XafsViewApp {
             None => {}
         }
 
-        // The Plot Data dock's controls + overlay plot now render inside the
-        // graph tabs (see `plot_data_dock`); only its file picker — a transient
-        // two-pane dialog in its own sub-window — renders here.
+        // The Plot Data panel's controls render inside the graph tabs (see
+        // `plot_data_panel`) and its overlay is appended to the shared graph by
+        // the tab replots; only its file picker — a transient two-pane dialog in
+        // its own sub-window — renders here.
         self.plot_data.file_picker(ui.ctx());
 
         // The detached "Data" window: the loaded-group manager (list + Add +
