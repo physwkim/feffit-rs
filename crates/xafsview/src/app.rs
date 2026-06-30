@@ -94,6 +94,11 @@ pub struct XafsViewApp {
     /// "Add data files…", and "Clear all") is shown. The Autobk sidebar keeps
     /// only a compact current-group combo; the full list lives here.
     data_window_open: bool,
+    /// Whether the detached "Feffit — Batch" window is shown. The Feffit tab
+    /// keeps only a "Batch…" button (left controls); the batch panel itself —
+    /// an occasional bulk op — opens on demand so the central plot keeps the
+    /// full width instead of a permanent right panel.
+    feffit_batch_open: bool,
     /// The Edit-μ(E) window (deglitch / trim / smooth) state.
     edit_xmu: EditXmuState,
     /// The Morlet wavelet-transform window (|W(k,R)| heatmap of χ(k)).
@@ -201,6 +206,7 @@ impl XafsViewApp {
             feffit_batch: FeffitBatch::default(),
             batch_load: BatchLoadWindow::default(),
             data_window_open: false,
+            feffit_batch_open: false,
             edit_xmu: EditXmuState::default(),
             wavelet: WaveletWindow::default(),
             plot_data,
@@ -1055,7 +1061,6 @@ impl XafsViewApp {
     /// (the former "Feffit batch" window, folded in).
     fn feffit_tab(&mut self, ui: &mut egui::Ui) {
         let mut feffit_action = None;
-        let mut batch_action = None;
         // The original Feffit form's bottom "Exit" button is tab chrome, not part
         // of the reusable control set, so it lives in this wrapper rather than in
         // `FeffitUi::controls`. Hide Log / Load result don't map to the engine
@@ -1070,19 +1075,24 @@ impl XafsViewApp {
                     feffit_action = self.feffit.controls(ui);
                     // Exit sits directly below the controls (그림 1-2-2-2), no gap.
                     ui.add_space(6.0);
-                    if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                        exit = true;
-                    }
-                });
-            });
-        egui::Panel::right("feffit_batch_panel")
-            .resizable(true)
-            .default_size(320.0)
-            .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    batch_action = self
-                        .feffit_batch
-                        .panel(ui, &self.session.groups, &self.feffit);
+                    ui.horizontal(|ui| {
+                        if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
+                            exit = true;
+                        }
+                        // The batch — an occasional bulk op — opens in its own
+                        // window (data_manager-style) so the central plot keeps
+                        // the full width.
+                        if ui
+                            .button("Batch…")
+                            .on_hover_text(
+                                "Run this fit setup against several checked groups, \
+                                 in a detached window",
+                            )
+                            .clicked()
+                        {
+                            self.feffit_batch_open = true;
+                        }
+                    });
                 });
             });
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -1102,11 +1112,34 @@ impl XafsViewApp {
             Some(FeffitAction::LoadInp) => self.load_feffit_inp(),
             None => {}
         }
-        match batch_action {
-            Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
-            Some(BatchAction::SaveFeffitOutputs(files)) => self.write_feffit_output_files(files),
-            None => {}
+    }
+
+    /// The detached "Feffit — Batch" window: the batch panel moved out of the
+    /// Feffit tab's right side (the tab keeps only a "Batch…" button). Runs the
+    /// Feffit tab's current config against the checked groups and tabulates /
+    /// saves the results. Returns a [`BatchAction`] for app-owned disk writes.
+    fn feffit_batch_window(&mut self, ctx: &egui::Context) -> Option<BatchAction> {
+        if !self.feffit_batch_open {
+            return None;
         }
+        let mut keep_open = true;
+        let mut action = None;
+        crate::window::detached(
+            ctx,
+            "feffit_batch",
+            "Feffit — Batch",
+            &mut keep_open,
+            [360.0, 520.0],
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    action = self
+                        .feffit_batch
+                        .panel(ui, &self.session.groups, &self.feffit);
+                });
+            },
+        );
+        self.feffit_batch_open = keep_open;
+        action
     }
 
     /// The Feffit_txt tab: a plain-text report of the last fit.
@@ -2229,6 +2262,14 @@ impl eframe::App for XafsViewApp {
         let ctx = ui.ctx().clone();
         if self.data_manager_window(&ctx) {
             self.replot_graph();
+        }
+
+        // The detached "Feffit — Batch" window: the batch panel moved out of the
+        // Feffit tab's right side. Its disk-write actions are app-owned.
+        match self.feffit_batch_window(&ctx) {
+            Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
+            Some(BatchAction::SaveFeffitOutputs(files)) => self.write_feffit_output_files(files),
+            None => {}
         }
 
         // The "Make μ(E) from files" staging picker: OK builds a group per
