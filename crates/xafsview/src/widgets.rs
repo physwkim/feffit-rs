@@ -84,6 +84,41 @@ pub fn select_list(
     }
 }
 
+/// Render `labels` as a multi-select column of `selectable_label` rows keyed by
+/// index: a plain click toggles a row, a shift-click extends an inclusive range
+/// from the last plain-clicked row (`anchor`). `sel` holds the selected indices.
+///
+/// The index-keyed sibling of [`select_list`] — for a stable, append-only list
+/// (e.g. the Feffit batch's session groups) where rows are identified by
+/// position rather than by value, and don't move between panes. Resetting the
+/// list should clear `anchor`, which stales on change.
+pub fn select_index_list<'a>(
+    ui: &mut egui::Ui,
+    labels: impl Iterator<Item = &'a str>,
+    sel: &mut HashSet<usize>,
+    anchor: &mut Option<usize>,
+) {
+    let shift = ui.input(|i| i.modifiers.shift);
+    for (idx, label) in labels.enumerate() {
+        let selected = sel.contains(&idx);
+        if ui.selectable_label(selected, label).clicked() {
+            match (shift, *anchor) {
+                (true, Some(a)) => {
+                    for i in a.min(idx)..=a.max(idx) {
+                        sel.insert(i);
+                    }
+                }
+                _ => {
+                    if !sel.remove(&idx) {
+                        sel.insert(idx);
+                    }
+                    *anchor = Some(idx);
+                }
+            }
+        }
+    }
+}
+
 /// A small square "remove" button: a bordered box with an ✕ painted inside.
 /// Painted rather than set from a glyph because the default UI fonts lack ✕
 /// (U+2715) and every box-with-✕ codepoint (☒/⊠/╳), which would render as a

@@ -73,6 +73,9 @@ pub enum BatchAction {
 pub struct FeffitBatch {
     /// Session group indices included in "Run all".
     members: HashSet<usize>,
+    /// Anchor row for shift-range selection of `members` (the last plain-clicked
+    /// row); `None` until a row is clicked. Stales if the group list changes.
+    anchor: Option<usize>,
     /// Results of the last "Run all" (one per member that existed at run time),
     /// in ascending group order.
     runs: Vec<GroupRun>,
@@ -87,6 +90,7 @@ impl Default for FeffitBatch {
     fn default() -> Self {
         Self {
             members: HashSet::new(),
+            anchor: None,
             runs: Vec::new(),
             // Default to the most-used items (N and the bond distance reff+Δr).
             save_sel: [false, false, true, false, false, false, false, true],
@@ -111,19 +115,28 @@ impl FeffitBatch {
         ui.label("Run the current fit setup against every checked group.");
 
         ui.separator();
-        ui.strong("Groups in batch");
+        ui.horizontal(|ui| {
+            ui.strong("Groups in batch");
+            ui.weak(format!("({} selected)", self.members.len()));
+        });
         if groups.is_empty() {
             ui.weak("No groups loaded.");
-        }
-        for (i, g) in groups.iter().enumerate() {
-            let mut inc = self.members.contains(&i);
-            if ui.checkbox(&mut inc, &g.label).changed() {
-                if inc {
-                    self.members.insert(i);
-                } else {
-                    self.members.remove(&i);
-                }
-            }
+        } else {
+            ui.weak("Click to toggle; shift-click to extend a range.");
+            // Bounded so the list (which can run to hundreds of groups) doesn't
+            // push "Run all" and the save actions off-screen.
+            egui::ScrollArea::vertical()
+                .id_salt("feffit_batch_groups")
+                .max_height(260.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    crate::widgets::select_index_list(
+                        ui,
+                        groups.iter().map(|g| g.label.as_str()),
+                        &mut self.members,
+                        &mut self.anchor,
+                    );
+                });
         }
 
         ui.separator();
