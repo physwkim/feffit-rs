@@ -1,13 +1,14 @@
 //! The **Feffit batch panel**: run the Feffit tab's current fit configuration
 //! against several loaded groups at once.
 //!
-//! Rendered inline on the right of the Feffit tab (not a separate window). The
-//! Feffit tab's single editor *is* the batch configuration — "Run all" applies
-//! that one config to every checked group (each fit independent, fanned across
-//! cores), tabulates the results, and can save every group's transforms and
-//! fitted parameters. There is no per-group config divergence by design: batch
-//! fitting shares one model across similar spectra, so the panel manages
-//! membership + run + save, while the tab's editor owns the model.
+//! Rendered in the detached "Feffit — Batch" window, opened from the Feffit
+//! tab's "Batch…" button. The Feffit tab's single editor *is* the batch
+//! configuration — "Run all" applies that one config to every selected group
+//! (each fit independent, fanned across cores), tabulates the results, and can
+//! save every group's transforms and fitted parameters. There is no per-group
+//! config divergence by design: batch fitting shares one model across similar
+//! spectra, so the panel manages membership + run + save, while the tab's editor
+//! owns the model.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
