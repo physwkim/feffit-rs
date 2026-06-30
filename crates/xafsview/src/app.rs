@@ -911,8 +911,11 @@ impl XafsViewApp {
         // the Plot Data panel's loaded-file overlay on top. The overlay is always
         // appended — even when there is no current group (so loaded files still
         // show), since `replot_graph_base` early-returns before drawing any base.
+        // "Clear All" in the Plot Data panel hides the base curves (`show_base`).
         self.plot.clear_curves();
-        self.replot_graph_base();
+        if self.plot_data.show_base() {
+            self.replot_graph_base();
+        }
         self.plot_data.overlay_onto(&mut self.plot);
     }
 
@@ -1329,9 +1332,12 @@ impl XafsViewApp {
     fn replot_feffit(&mut self) {
         // Rebuild the single shared graph: the data-vs-model base curves first,
         // then the Plot Data panel's loaded-file overlay on top (appended even
-        // when there is no fit to plot, so loaded files still show).
+        // when there is no fit to plot, so loaded files still show). "Clear All"
+        // in the Plot Data panel hides the base curves (`show_base`).
         self.plot.clear_curves();
-        self.replot_feffit_base();
+        if self.plot_data.show_base() {
+            self.replot_feffit_base();
+        }
         self.plot_data.overlay_onto(&mut self.plot);
     }
 

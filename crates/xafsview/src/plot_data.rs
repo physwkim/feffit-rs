@@ -97,6 +97,13 @@ pub struct PlotDataWindow {
     /// front). `None` = nothing highlighted; clicking the same entry again clears
     /// it. Clicks on the tab's own base curves are ignored.
     highlighted: Option<String>,
+    /// Whether the tab's own base curves (the Autobk reduction / the Feffit
+    /// data+model) are drawn on the shared graph. `false` removes them so only the
+    /// loaded-file overlay (and average/peaks) shows. "Clear All" sets it `false`;
+    /// the "Show Autobk/Feffit curve(s)" checkbox is the visible owner that
+    /// restores it. The owning tab reads it via [`show_base`](Self::show_base)
+    /// before drawing its base.
+    show_base: bool,
 
     // --- file viewer --------------------------------------------------------
     /// The selected *File type* for browsing/loading files.
@@ -163,6 +170,7 @@ impl PlotDataWindow {
             overlay: None,
             show_overlay: false,
             highlighted: None,
+            show_base: true,
             file_type: FileType::Chi,
             graph_item: FileType::Chi.default_item(),
             loaded: Vec::new(),
@@ -197,6 +205,13 @@ impl PlotDataWindow {
     /// [`overlay_onto`]: Self::overlay_onto
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    /// Whether the owning tab should draw its own base curves (the Autobk
+    /// reduction / the Feffit data+model) on the shared graph. `false` after
+    /// "Clear All" until the "Show Autobk/Feffit curve(s)" checkbox re-enables it.
+    pub fn show_base(&self) -> bool {
+        self.show_base
     }
 
     /// Toggle the legend-click highlight for an overlay curve (a loaded file or
@@ -488,10 +503,39 @@ impl PlotDataWindow {
                 self.loaded.remove(i);
                 self.dirty = true;
             }
-            if ui.button("Clear Graph").clicked() {
+            if ui
+                .button("Clear Graph")
+                .on_hover_text("Remove the loaded files only")
+                .clicked()
+            {
                 self.loaded.clear();
                 self.dirty = true;
             }
+        }
+        ui.separator();
+        // The tab's own curve (the Autobk reduction / Feffit data+model) is drawn
+        // by the tab, not loaded here; this checkbox is the visible owner of its
+        // visibility, and "Clear All" wipes everything (files + base curve).
+        if ui
+            .checkbox(&mut self.show_base, "Show Autobk/Feffit curve(s)")
+            .on_hover_text("The tab's own processed curve (Autobk reduction / Feffit data+model)")
+            .changed()
+        {
+            self.dirty = true;
+        }
+        if ui
+            .button("Clear All")
+            .on_hover_text(
+                "Remove everything from the graph: the loaded files, any sent \
+                 Feffit fit, and the tab's Autobk/Feffit curve",
+            )
+            .clicked()
+        {
+            self.loaded.clear();
+            self.overlay = None;
+            self.show_overlay = false;
+            self.show_base = false;
+            self.dirty = true;
         }
         if !self.pick_status.is_empty() {
             ui.weak(&self.pick_status);
