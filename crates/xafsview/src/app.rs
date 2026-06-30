@@ -103,9 +103,9 @@ pub struct XafsViewApp {
     edit_xmu: EditXmuState,
     /// The Morlet wavelet-transform window (|W(k,R)| heatmap of χ(k)).
     wavelet: WaveletWindow,
-    /// The Plot Data panel: its controls sit at the bottom of each graph tab's
-    /// left controls panel and overlay loaded files onto the single shared tab
-    /// graph (it owns no plot).
+    /// The Plot Data panel: its controls sit in a strip below the graph on each
+    /// tab and overlay loaded files onto the single shared tab graph (it owns no
+    /// plot).
     plot_data: PlotDataWindow,
     /// The linear-combination-fitting window (its own plot).
     lcf: LcfWindow,
@@ -1069,10 +1069,30 @@ impl XafsViewApp {
         }
     }
 
-    /// The Feffit tab: fit controls on the left (with the Plot Data controls
-    /// below them), the data-vs-model plot in the centre. The single editor *is*
-    /// the batch configuration; "Batch…" opens the batch in a detached window. The
-    /// Plot Data controls overlay loaded files onto the same central graph.
+    /// Render the Plot Data controls as a resizable strip below the graph (so the
+    /// central graph keeps the full width) and report whether the shared graph
+    /// must be replotted (the overlay changed: new files, a control edit, a sent
+    /// fit). Added before the central panel so the strip reserves its height first.
+    fn plot_data_strip(&mut self, ui: &mut egui::Ui) -> bool {
+        egui::Panel::bottom("plot_data_strip")
+            .resizable(true)
+            .default_size(180.0)
+            .show_inside(ui, |ui| {
+                ui.add_space(2.0);
+                ui.strong("Plot Data");
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.plot_data.controls_ui(ui);
+                    });
+            });
+        self.plot_data.take_dirty()
+    }
+
+    /// The Feffit tab: fit controls on the left, the data-vs-model plot in the
+    /// centre, and the Plot Data controls in a strip below it. The single editor
+    /// *is* the batch configuration; "Batch…" opens the batch in a detached
+    /// window. The Plot Data controls overlay loaded files onto the central graph.
     fn feffit_tab(&mut self, ui: &mut egui::Ui) {
         let mut feffit_action = None;
         // The original Feffit form's bottom "Exit" button is tab chrome, not part
@@ -1107,16 +1127,12 @@ impl XafsViewApp {
                             self.feffit_batch_open = true;
                         }
                     });
-                    // The Plot Data controls sit at the bottom of the left panel
-                    // (below the fit controls) so the central graph keeps the full
-                    // width; the file overlay is still drawn onto that one graph.
-                    ui.separator();
-                    self.plot_data.controls_ui(ui);
                 });
             });
-        // A change in the Plot Data controls (in the left panel) replots the
-        // shared graph — re-appending the loaded-file overlay — before it shows.
-        if self.plot_data.take_dirty() {
+        // The Plot Data controls live in a strip below the graph (full graph
+        // width); a change there replots the shared graph — re-appending the
+        // loaded-file overlay — before it shows.
+        if self.plot_data_strip(ui) {
             self.replot_feffit();
         }
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -1821,19 +1837,13 @@ impl XafsViewApp {
                                 edit_clicked = true;
                             }
                         });
-                        // The Plot Data controls sit at the bottom of the left
-                        // panel (below the Autobk controls) so the central graph
-                        // keeps the full width; the file overlay is still drawn
-                        // onto that one graph.
-                        ui.separator();
-                        self.plot_data.controls_ui(ui);
                     });
                 });
             });
-        // A change in the Plot Data controls (in the left panel) replots the
-        // shared graph — re-appending the loaded-file overlay — before the band +
-        // graph are shown this frame.
-        if self.plot_data.take_dirty() {
+        // The Plot Data controls live in a strip below the graph (full graph
+        // width); a change there replots the shared graph — re-appending the
+        // loaded-file overlay — before the band + graph are shown this frame.
+        if self.plot_data_strip(ui) {
             self.replot_graph();
         }
         // Draggable FT-window band over the curve: the forward k-window
@@ -2269,7 +2279,7 @@ impl eframe::App for XafsViewApp {
         });
 
         // Keep the Plot Data panel's folder defaults fresh before its controls
-        // render inside the graph tabs' left panels (Autobk / Feffit).
+        // render in the strip below the graph (Autobk / Feffit).
         self.plot_data.set_dirs(
             self.session.folders.results_dir.as_deref(),
             self.session.folders.data_dir.as_deref(),
@@ -2326,10 +2336,10 @@ impl eframe::App for XafsViewApp {
             None => {}
         }
 
-        // The Plot Data controls render at the bottom of the graph tabs' left
-        // panels and its overlay is appended to the shared graph by the tab
-        // replots; only its file picker — a transient two-pane dialog in its own
-        // sub-window — renders here.
+        // The Plot Data controls render in the strip below the graph tabs and its
+        // overlay is appended to the shared graph by the tab replots; only its
+        // file picker — a transient two-pane dialog in its own sub-window —
+        // renders here.
         self.plot_data.file_picker(ui.ctx());
 
         // The detached "Data" window: the loaded-group manager (list + Add +

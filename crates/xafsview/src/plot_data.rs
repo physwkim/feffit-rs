@@ -5,9 +5,9 @@
 //! XAFSView's *Plot Data*, which shows data read from files rather than the
 //! in-memory session groups.
 //!
-//! Its controls live at the bottom of each graph tab's left controls panel
-//! (Autobk / Feffit), below the tab's own controls — no window, no toggle, so the
-//! central graph keeps the full width. There is one shared graph per tab
+//! Its controls live in a resizable strip below the graph on each tab (Autobk /
+//! Feffit) — no window, no toggle, laid out as grouped columns so the central
+//! graph keeps the full width above it. There is one shared graph per tab
 //! ([`crate::app`]'s `plot`); this panel does not own a plot of its own but
 //! *overlays* its loaded-file curves (stacked, optionally averaged, with peak
 //! markers) onto that single graph via [`overlay_onto`](PlotDataWindow::overlay_onto),
@@ -242,39 +242,73 @@ impl PlotDataWindow {
         self.data_dir = data_dir.map(std::path::Path::to_path_buf);
     }
 
-    /// The Plot Data control column (Feffit-fit toggle, file selectors, k-weight,
-    /// stacking, averaging, peak search, save). Rendered at the bottom of the
-    /// graph tab's left controls panel, below the tab's own controls.
+    /// The Plot Data controls (Feffit-fit toggle, file selectors, k-weight,
+    /// stacking, averaging, peak search, save), laid out as grouped columns for
+    /// the strip panel below the graph.
     pub fn controls_ui(&mut self, ui: &mut egui::Ui) {
         self.controls(ui);
     }
 
-    /// The control column: the file selectors, stacking, averaging, and peak
-    /// search.
+    /// The control column, laid out as a strip of grouped columns (Files /
+    /// Display / Peaks / Fit + actions) placed side by side, so it reads well in
+    /// the bottom panel below the graph rather than as one tall column.
     fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Plot Data");
+        ui.horizontal_top(|ui| {
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_min_width(210.0);
+                    self.files_controls(ui);
+                });
+            });
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_min_width(180.0);
+                    self.display_controls(ui);
+                });
+            });
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_min_width(180.0);
+                    self.peak_controls(ui);
+                });
+            });
+            ui.group(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_min_width(160.0);
+                    self.fit_overlay_controls(ui);
+                    self.action_controls(ui);
+                });
+            });
+        });
+    }
 
-        // A Feffit fit sent here overrides the file plot while shown.
-        if let Some(ov) = &self.overlay {
-            let label = ov.label.clone();
-            ui.separator();
-            ui.strong("Feffit fit");
-            if ui
-                .checkbox(&mut self.show_overlay, "Show Feffit fit (data + model)")
-                .changed()
-            {
-                self.dirty = true;
-            }
-            ui.weak(label);
-            if ui.button("Clear fit").clicked() {
-                self.overlay = None;
-                self.show_overlay = false;
-                self.dirty = true;
-            }
-            ui.separator();
+    /// The "Feffit fit" group: a fit sent here (data + model) overrides the file
+    /// plot while shown. Renders nothing when no fit has been sent.
+    fn fit_overlay_controls(&mut self, ui: &mut egui::Ui) {
+        let Some(ov) = &self.overlay else {
+            return;
+        };
+        let label = ov.label.clone();
+        ui.strong("Feffit fit");
+        if ui
+            .checkbox(&mut self.show_overlay, "Show Feffit fit (data + model)")
+            .changed()
+        {
+            self.dirty = true;
         }
+        ui.weak(label);
+        if ui.button("Clear fit").clicked() {
+            self.overlay = None;
+            self.show_overlay = false;
+            self.dirty = true;
+        }
+        ui.separator();
+    }
 
-        self.files_controls(ui);
+    /// The "Display" group: k-weight, stack offset, averaging, smoothing, and the
+    /// dark/white canvas toggle.
+    fn display_controls(&mut self, ui: &mut egui::Ui) {
+        ui.strong("Display");
 
         // k-weight re-reads any loaded k-space file (their χ is stored
         // unweighted) so the overlay tracks the slider.
@@ -287,8 +321,6 @@ impl PlotDataWindow {
             self.reload_loaded();
             self.dirty = true;
         }
-
-        ui.separator();
         if ui
             .add(egui::Slider::new(&mut self.stack, 0.0..=5.0).text("stack offset"))
             .changed()
@@ -314,9 +346,12 @@ impl PlotDataWindow {
         {
             self.dirty = true;
         }
+    }
 
-        ui.separator();
-        ui.label("Multiple peak catching");
+    /// The "Multiple peak catching" group: the mode, the x-range, and the caught
+    /// peak list.
+    fn peak_controls(&mut self, ui: &mut egui::Ui) {
+        ui.strong("Multiple peak catching");
         egui::ComboBox::from_id_salt("peak_mode")
             .selected_text(self.peak_mode.label())
             .show_ui(ui, |ui| {
@@ -344,27 +379,28 @@ impl PlotDataWindow {
             ui.weak("no peaks caught");
         } else {
             egui::ScrollArea::vertical()
-                .max_height(140.0)
+                .id_salt("peak_list")
+                .max_height(90.0)
                 .show(ui, |ui| {
                     for (label, x, y) in &self.peaks {
                         ui.monospace(format!("{label}:  x = {x:.4}, y = {y:.5}"));
                     }
                 });
         }
+    }
 
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("Replot").clicked() {
-                self.dirty = true;
-            }
-            if ui
-                .button("Save in single file…")
-                .on_hover_text("Write every displayed curve (stacked) to one file")
-                .clicked()
-            {
-                self.save_composite();
-            }
-        });
+    /// The "Replot" / "Save in single file" actions.
+    fn action_controls(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Replot").clicked() {
+            self.dirty = true;
+        }
+        if ui
+            .button("Save in single file…")
+            .on_hover_text("Write every displayed curve (stacked) to one file")
+            .clicked()
+        {
+            self.save_composite();
+        }
     }
 
     /// Apply the chosen finder to every loaded file over `[peak_lo, peak_hi]`,
@@ -401,7 +437,6 @@ impl PlotDataWindow {
     /// The "Files" control block: file-type / graph-item selectors, the picker
     /// button, the loaded-file list, and Clear Graph.
     fn files_controls(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
         ui.strong("Files");
 
         // The file type / graph item are chosen in the File-selection window
@@ -433,17 +468,22 @@ impl PlotDataWindow {
             ui.add_space(2.0);
             ui.label(format!("{} file(s) loaded:", self.loaded.len()));
             let mut remove = None;
-            for (i, t) in self.loaded.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    if crate::widgets::delete_box(ui)
-                        .on_hover_text("Remove")
-                        .clicked()
-                    {
-                        remove = Some(i);
+            egui::ScrollArea::vertical()
+                .id_salt("loaded_list")
+                .max_height(90.0)
+                .show(ui, |ui| {
+                    for (i, t) in self.loaded.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if crate::widgets::delete_box(ui)
+                                .on_hover_text("Remove")
+                                .clicked()
+                            {
+                                remove = Some(i);
+                            }
+                            ui.label(&t.label).on_hover_text(t.item.label());
+                        });
                     }
-                    ui.label(&t.label).on_hover_text(t.item.label());
                 });
-            }
             if let Some(i) = remove {
                 self.loaded.remove(i);
                 self.dirty = true;
