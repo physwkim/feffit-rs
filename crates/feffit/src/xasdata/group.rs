@@ -12,6 +12,7 @@
 //! current selection, and the configured working [`Folders`]. The eframe app
 //! wraps a `Session` and adds GUI-only state (the plot, active tab, dialogs).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -209,6 +210,17 @@ pub struct Session {
     pub groups: Vec<XasGroup>,
     /// Index of the active group in `groups`, if any.
     pub current: Option<usize>,
+    /// Indices of the groups checked for a "Run" (Autobk reduce / Feffit fit).
+    /// Shared by both stages — the single "selected file list" — so checking a
+    /// group once scopes every tab's Run to it. Kept a subset of `0..groups.len()`
+    /// by construction: [`add_group`](Self::add_group) checks each new group,
+    /// [`remove_group`](Self::remove_group) drops/shifts indices in lockstep with
+    /// `groups`. Empty means "no explicit selection" — [`run_targets`] then falls
+    /// back to the current group.
+    ///
+    /// [`run_targets`]: Self::run_targets
+    #[serde(default)]
+    pub selected: HashSet<usize>,
     /// Configured working directories.
     pub folders: Folders,
 }
@@ -220,10 +232,13 @@ impl Session {
     }
 
     /// Append a group and make it the current selection; returns its index.
+    /// The new group is also checked for Run (see [`selected`](Self::selected)),
+    /// so a freshly loaded set defaults to "Run all of them".
     pub fn add_group(&mut self, group: XasGroup) -> usize {
         self.groups.push(group);
         let idx = self.groups.len() - 1;
         self.current = Some(idx);
+        self.selected.insert(idx);
         idx
     }
 
@@ -248,7 +263,60 @@ impl Session {
             // the new last index (so a removed *last* group selects its predecessor).
             Some(c) => Some(c.min(self.groups.len() - 1)),
         };
+        // Keep `selected` aligned with the shifted indices: drop the removed slot
+        // and slide every checked index above it down by one, so membership tracks
+        // the same groups it did before the removal.
+        self.selected = self
+            .selected
+            .iter()
+            .filter_map(|&s| match s {
+                s if s < idx => Some(s),
+                s if s > idx => Some(s - 1),
+                _ => None, // s == idx: the removed group
+            })
+            .collect();
         Some(removed)
+    }
+
+    /// Whether the group at `idx` is checked for Run.
+    pub fn is_selected(&self, idx: usize) -> bool {
+        self.selected.contains(&idx)
+    }
+
+    /// Check (`on = true`) or uncheck the group at `idx` for Run. Out-of-range
+    /// indices are ignored so the set stays a subset of `0..groups.len()`.
+    pub fn set_selected(&mut self, idx: usize, on: bool) {
+        if idx >= self.groups.len() {
+            return;
+        }
+        if on {
+            self.selected.insert(idx);
+        } else {
+            self.selected.remove(&idx);
+        }
+    }
+
+    /// Check every loaded group for Run.
+    pub fn select_all(&mut self) {
+        self.selected = (0..self.groups.len()).collect();
+    }
+
+    /// Uncheck every group (Run then falls back to the current group).
+    pub fn clear_selected(&mut self) {
+        self.selected.clear();
+    }
+
+    /// The groups a "Run" acts on, in ascending index order: the checked set, or
+    /// — when nothing is checked — the current group alone (empty only when no
+    /// group is loaded/current). The single scope both Autobk Run and Feffit Run
+    /// resolve their working set through.
+    pub fn run_targets(&self) -> Vec<usize> {
+        if self.selected.is_empty() {
+            return self.current.into_iter().collect();
+        }
+        let mut v: Vec<usize> = self.selected.iter().copied().collect();
+        v.sort_unstable();
+        v
     }
 
     /// The currently selected group, if any.
@@ -342,6 +410,70 @@ mod tests {
         s.remove_group(0);
         assert!(s.groups.is_empty());
         assert_eq!(s.current, None);
+    }
+
+    #[test]
+    fn add_group_checks_new_group_for_run() {
+        let mut s = Session::new();
+        s.add_group(XasGroup::from_mu("a", vec![1.0], vec![0.1])); // 0
+        s.add_group(XasGroup::from_mu("b", vec![1.0], vec![0.1])); // 1
+        // Every freshly loaded group is checked by default.
+        assert!(s.is_selected(0));
+        assert!(s.is_selected(1));
+        assert_eq!(s.run_targets(), vec![0, 1]);
+    }
+
+    #[test]
+    fn remove_group_shifts_selected_at_every_boundary() {
+        let mk = |n: &str| XasGroup::from_mu(n, vec![1.0], vec![0.1]);
+        let setup = || {
+            let mut s = Session::new();
+            s.add_group(mk("a")); // 0
+            s.add_group(mk("b")); // 1
+            s.add_group(mk("c")); // 2
+            s.add_group(mk("d")); // 3
+            s
+        };
+
+        // Check {1, 3}; remove index 0 (below both): they slide down to {0, 2}.
+        let mut s = setup();
+        s.selected = HashSet::from([1, 3]);
+        s.remove_group(0);
+        assert_eq!(s.run_targets(), vec![0, 2]); // b, d — still b and d
+
+        // Check {0, 2}; remove index 2 (a checked member): drops out, above unchanged.
+        let mut s = setup();
+        s.selected = HashSet::from([0, 2]);
+        s.remove_group(2);
+        assert_eq!(s.run_targets(), vec![0]); // only a remains checked
+
+        // Check {2, 3}; remove index 1 (between): both slide down to {1, 2}.
+        let mut s = setup();
+        s.selected = HashSet::from([2, 3]);
+        s.remove_group(1);
+        assert_eq!(s.run_targets(), vec![1, 2]); // c, d — still c and d
+    }
+
+    #[test]
+    fn run_targets_falls_back_to_current_when_none_checked() {
+        let mut s = Session::new();
+        // No groups: empty.
+        assert!(s.run_targets().is_empty());
+
+        s.add_group(XasGroup::from_mu("a", vec![1.0], vec![0.1])); // 0
+        s.add_group(XasGroup::from_mu("b", vec![1.0], vec![0.1])); // 1
+        s.current = Some(1);
+
+        // With a selection, that is the run set (current is irrelevant).
+        assert_eq!(s.run_targets(), vec![0, 1]);
+
+        // Uncheck everything: falls back to the current group alone.
+        s.clear_selected();
+        assert_eq!(s.run_targets(), vec![1]);
+
+        // select_all re-checks the whole list.
+        s.select_all();
+        assert_eq!(s.run_targets(), vec![0, 1]);
     }
 
     #[test]

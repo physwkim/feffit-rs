@@ -477,33 +477,101 @@ impl XafsViewApp {
         Some(info)
     }
 
+    /// Run AUTOBK on every group in the run set ([`Session::run_targets`]: the
+    /// checked groups, or the current group when nothing is checked) and write
+    /// each group's χ files. A single target keeps the original single-Autobk
+    /// behaviour (the editable "Output file" stem, detailed status); several use
+    /// each group's own label so the outputs stay distinct.
     fn run_reduction(&mut self) {
-        let Some(info) = self.recompute_reduction() else {
+        let targets = self.session.run_targets();
+        if targets.is_empty() {
+            self.status = "No data to reduce.".to_owned();
             return;
-        };
-        // Original Autobk "Output file" behaviour: persist χ(k) → <stem>k.chi and
-        // χ(R) → <stem>r.chi once the transform has produced them. The stem is the
-        // editable "Output file" name, falling back to the group label.
-        let saved = match self.session.current_group() {
-            Some(g) if g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some() => {
-                let stem = std::path::Path::new(self.reduction.output_file.trim())
+        }
+        let pre = self.reduction.pre_params();
+        let bk = self.reduction.autobk_params();
+        let ft = self.reduction.ft_params();
+        let xr = self.reduction.xftr_params();
+        let current = self.session.current;
+        // Reduce each checked group; skip any without μ(E) (e.g. a directly-loaded
+        // χ(k) group). Record the current group's (E₀, k-count) for the status.
+        let mut reduced = 0usize;
+        let mut current_info: Option<(f64, usize)> = None;
+        for &idx in &targets {
+            let Some(g) = self.session.groups.get_mut(idx) else {
+                continue;
+            };
+            if g.mu.is_empty() {
+                continue;
+            }
+            feffit::xasdata::normalize(g, &pre);
+            feffit::xasdata::autobk_group(g, &bk, 1.0);
+            feffit::xasdata::xftf_group(g, &ft);
+            feffit::xasdata::xftr_group(g, &xr);
+            reduced += 1;
+            if Some(idx) == current {
+                current_info = Some((g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len())));
+            }
+        }
+        if reduced == 0 {
+            self.status = "No μ(E) in the selected group(s) — Calc XMU first.".to_owned();
+            return;
+        }
+        // Persist χ(k)/χ(R) (+ background) per group. Original single-Autobk
+        // "Output file" behaviour when there is one target; per-group labels when
+        // several, so the batch outputs stay distinct.
+        let single = targets.len() == 1;
+        let mut saved = 0usize;
+        let mut write_failed = 0usize;
+        let mut single_paths = None;
+        for &idx in &targets {
+            let Some(g) = self.session.groups.get(idx) else {
+                continue;
+            };
+            if !(g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some()) {
+                continue;
+            }
+            let stem = if single {
+                std::path::Path::new(self.reduction.output_file.trim())
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| g.label.clone());
-                match self.write_chi_files(g, &stem) {
-                    Ok((kp, rp)) => {
-                        format!(" · saved {} + {}", file_name_of(&kp), file_name_of(&rp))
+                    .unwrap_or_else(|| g.label.clone())
+            } else {
+                g.label.clone()
+            };
+            match self.write_chi_files(g, &stem) {
+                Ok(paths) => {
+                    saved += 1;
+                    if single {
+                        single_paths = Some(paths);
                     }
-                    Err(e) => format!(" · χ files not written: {e}"),
                 }
+                Err(_) => write_failed += 1,
             }
-            _ => String::new(),
+        }
+        let fail = if write_failed > 0 {
+            format!(", {write_failed} write error(s)")
+        } else {
+            String::new()
         };
-        self.status = format!(
-            "AUTOBK done: E₀ = {:.2} eV, {} k-points{saved}",
-            info.0, info.1
-        );
+        self.status = match (single, current_info, single_paths) {
+            (true, Some((e0, npts)), Some((kp, rp))) => format!(
+                "AUTOBK done: E₀ = {e0:.2} eV, {npts} k-points · saved {} + {}",
+                file_name_of(&kp),
+                file_name_of(&rp)
+            ),
+            (true, Some((e0, npts)), None) => {
+                format!("AUTOBK done: E₀ = {e0:.2} eV, {npts} k-points{fail}")
+            }
+            _ => format!("AUTOBK: reduced {reduced} group(s); saved {saved} χ pair(s){fail}"),
+        };
+        // Show the whole batch at once when several were reduced.
+        if targets.len() > 1 {
+            self.show_all_groups = true;
+        }
+        self.plot_data.mark_dirty();
+        self.replot_graph();
     }
 
     /// Write the AUTOBK outputs the original's "Output file" produces: χ(k) →
@@ -585,18 +653,23 @@ impl XafsViewApp {
     /// Write the FEFFIT transforms the original's Plot Data reads: the data in
     /// k/r/q space → `<stem>k.dat`/`<stem>r.dat`/`<stem>q.dat` and the model →
     /// `<stem>k.fit`/`<stem>r.fit`/`<stem>q.fit`, into the Feffit folder (falling
-    /// back to the data folder). Returns the number of files written (6).
-    fn write_feffit_outputs(&self, plot: &FeffitPlot, stem: &str) -> std::io::Result<usize> {
+    /// back to the data folder). Returns the number of files written (6). The
+    /// provenance header is built from the group at `group_idx` — the group this
+    /// `plot` was fitted from — so a multi-group Feffit Run writes each group's
+    /// own provenance, not the current selection's.
+    fn write_feffit_outputs(
+        &self,
+        plot: &FeffitPlot,
+        stem: &str,
+        group_idx: usize,
+    ) -> std::io::Result<usize> {
         let stem = match stem.trim() {
             "" => "feffit",
             s => s,
         };
         let dir = self.feffit_output_dir();
-        // run_feffit fits the current group and writes immediately, so the
-        // current group is the fitted one — build the provenance header from it
-        // plus the Feffit-tab FT params.
         let (kmin, kmax, kweight, dk) = self.feffit.header_ft();
-        let header = match self.session.current_group() {
+        let header = match self.session.groups.get(group_idx) {
             Some(g) => crate::chi_io::provenance_header(g, kmin, kmax, kweight, dk),
             None => format!("# {stem}\r\n"),
         };
@@ -1180,6 +1253,26 @@ impl XafsViewApp {
                     feffit_action = self.feffit.controls(ui);
                     // Exit sits directly below the controls (그림 1-2-2-2), no gap.
                     ui.add_space(6.0);
+                    // Run fits every checked group (shared with the Autobk tab); this
+                    // row shows and opens that selection.
+                    let n_groups = self.session.groups.len();
+                    if n_groups > 0 {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button("Data…")
+                                .on_hover_text(
+                                    "Choose which groups Run fits (shared with the Autobk tab)",
+                                )
+                                .clicked()
+                            {
+                                self.data_window_open = true;
+                            }
+                            ui.weak(format!(
+                                "{}/{n_groups} checked for Run",
+                                self.session.selected.len()
+                            ));
+                        });
+                    }
                     ui.horizontal(|ui| {
                         if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
                             exit = true;
@@ -1352,36 +1445,108 @@ impl XafsViewApp {
     }
 
     /// Run the FEFFIT fit on the current group's `chi(k)` and redraw.
+    /// Fit the Feffit tab's current config against every group in the run set
+    /// ([`Session::run_targets`]: the checked groups, or the current group when
+    /// nothing is checked), writing each group's `.dat`/`.fit` transforms. The
+    /// focused fit — the current group when it is in the set, else the first
+    /// target — lives in `self.feffit` so the tab graph shows it in detail; the
+    /// others are fitted with independent clones of the config.
     fn run_feffit(&mut self) {
-        let Some((label, k, chi)) =
-            self.session
-                .current_group()
-                .and_then(|g| match (&g.k, &g.chi) {
-                    (Some(k), Some(chi)) => Some((g.label.clone(), k.clone(), chi.clone())),
-                    _ => None,
-                })
-        else {
-            self.status = "No chi(k) for the current group — run AUTOBK first.".to_owned();
+        let targets = self.session.run_targets();
+        if targets.is_empty() {
+            self.status = "No group to fit — load data and run AUTOBK first.".to_owned();
             return;
-        };
-        match self.feffit.run(&k, &chi) {
-            Ok(msg) => {
-                self.feffit_fit_group = Some(label.clone());
-                // Persist the transforms as the original's *.dat/*.fit files (so
-                // Plot Data can overlay them). The data .dat files always write;
-                // "Only FT" has no model, so output_pairs omits the .fit files.
-                let saved = match self.feffit.plot() {
-                    Some(plot) => match self.write_feffit_outputs(plot, &label) {
-                        Ok(n) => format!(" · saved {n} .dat/.fit files"),
-                        Err(e) => format!(" · .dat/.fit not written: {e}"),
-                    },
-                    None => String::new(),
-                };
-                self.status = format!("{msg}{saved}");
-                self.replot_feffit();
-            }
-            Err(e) => self.status = e,
         }
+        let focused = match self.session.current {
+            Some(c) if targets.contains(&c) => c,
+            _ => targets[0],
+        };
+        let mut fit_ok = 0usize;
+        let mut saved = 0usize;
+        let mut no_chi = 0usize;
+        let mut first_err: Option<String> = None;
+        // For a single-target run, keep the original detailed status (fit summary
+        // plus the write outcome); a multi-target run summarises counts.
+        let mut focused_msg = String::new();
+        let mut focused_note = String::new();
+        for &idx in &targets {
+            let Some((label, k, chi)) =
+                self.session
+                    .groups
+                    .get(idx)
+                    .and_then(|g| match (&g.k, &g.chi) {
+                        (Some(k), Some(chi)) => Some((g.label.clone(), k.clone(), chi.clone())),
+                        _ => None,
+                    })
+            else {
+                no_chi += 1;
+                continue;
+            };
+            if idx == focused {
+                match self.feffit.run(&k, &chi) {
+                    Ok(msg) => {
+                        fit_ok += 1;
+                        focused_msg = msg;
+                        self.feffit_fit_group = Some(label.clone());
+                        // The data .dat files always write; "Only FT" has no model,
+                        // so output_pairs omits the .fit files.
+                        focused_note = match self.feffit.plot() {
+                            Some(plot) => match self.write_feffit_outputs(plot, &label, idx) {
+                                Ok(n) => {
+                                    saved += 1;
+                                    format!(" · saved {n} .dat/.fit files")
+                                }
+                                Err(e) => format!(" · .dat/.fit not written: {e}"),
+                            },
+                            None => String::new(),
+                        };
+                    }
+                    Err(e) => {
+                        focused_msg = e.clone();
+                        first_err.get_or_insert(e);
+                    }
+                }
+            } else {
+                // Independent config clone so each group's fit is isolated (same
+                // guarantee the batch panel relies on).
+                let mut cfg = self.feffit.config_clone();
+                match cfg.run(&k, &chi) {
+                    Ok(_) => {
+                        fit_ok += 1;
+                        if let Some(plot) = cfg.plot()
+                            && self.write_feffit_outputs(plot, &label, idx).is_ok()
+                        {
+                            saved += 1;
+                        }
+                    }
+                    Err(e) => {
+                        first_err.get_or_insert(e);
+                    }
+                }
+            }
+        }
+        self.status = if targets.len() == 1 {
+            if fit_ok == 1 {
+                format!("{focused_msg}{focused_note}")
+            } else {
+                first_err
+                    .clone()
+                    .unwrap_or_else(|| "No χ(k) for the group — run AUTOBK first.".to_owned())
+            }
+        } else {
+            let mut m = format!(
+                "Feffit: fit {fit_ok}/{} group(s); saved {saved} .dat/.fit set(s)",
+                targets.len()
+            );
+            if no_chi > 0 {
+                m.push_str(&format!("; {no_chi} without χ(k)"));
+            }
+            if let Some(e) = &first_err {
+                m.push_str(&format!("; first error: {e}"));
+            }
+            m
+        };
+        self.replot_feffit();
     }
 
     /// Redraw the shared plot with the last fit's data vs model in the selected
@@ -1679,12 +1844,19 @@ impl XafsViewApp {
             }
             if ui
                 .button(format!("Data… ({n})"))
-                .on_hover_text("Open the data manager: add, remove, or clear loaded groups")
+                .on_hover_text("Open the data manager: add, remove, clear, or check groups for Run")
                 .clicked()
             {
                 self.data_window_open = true;
             }
         });
+        // The shared Run scope, so it is visible without opening the Data window.
+        if n > 0 {
+            ui.weak(format!(
+                "{}/{n} checked for Run",
+                self.session.selected.len()
+            ));
+        }
         // With several groups loaded, offer the batch-comparison overlay (the
         // Multiple_data actions turn it on; this is where to turn it back off).
         if n > 1
@@ -1739,8 +1911,27 @@ impl XafsViewApp {
                     return;
                 }
                 let current = self.session.current;
+                let sel_count = self.session.selected.len();
+                // Snapshot the checked state so the row loop can read it while
+                // iterating `groups` (a distinct field); mutations are deferred.
+                let checked: Vec<bool> = (0..n).map(|i| self.session.is_selected(i)).collect();
                 let mut select = None;
                 let mut remove = None;
+                let mut toggle = None;
+                let mut select_all = false;
+                let mut clear_sel = false;
+                // The shared "selected file list": which groups each tab's Run
+                // (Autobk reduce / Feffit fit) acts on. Check none → Run falls back
+                // to the current group.
+                ui.horizontal(|ui| {
+                    ui.strong(format!("{sel_count} of {n} checked for Run"));
+                    if ui.small_button("All").clicked() {
+                        select_all = true;
+                    }
+                    if ui.small_button("None").clicked() {
+                        clear_sel = true;
+                    }
+                });
                 egui::ScrollArea::vertical()
                     .id_salt("data_manager_list")
                     .auto_shrink([false, false])
@@ -1754,6 +1945,14 @@ impl XafsViewApp {
                                     {
                                         remove = Some(i);
                                     }
+                                    let mut on = checked[i];
+                                    if ui
+                                        .checkbox(&mut on, "")
+                                        .on_hover_text("Include this group in Run")
+                                        .changed()
+                                    {
+                                        toggle = Some((i, on));
+                                    }
                                     if ui.selectable_label(current == Some(i), &g.label).clicked() {
                                         select = Some(i);
                                     }
@@ -1765,10 +1964,23 @@ impl XafsViewApp {
                 if ui.button("Clear all").clicked() {
                     self.session.groups.clear();
                     self.session.current = None;
+                    self.session.clear_selected();
                     self.plot_data.mark_dirty();
                     changed = true;
                 }
-                // Apply the row actions after the read-only iteration above.
+                // Apply the row/scope actions after the read-only iteration above.
+                if select_all {
+                    self.session.select_all();
+                    changed = true;
+                }
+                if clear_sel {
+                    self.session.clear_selected();
+                    changed = true;
+                }
+                if let Some((i, on)) = toggle {
+                    self.session.set_selected(i, on);
+                    changed = true;
+                }
                 if let Some(i) = select {
                     self.session.current = Some(i);
                     changed = true;
