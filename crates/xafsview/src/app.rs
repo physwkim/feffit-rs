@@ -2278,7 +2278,8 @@ impl XafsViewApp {
             }
             // Multiple_data holds the batch *processing* actions only; Plot Data
             // (a cross-stage viewer, kept open simultaneously in the original) is
-            // promoted to its own top-level menu-bar button below.
+            // promoted to a button in the tab strip (after About, past a
+            // separator), so it reads as a persistent viewer, not a menu action.
             let mut run_multi_autobk = false;
             let mut make_xmu_files = false;
             ui.menu_button("Multiple_data", |ui| {
@@ -2300,15 +2301,6 @@ impl XafsViewApp {
             if make_xmu_files {
                 self.tab = Tab::Autobk;
                 self.make_xmu_from_files();
-            }
-            // Plot Data — the cross-stage file-overlay viewer, its own detached
-            // window (kept open alongside any tab, like the original XAFSView).
-            if ui
-                .button("Plot Data")
-                .on_hover_text("Open the Plot Data file-overlay window")
-                .clicked()
-            {
-                self.plot_data.open();
             }
             ui.menu_button("Periodic table", |ui| {
                 if ui.button("Periodic table + atom data…").clicked() {
@@ -2572,6 +2564,17 @@ impl eframe::App for XafsViewApp {
             ui.horizontal(|ui| {
                 for tab in Tab::ALL {
                     ui.selectable_value(&mut self.tab, tab, tab.label());
+                }
+                // Plot Data is a detached viewer, not a tab: set it off past a
+                // separator after the last tab (About) so it reads as a persistent
+                // window opener rather than another tab selection.
+                ui.separator();
+                if ui
+                    .button("Plot Data")
+                    .on_hover_text("Open the Plot Data file-overlay window")
+                    .clicked()
+                {
+                    self.plot_data.open();
                 }
             });
             ui.add_space(2.0);
