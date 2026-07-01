@@ -1256,18 +1256,22 @@ impl XafsViewApp {
         // and are omitted per the functional-only field rule; "Send to plot
         // data" opens the group's Plot Data overlay.
         let mut exit = false;
-        let mut replot = false;
         egui::Panel::left("feffit_controls")
             .resizable(true)
             .default_size(380.0)
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    feffit_action = self.feffit.controls(ui);
+                    // `controls` hosts the Graph section's "Show all fits" checkbox
+                    // (shown only for >1 group); computing the group count up front
+                    // lets it gate that checkbox and this Data… row alike.
+                    let n_groups = self.session.groups.len();
+                    feffit_action =
+                        self.feffit
+                            .controls(ui, &mut self.feffit_show_all_fits, n_groups > 1);
                     // Exit sits directly below the controls (그림 1-2-2-2), no gap.
                     ui.add_space(6.0);
                     // Run fits every checked group (shared with the Autobk tab); this
                     // row shows and opens that selection.
-                    let n_groups = self.session.groups.len();
                     if n_groups > 0 {
                         ui.horizontal(|ui| {
                             if ui
@@ -1284,19 +1288,6 @@ impl XafsViewApp {
                                 self.session.selected.len()
                             ));
                         });
-                        // The AUTOBK "Show all groups" twin: overlay every checked
-                        // group's fit after a multi-group Run.
-                        if n_groups > 1
-                            && ui
-                                .checkbox(&mut self.feffit_show_all_fits, "Show all fits")
-                                .on_hover_text(
-                                    "Overlay every checked group's fit on the graph \
-                                     (the Feffit twin of AUTOBK's \"Show all groups\")",
-                                )
-                                .changed()
-                        {
-                            replot = true;
-                        }
                     }
                     ui.horizontal(|ui| {
                         if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
@@ -1324,9 +1315,6 @@ impl XafsViewApp {
 
         if exit {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        if replot {
-            self.replot_feffit();
         }
         match feffit_action {
             Some(FeffitAction::AddPath) => self.add_feff_path(),

@@ -1348,7 +1348,16 @@ impl FeffitUi {
     }
 
     /// Render the control column. Returns a [`FeffitAction`] for app-owned work.
-    pub fn controls(&mut self, ui: &mut egui::Ui) -> Option<FeffitAction> {
+    ///
+    /// `show_all_fits` is the app-level "overlay every fitted group" flag (the
+    /// AUTOBK "Show all groups" twin); its checkbox lives in the Graph section
+    /// and is shown only when `show_all_enabled` (more than one loaded group).
+    pub fn controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        show_all_fits: &mut bool,
+        show_all_enabled: bool,
+    ) -> Option<FeffitAction> {
         let mut action = None;
 
         ui.heading("Feffit");
@@ -1357,7 +1366,7 @@ impl FeffitUi {
         // Original XAFSView "Head param." block: kmin/rmin, kmax/rmax, dk/dr,
         // kweight/fit-space, k-window/R-window — two transform columns per row.
         ui.group(|ui| {
-            ui.strong("Head param.");
+            ui.strong("Transform");
             egui::Grid::new("feffit_head")
                 .num_columns(4)
                 .spacing([6.0, 4.0])
@@ -1416,19 +1425,20 @@ impl FeffitUi {
                     window_combo(ui, "feffit_rwin", &mut self.ft.rwindow);
                     ui.end_row();
                 });
-        });
-
-        // --- Fit mode (the original's "Fit" dropdown: fit / no fit / only FT) --
-        ui.horizontal(|ui| {
-            ui.label("Fit")
-                .on_hover_text("Run: No fit = forward model preview; Only FT = transform data; Fit = least-squares fit");
-            egui::ComboBox::from_id_salt("feffit_fit_mode")
-                .selected_text(self.fit_mode.label())
-                .show_ui(ui, |ui| {
-                    for m in FitMode::ALL {
-                        ui.selectable_value(&mut self.fit_mode, m, m.label());
-                    }
-                });
+            // Fit mode (the original's "Fit" dropdown: fit / no fit / only FT).
+            ui.horizontal(|ui| {
+                ui.label("Fit").on_hover_text(
+                    "Run: No fit = forward model preview; Only FT = transform data; \
+                     Fit = least-squares fit",
+                );
+                egui::ComboBox::from_id_salt("feffit_fit_mode")
+                    .selected_text(self.fit_mode.label())
+                    .show_ui(ui, |ui| {
+                        for m in FitMode::ALL {
+                            ui.selectable_value(&mut self.fit_mode, m, m.label());
+                        }
+                    });
+            });
         });
 
         // --- Paths (a "Path index" selector + the chosen path's specs) ----
@@ -1647,12 +1657,10 @@ impl FeffitUi {
             if let Some(i) = remove_param {
                 self.params.remove(i);
             }
-        });
-
-        // --- User defined functions ---------------------------------------
-        // The original's UDF block: `%set name = expr` lines define extra named
-        // constants/constraints the path and variable expressions can reference.
-        ui.group(|ui| {
+            // User defined functions (kept in the same "Variables" box): `%set
+            // name = expr` lines define extra named constants/constraints the path
+            // and variable expressions can reference.
+            ui.add_space(6.0);
             ui.strong("User defined functions");
             ui.weak("one %set per line, e.g.  %set drcorr = alpha*reff");
             ui.add(
@@ -1664,6 +1672,128 @@ impl FeffitUi {
             );
         });
 
+        // --- Graph (item / component / all-fits overlay) ------------------
+        ui.group(|ui| {
+            ui.strong("Graph");
+            ui.horizontal(|ui| {
+                ui.label("Graph item");
+                for (s, lbl) in [
+                    (PlotSpace::Q, "Q"),
+                    (PlotSpace::R, "R"),
+                    (PlotSpace::K, "K"),
+                    (PlotSpace::KQ, "K+Q"),
+                ] {
+                    if ui.selectable_value(&mut self.space, s, lbl).clicked() {
+                        action.get_or_insert(FeffitAction::Replot);
+                    }
+                }
+            });
+            // The part selector drives R/Q (and the q half of K+Q); pure k ignores it.
+            if self.space != PlotSpace::K {
+                ui.horizontal(|ui| {
+                    ui.label("Graph type");
+                    for (p, lbl) in [
+                        (PlotPart::Re, "Re"),
+                        (PlotPart::Im, "Im"),
+                        (PlotPart::Mag, "Am"),
+                        (PlotPart::Pha, "Ph"),
+                    ] {
+                        if ui.selectable_value(&mut self.part, p, lbl).clicked() {
+                            action.get_or_insert(FeffitAction::Replot);
+                        }
+                    }
+                });
+            }
+            // The Feffit twin of AUTOBK's "Show all groups": overlay every checked
+            // group's fit on the graph after a multi-group Run.
+            if show_all_enabled
+                && ui
+                    .checkbox(show_all_fits, "Show all fits")
+                    .on_hover_text(
+                        "Overlay every checked group's fit on the graph \
+                     (the Feffit twin of AUTOBK's \"Show all groups\")",
+                    )
+                    .changed()
+            {
+                action.get_or_insert(FeffitAction::Replot);
+            }
+        });
+
+        // --- Results (fit statistics + report pop-ups) --------------------
+        ui.group(|ui| {
+            ui.strong("Results");
+            if let Some(res) = &self.result {
+                ui.strong("Feffit out data");
+                egui::Grid::new("feffit_stats")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.label("ind. points");
+                        ui.monospace(format!("{:.1}", res.n_idp));
+                        ui.end_row();
+                        ui.label("variable #");
+                        ui.monospace(format!("{}", res.nvarys));
+                        ui.end_row();
+                        ui.label("deg of free");
+                        ui.monospace(format!("{}", res.nfree));
+                        ui.end_row();
+                        stat_row(ui, "red. χ²", res.chi2_reduced);
+                        stat_row(ui, "χ²", res.chi_square);
+                        stat_row(ui, "R-factor", res.rfactor);
+                        stat_row(ui, "AIC", res.aic);
+                        stat_row(ui, "BIC", res.bic);
+                    });
+                ui.add_space(4.0);
+                ui.strong("Best-fit variables");
+                egui::Grid::new("feffit_best")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for b in &res.best {
+                            ui.monospace(&b.name);
+                            ui.monospace(format!("{:.5} ± {:.5}", b.value, b.stderr));
+                            ui.end_row();
+                        }
+                        for d in &res.derived {
+                            ui.weak(&d.name);
+                            ui.weak(format!("{:.5} ± {:.5}", d.value, d.stderr));
+                            ui.end_row();
+                        }
+                    });
+            }
+
+            // --- View … result reports (the original's "Feffit out data" buttons) -
+            ui.add_space(4.0);
+            ui.label("View");
+            ui.horizontal_wrapped(|ui| {
+                // Most reports need a fit result; "Fix values" reads the parameter
+                // table, so it is always available.
+                let have = self.result.is_some();
+                for (kind, enabled) in [
+                    (ReportKind::Correlations, have),
+                    (ReportKind::FitValues, have),
+                    (ReportKind::FixValues, true),
+                    (ReportKind::FeffitSumm, have),
+                    (ReportKind::PathSumm, have),
+                    (ReportKind::ResultsSumm, have),
+                ] {
+                    if ui
+                        .add_enabled(enabled, egui::Button::new(kind.title()))
+                        .clicked()
+                    {
+                        self.report_view = Some(kind);
+                    }
+                }
+            });
+        });
+
+        // The selected report's pop-up text window (one shared, re-titled window).
+        if let Some(kind) = self.report_view {
+            let text = self.report_for(kind);
+            if !text_window(ui, "feffit_report", kind.title(), &text) {
+                self.report_view = None;
+            }
+        }
+
+        // --- Actions: Run / Send, then the file row (Open log / Load / Save) ---
         ui.separator();
         ui.horizontal(|ui| {
             // "Only FT" transforms the data alone, so it needs no paths; the other
@@ -1680,112 +1810,6 @@ impl FeffitUi {
                 action = Some(FeffitAction::SendToPlotData);
             }
         });
-
-        // --- Graph item (space) / Graph type (component) ------------------
-        ui.horizontal(|ui| {
-            ui.label("Graph item");
-            for (s, lbl) in [
-                (PlotSpace::Q, "Q"),
-                (PlotSpace::R, "R"),
-                (PlotSpace::K, "K"),
-                (PlotSpace::KQ, "K+Q"),
-            ] {
-                if ui.selectable_value(&mut self.space, s, lbl).clicked() {
-                    action.get_or_insert(FeffitAction::Replot);
-                }
-            }
-        });
-        // The part selector drives R/Q (and the q half of K+Q); pure k ignores it.
-        if self.space != PlotSpace::K {
-            ui.horizontal(|ui| {
-                ui.label("Graph type");
-                for (p, lbl) in [
-                    (PlotPart::Re, "Re"),
-                    (PlotPart::Im, "Im"),
-                    (PlotPart::Mag, "Am"),
-                    (PlotPart::Pha, "Ph"),
-                ] {
-                    if ui.selectable_value(&mut self.part, p, lbl).clicked() {
-                        action.get_or_insert(FeffitAction::Replot);
-                    }
-                }
-            });
-        }
-
-        // --- Feffit out data (statistics) ---------------------------------
-        if let Some(res) = &self.result {
-            ui.separator();
-            ui.strong("Feffit out data");
-            egui::Grid::new("feffit_stats")
-                .num_columns(2)
-                .show(ui, |ui| {
-                    ui.label("ind. points");
-                    ui.monospace(format!("{:.1}", res.n_idp));
-                    ui.end_row();
-                    ui.label("variable #");
-                    ui.monospace(format!("{}", res.nvarys));
-                    ui.end_row();
-                    ui.label("deg of free");
-                    ui.monospace(format!("{}", res.nfree));
-                    ui.end_row();
-                    stat_row(ui, "red. χ²", res.chi2_reduced);
-                    stat_row(ui, "χ²", res.chi_square);
-                    stat_row(ui, "R-factor", res.rfactor);
-                    stat_row(ui, "AIC", res.aic);
-                    stat_row(ui, "BIC", res.bic);
-                });
-            ui.add_space(4.0);
-            ui.strong("Best-fit variables");
-            egui::Grid::new("feffit_best")
-                .num_columns(2)
-                .show(ui, |ui| {
-                    for b in &res.best {
-                        ui.monospace(&b.name);
-                        ui.monospace(format!("{:.5} ± {:.5}", b.value, b.stderr));
-                        ui.end_row();
-                    }
-                    for d in &res.derived {
-                        ui.weak(&d.name);
-                        ui.weak(format!("{:.5} ± {:.5}", d.value, d.stderr));
-                        ui.end_row();
-                    }
-                });
-        }
-
-        // --- View … result reports (the original's "Feffit out data" buttons) -
-        ui.add_space(4.0);
-        ui.label("View");
-        ui.horizontal_wrapped(|ui| {
-            // Most reports need a fit result; "Fix values" reads the parameter
-            // table, so it is always available.
-            let have = self.result.is_some();
-            for (kind, enabled) in [
-                (ReportKind::Correlations, have),
-                (ReportKind::FitValues, have),
-                (ReportKind::FixValues, true),
-                (ReportKind::FeffitSumm, have),
-                (ReportKind::PathSumm, have),
-                (ReportKind::ResultsSumm, have),
-            ] {
-                if ui
-                    .add_enabled(enabled, egui::Button::new(kind.title()))
-                    .clicked()
-                {
-                    self.report_view = Some(kind);
-                }
-            }
-        });
-
-        // The selected report's pop-up text window (one shared, re-titled window).
-        if let Some(kind) = self.report_view {
-            let text = self.report_for(kind);
-            if !text_window(ui, "feffit_report", kind.title(), &text) {
-                self.report_view = None;
-            }
-        }
-
-        // --- Bottom file row (the original's Open log / Load / Save result) ---
-        ui.separator();
         ui.horizontal(|ui| {
             if ui
                 .button("Open log")
