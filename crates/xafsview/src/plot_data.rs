@@ -1,25 +1,25 @@
-//! The **Plot Data** panel: a *file viewer*. Browse a folder, pick processed
-//! output files by *File type* (`*.xmu` / `*.chi` / `*.dat` / `*.fit`) and
-//! *Graph item*, and overlay them on one plot — with vertical stacking, an
-//! averaged trace, display smoothing, and a multi-peak readout. Mirrors
-//! XAFSView's *Plot Data*, which shows data read from files rather than the
-//! in-memory session groups.
+//! The **Plot Data** window: a *file viewer*, its own detached OS window like
+//! the original XAFSView. Browse a folder, pick processed output files by *File
+//! type* (`*.xmu` / `*.chi` / `*.dat` / `*.fit` / `*.bkg` / `*.result`) and
+//! *Graph item*, and overlay them on the window's own graph — with vertical
+//! stacking, "same height" normalization, an averaged trace, display smoothing,
+//! and a multi-peak readout. Mirrors XAFSView's *Plot Data*, which shows data
+//! read from files rather than the in-memory session groups.
 //!
-//! Its controls live in a resizable strip below the graph on each tab (Autobk /
-//! Feffit) — no window, no toggle, laid out as grouped columns so the central
-//! graph keeps the full width above it. There is one shared graph per tab
-//! ([`crate::app`]'s `plot`); this panel does not own a plot of its own but
-//! *overlays* its loaded-file curves (stacked, optionally averaged, with peak
-//! markers) onto that single graph via [`overlay_onto`](PlotDataWindow::overlay_onto),
-//! which the tab's replot calls after drawing its own base curves. Save / zoom /
-//! legend come from the siplot toolbar; the data work (averaging, peak finding)
-//! is the headless [`xasdata`] code. A Feffit fit can also be sent here for a
-//! quick data-vs-model look ([`set_fit_overlay`]).
+//! Laid out like the original: the graph fills the window with a vertical
+//! control column on the right (opened from the main window's top bar; the
+//! Autobk / Feffit tabs keep their own full-width graph). It owns its own
+//! [`crate::plot::Plot`] and rebuilds it via [`rebuild`](PlotDataWindow::rebuild)
+//! whenever the loaded files or a control change. Save / zoom / legend come from
+//! the siplot toolbar; the data work (averaging, peak finding) is the headless
+//! [`xasdata`] code. A Feffit fit can also be sent here for a quick
+//! data-vs-model look ([`set_fit_overlay`]).
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use eframe::egui;
+use eframe::egui_wgpu::RenderState;
 use egui::Color32;
 use feffit::xasdata::{average_curves, peak_in_range, x_at_y};
 
@@ -59,7 +59,7 @@ pub(crate) const FIT_MODEL: Color32 = crate::plot::RED;
 
 /// A Feffit fit handed over from the Feffit tab's "Send to Plot Data": its data
 /// and model curves in the chosen space. Drawn on top of the loaded files on the
-/// tab's shared graph (which owns the axis labels), not on its own axes.
+/// Plot Data window's own graph.
 struct FitOverlay {
     label: String,
     x: Vec<f64>,
@@ -67,14 +67,22 @@ struct FitOverlay {
     model: Vec<f64>,
 }
 
-/// The Plot Data panel state. (Type name kept for continuity; it is now a
-/// docked control panel that overlays onto the tab's shared graph, not a
-/// standalone window owning its own plot.)
+/// The Plot Data window state: a detached OS window owning its own graph, the
+/// loaded-file overlay, and the original's control set.
 pub struct PlotDataWindow {
+    /// The window's own plot (its own graph, independent of the tabs' shared
+    /// plot). Rebuilt by [`rebuild`](Self::rebuild) when the overlay changes.
+    plot: crate::plot::Plot,
+    /// Whether the detached window is shown. Opened from the main window's top
+    /// bar (or "Send to Plot Data"); the window's close button clears it.
+    open: bool,
     /// k-weight applied to any loaded k-space file (their χ is stored unweighted).
     kweight: i32,
     /// Vertical offset added to trace `i` (`i · stack`), in data units.
     stack: f64,
+    /// "Same height": scale each curve to a common peak amplitude before
+    /// stacking (the original's waterfall "Same height").
+    same_height: bool,
     show_average: bool,
     /// "Average (5 points)": display-smooth each curve (5-point moving average).
     smooth5: bool,
@@ -93,17 +101,10 @@ pub struct PlotDataWindow {
     /// Whether the sent fit is drawn (on top of the loaded files).
     show_overlay: bool,
     /// The legend label of the loaded-file (or "average") curve highlighted by a
-    /// legend click on the shared graph (drawn with a thicker line, brought to
+    /// legend click on the window's graph (drawn with a thicker line, brought to
     /// front). `None` = nothing highlighted; clicking the same entry again clears
-    /// it. Clicks on the tab's own base curves are ignored.
+    /// it. A click on the sent-fit curves is ignored.
     highlighted: Option<String>,
-    /// Whether the tab's own base curves (the Autobk reduction / the Feffit
-    /// data+model) are drawn on the shared graph. `false` removes them so only the
-    /// loaded-file overlay (and average/peaks) shows. "Clear All" sets it `false`;
-    /// the "Show Autobk/Feffit curve(s)" checkbox is the visible owner that
-    /// restores it. The owning tab reads it via [`show_base`](Self::show_base)
-    /// before drawing its base.
-    show_base: bool,
 
     // --- file viewer --------------------------------------------------------
     /// The selected *File type* for browsing/loading files.
@@ -144,19 +145,16 @@ pub struct PlotDataWindow {
     dirty: bool,
 }
 
-impl Default for PlotDataWindow {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PlotDataWindow {
-    /// Build the panel state. It overlays onto the tab's shared graph and owns no
-    /// plot of its own.
-    pub fn new() -> Self {
+    /// Build the window state with its own plot (id 7, distinct from the main
+    /// plot's 0 and the other windows' ids). Closed until opened from the top bar.
+    pub fn new(render_state: &RenderState) -> Self {
         Self {
+            plot: crate::plot::Plot::new(render_state, 7),
+            open: false,
             kweight: 2,
             stack: 0.0,
+            same_height: false,
             show_average: false,
             smooth5: false,
             // Dark by default, matching the cohesive dark canvas every other
@@ -170,7 +168,6 @@ impl PlotDataWindow {
             overlay: None,
             show_overlay: false,
             highlighted: None,
-            show_base: true,
             file_type: FileType::Chi,
             graph_item: FileType::Chi.default_item(),
             loaded: Vec::new(),
@@ -189,36 +186,31 @@ impl PlotDataWindow {
         }
     }
 
-    /// Request a replot of the shared graph (the overlay changed: new files, a
-    /// control edit, a sent fit). The owning tab replots when [`take_dirty`] next
-    /// reports `true`.
-    ///
-    /// [`take_dirty`]: Self::take_dirty
+    /// Mark the window's graph as needing a rebuild (the overlay changed: new
+    /// files, a control edit, a sent fit). [`show_window`](Self::show_window)
+    /// rebuilds on the next frame it paints while open.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
-    /// Clear and report the dirty flag — `true` when the shared graph must be
-    /// rebuilt to reflect a changed overlay. The tab calls this after rendering
-    /// the panel and, on `true`, replots (which re-runs [`overlay_onto`]).
-    ///
-    /// [`overlay_onto`]: Self::overlay_onto
-    pub fn take_dirty(&mut self) -> bool {
+    /// Clear and report the dirty flag — `true` when the window's graph must be
+    /// rebuilt. Consumed by [`show_window`](Self::show_window) each frame before
+    /// it draws.
+    fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
     }
 
-    /// Whether the owning tab should draw its own base curves (the Autobk
-    /// reduction / the Feffit data+model) on the shared graph. `false` after
-    /// "Clear All" until the "Show Autobk/Feffit curve(s)" checkbox re-enables it.
-    pub fn show_base(&self) -> bool {
-        self.show_base
+    /// Open (show) the detached Plot Data window. Called from the main window's
+    /// top-bar button and from the Feffit form's "Send to Plot Data".
+    pub fn open(&mut self) {
+        self.open = true;
     }
 
     /// Toggle the legend-click highlight for an overlay curve (a loaded file or
-    /// the "average"). Clicks on the tab's own base curves are ignored, so a base
-    /// legend click does not disturb an overlay highlight. Marks the graph dirty
-    /// when it changes anything.
-    pub fn toggle_highlight(&mut self, label: String) {
+    /// the "average"). A click on the sent-fit curves is ignored, so it does not
+    /// disturb a loaded-file highlight. Marks the graph dirty when it changes
+    /// anything.
+    fn toggle_highlight(&mut self, label: String) {
         let is_overlay = label == "average" || self.loaded.iter().any(|t| t.label == label);
         if !is_overlay {
             return;
@@ -257,48 +249,68 @@ impl PlotDataWindow {
         self.data_dir = data_dir.map(std::path::Path::to_path_buf);
     }
 
-    /// The Plot Data controls (Feffit-fit toggle, file selectors, k-weight,
-    /// stacking, averaging, peak search, save), laid out as grouped columns for
-    /// the strip panel below the graph.
-    pub fn controls_ui(&mut self, ui: &mut egui::Ui) {
-        self.controls(ui);
+    /// Show the detached Plot Data window: its own graph filling the window with
+    /// the control column on the right (the original's layout). Renders nothing
+    /// when closed. Rebuilds the graph when the overlay is dirty just before
+    /// drawing it, so a control edit shows the same frame; a legend click toggles
+    /// the clicked curve's highlight for the next rebuild.
+    pub fn show_window(&mut self, ctx: &egui::Context) {
+        if !self.open {
+            return;
+        }
+        // A separate local so the closure can borrow `self` mutably; the window's
+        // own close button flips it and we copy it back afterwards.
+        let mut keep_open = true;
+        crate::window::detached(
+            ctx,
+            "plot_data",
+            "Plot Data",
+            &mut keep_open,
+            [980.0, 640.0],
+            |ui| {
+                egui::Panel::right("pd_controls")
+                    .resizable(true)
+                    .default_size(300.0)
+                    .show_inside(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            self.controls_column(ui);
+                        });
+                    });
+                // Rebuild after the controls (so this frame's edits land) and
+                // before drawing, both inside the window body.
+                if self.take_dirty() {
+                    self.rebuild();
+                }
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    crate::plot::show(&mut self.plot, ui);
+                });
+            },
+        );
+        self.open = self.open && keep_open;
+        // A legend click on a loaded-file / average curve toggles its highlight;
+        // the next rebuild redraws it emphasized.
+        if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
+            self.toggle_highlight(label);
+        }
     }
 
-    /// The control column, laid out as a strip of grouped columns (Files /
-    /// Display / Peaks / Fit + actions) placed side by side, so it reads well in
-    /// the bottom panel below the graph rather than as one tall column.
-    fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_top(|ui| {
-            ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_min_width(210.0);
-                    self.files_controls(ui);
-                });
-            });
-            ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_min_width(180.0);
-                    self.display_controls(ui);
-                });
-            });
-            ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_min_width(180.0);
-                    self.peak_controls(ui);
-                });
-            });
-            ui.group(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_min_width(160.0);
-                    self.fit_overlay_controls(ui);
-                    self.action_controls(ui);
-                });
-            });
-        });
+    /// The control column (right panel of the window), one vertical stack in the
+    /// original's order: Files, Display (G_kweight / Stacking / Same height / …),
+    /// the sent-fit toggle, Multiple peak catching, and the Redraw / Save actions.
+    fn controls_column(&mut self, ui: &mut egui::Ui) {
+        self.files_controls(ui);
+        ui.separator();
+        self.display_controls(ui);
+        self.fit_overlay_controls(ui);
+        ui.separator();
+        self.peak_controls(ui);
+        ui.separator();
+        self.action_controls(ui);
     }
 
-    /// The "Feffit fit" group: a fit sent here (data + model) overrides the file
-    /// plot while shown. Renders nothing when no fit has been sent.
+    /// The "Feffit fit" group: a fit sent here (data + model) is drawn together
+    /// with the loaded files while shown. Renders nothing when no fit has been
+    /// sent.
     fn fit_overlay_controls(&mut self, ui: &mut egui::Ui) {
         let Some(ov) = &self.overlay else {
             return;
@@ -317,30 +329,34 @@ impl PlotDataWindow {
             self.show_overlay = false;
             self.dirty = true;
         }
-        // A plain `ui.separator()` fills the full available width, which would
-        // stretch this strip group; a bare space keeps the group at its content
-        // width.
-        ui.add_space(6.0);
     }
 
-    /// The "Display" group: k-weight, stack offset, averaging, smoothing, and the
-    /// dark/white canvas toggle.
+    /// The "Display" group: G_kweight, Stacking, Same height, averaging,
+    /// smoothing, and the dark/white canvas toggle.
     fn display_controls(&mut self, ui: &mut egui::Ui) {
         ui.strong("Display");
 
-        // k-weight re-reads any loaded k-space file (their χ is stored
-        // unweighted) so the overlay tracks the slider.
-        let kweight_relevant = self.loaded.iter().any(|t| t.item.applies_kweight());
-        if kweight_relevant
-            && ui
-                .add(egui::Slider::new(&mut self.kweight, 0..=3).text("k-weight"))
-                .changed()
+        // G_kweight is shown always (like the original), even with no k-space
+        // file loaded; a change re-reads any loaded k-space file (their χ is
+        // stored unweighted) so the overlay tracks the slider.
+        if ui
+            .add(egui::Slider::new(&mut self.kweight, 0..=3).text("G_kweight"))
+            .changed()
         {
-            self.reload_loaded();
+            if self.loaded.iter().any(|t| t.item.applies_kweight()) {
+                self.reload_loaded();
+            }
             self.dirty = true;
         }
         if ui
-            .add(egui::Slider::new(&mut self.stack, 0.0..=5.0).text("stack offset"))
+            .add(egui::Slider::new(&mut self.stack, 0.0..=5.0).text("Stacking"))
+            .changed()
+        {
+            self.dirty = true;
+        }
+        if ui
+            .checkbox(&mut self.same_height, "Same height")
+            .on_hover_text("Scale every curve to the same peak-to-peak height before stacking")
             .changed()
         {
             self.dirty = true;
@@ -407,9 +423,9 @@ impl PlotDataWindow {
         }
     }
 
-    /// The "Replot" / "Save in single file" actions.
+    /// The "Redraw" / "Save in single file" actions.
     fn action_controls(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Replot").clicked() {
+        if ui.button("Redraw").clicked() {
             self.dirty = true;
         }
         if ui
@@ -452,18 +468,12 @@ impl PlotDataWindow {
         }
     }
 
-    /// The "Files" control block: file-type / graph-item selectors, the picker
-    /// button, the loaded-file list, and Clear Graph.
+    /// The "Files" control block: the picker button, the file-type / graph-item
+    /// selectors (which drive the picker's filter), the loaded-file list, and
+    /// Clear Graph / Clear All.
     fn files_controls(&mut self, ui: &mut egui::Ui) {
         ui.strong("Files");
 
-        // The file type / graph item are chosen in the File-selection window
-        // (the original keeps the *.DAT picker there); show the current pick here.
-        ui.label(format!(
-            "Type {} · item {}",
-            self.file_type.label(),
-            self.graph_item.label()
-        ));
         if ui.button("ADD or DEL Data Files…").clicked() {
             self.picker_open = true;
             // Open on the Data folder (under the Sub base) so the picker lists the
@@ -479,6 +489,47 @@ impl PlotDataWindow {
             self.sel_hi.clear();
             self.refresh_available();
         }
+
+        // File type + graph item — surfaced here (also in the picker; both share
+        // `self.file_type`/`self.graph_item`). They drive the picker's filter and
+        // the item a newly-added file is read as; the item label reads
+        // "xmu data type" for `*.xmu` (the original's term) else "graph item".
+        ui.horizontal(|ui| {
+            ui.label("file type");
+            egui::ComboBox::from_id_salt("pd_col_ftype")
+                .selected_text(self.file_type.label())
+                .show_ui(ui, |ui| {
+                    for ft in FileType::ALL {
+                        if ui
+                            .selectable_value(&mut self.file_type, ft, ft.label())
+                            .changed()
+                        {
+                            self.graph_item = self.file_type.default_item();
+                            self.refresh_available();
+                        }
+                    }
+                });
+        });
+        let item_kind = if self.file_type == FileType::Xmu {
+            "xmu data type"
+        } else {
+            "graph item"
+        };
+        ui.horizontal(|ui| {
+            ui.label(item_kind);
+            egui::ComboBox::from_id_salt("pd_col_gitem")
+                .selected_text(self.graph_item.label())
+                .show_ui(ui, |ui| {
+                    for &gi in self.file_type.items() {
+                        if ui
+                            .selectable_value(&mut self.graph_item, gi, gi.label())
+                            .changed()
+                        {
+                            self.refresh_available();
+                        }
+                    }
+                });
+        });
 
         if self.loaded.is_empty() {
             ui.weak("No files loaded — ADD Data Files to plot.");
@@ -515,31 +566,16 @@ impl PlotDataWindow {
                 self.dirty = true;
             }
         }
-        // A bare space, not `ui.separator()` (which fills the full available width
-        // and would stretch this strip group to the whole panel).
-        ui.add_space(6.0);
-        // The tab's own curve (the Autobk reduction / Feffit data+model) is drawn
-        // by the tab, not loaded here; this checkbox is the visible owner of its
-        // visibility, and "Clear All" wipes everything (files + base curve).
-        if ui
-            .checkbox(&mut self.show_base, "Show Autobk/Feffit curve(s)")
-            .on_hover_text("The tab's own processed curve (Autobk reduction / Feffit data+model)")
-            .changed()
-        {
-            self.dirty = true;
-        }
         if ui
             .button("Clear All")
             .on_hover_text(
-                "Remove everything from the graph: the loaded files, any sent \
-                 Feffit fit, and the tab's Autobk/Feffit curve",
+                "Remove everything from the graph: the loaded files and any sent Feffit fit",
             )
             .clicked()
         {
             self.loaded.clear();
             self.overlay = None;
             self.show_overlay = false;
-            self.show_base = false;
             self.dirty = true;
         }
         if !self.pick_status.is_empty() {
@@ -552,7 +588,7 @@ impl PlotDataWindow {
     /// right "Selected Data" pane holds the staged picks. `=>` / `<=` move the
     /// highlighted rows between panes (multi-select by clicking), `OK` loads the
     /// selection. Shown as its own OS viewport (via [`crate::window::detached`])
-    /// so it can be dragged outside the Plot Data panel.
+    /// so it can be dragged outside the Plot Data window.
     pub fn file_picker(&mut self, ctx: &egui::Context) {
         if !self.picker_open {
             return;
@@ -878,9 +914,9 @@ impl PlotDataWindow {
         }
     }
 
-    /// Build the displayed traces from the loaded files — palette colours and
-    /// 5-point smoothing applied, before any stacking offset. One source of
-    /// truth for both drawing and saving.
+    /// Build the displayed traces from the loaded files — palette colours,
+    /// 5-point smoothing, and "same height" applied, before any stacking offset.
+    /// One source of truth for both drawing and saving.
     fn built_traces(&self) -> Vec<(String, Vec<f64>, Vec<f64>, Color32)> {
         // Bright curves on the dark canvas; the muted tab10 on the white "Change
         // BG" canvas, where the bright palette would wash out.
@@ -891,16 +927,21 @@ impl PlotDataWindow {
         };
         let mut traces: Vec<(String, Vec<f64>, Vec<f64>, Color32)> = Vec::new();
         for t in &self.loaded {
-            let y = if self.smooth5 {
+            let mut y = if self.smooth5 {
                 smooth5(&t.y)
             } else {
                 t.y.clone()
             };
-            // The shared tab graph already uses PALETTE[0]=BLUE (and often
-            // [1]=ORANGE) for its own base curve(s); start the file palette past
-            // them so an overlaid file does not share a base curve's colour.
-            const BASE_PALETTE_SPAN: usize = 2;
-            let color = palette[(traces.len() + BASE_PALETTE_SPAN) % palette.len()];
+            // "Same height": normalize each curve to unit peak-to-peak so every
+            // trace gets the same height before the stacking offset separates them.
+            if self.same_height {
+                y = same_height_scale(&y);
+            }
+            // A sent Feffit fit uses BLUE (data) and RED (model); start the file
+            // palette past PALETTE[0]=BLUE (and [1]=ORANGE) so a loaded file does
+            // not share the sent-fit data colour.
+            const FIT_PALETTE_SPAN: usize = 2;
+            let color = palette[(traces.len() + FIT_PALETTE_SPAN) % palette.len()];
             traces.push((t.label.clone(), t.x.clone(), y, color));
         }
         traces
@@ -961,58 +1002,32 @@ impl PlotDataWindow {
         };
     }
 
-    /// Add one overlay trace to `plot`, drawn emphasized when it is the curve the
-    /// user highlighted by clicking its legend entry (thicker line, on top).
-    fn add_trace(
-        &self,
-        plot: &mut crate::plot::Plot,
-        label: &str,
-        x: &[f64],
-        y: &[f64],
-        color: Color32,
-    ) {
-        if self.highlighted.as_deref() == Some(label) {
-            plot.add_emphasized_curve(x, y, color, label);
-        } else {
-            plot.add_curve_with_legend(x, y, color, label);
-        }
-    }
-
-    /// Overlay the panel's curves onto the tab's shared graph: a sent Feffit fit
-    /// (when shown), the loaded files (stacked, optionally 5-point-smoothed), an
-    /// optional average, and peak markers. The tab draws its own base curves and
-    /// sets the axis labels first; this appends on top and does *not* clear or
-    /// relabel, so the single graph's space stays the tab's. The canvas follows
-    /// the "Change BG color" toggle (dark house canvas by default).
-    pub fn overlay_onto(&self, plot: &mut crate::plot::Plot) {
-        // The single shared graph's canvas follows the "Change BG color" toggle:
-        // the cohesive dark canvas by default (dark_bg = true, matching every
-        // other plot), the white "Change BG" canvas when unticked. `fg` is the
-        // average-overlay colour, kept legible against the chosen background.
-        let fg = if self.dark_bg {
+    /// Rebuild the window's own graph from the current overlay: set the axis
+    /// labels and canvas theme, then draw a sent Feffit fit (when shown), the
+    /// loaded files (stacked, optionally 5-point-smoothed / same-height), an
+    /// optional average, and peak markers. A legend-highlighted curve is drawn
+    /// emphasized. The canvas follows the "Change BG color" toggle (dark house
+    /// canvas by default).
+    fn rebuild(&mut self) {
+        // Everything read from `self` is captured before mutating `self.plot`, so
+        // the draw calls below borrow only `self.plot` (and `self.overlay`, a
+        // disjoint field).
+        let dark = self.dark_bg;
+        // `fg` is the average-overlay colour, kept legible against the chosen
+        // background.
+        let fg = if dark {
             Color32::from_gray(0xe0)
         } else {
             Color32::from_rgb(0x20, 0x20, 0x20)
         };
-        crate::plot::set_theme(plot, !self.dark_bg);
+        let (xlabel, ylabel) = self.axis_labels();
+        let highlighted = self.highlighted.clone();
+        let stack = self.stack;
+        let show_overlay = self.show_overlay;
 
-        // A sent Feffit fit is drawn on top of the files (its space may differ
-        // from the tab's; it plots on the tab's axes like any other overlay).
-        if self.show_overlay
-            && let Some(ov) = &self.overlay
-            && !ov.x.is_empty()
-        {
-            plot.add_curve_with_legend(&ov.x, &ov.data, FIT_DATA, "fit data");
-            // "Only FT" overlays carry no model curve.
-            if !ov.model.is_empty() {
-                plot.add_curve_with_legend(&ov.x, &ov.model, FIT_MODEL, "fit model");
-            }
-        }
-
-        // Palette colours and smoothing, before any stacking offset (shared with
-        // the "Save in single file" path).
+        // Palette colours, smoothing and same-height, before any stacking offset
+        // (shared with the "Save in single file" path).
         let traces = self.built_traces();
-
         // The averaged trace is computed on the un-stacked data, before offsets.
         let avg = if self.show_average && traces.len() > 1 {
             let refs: Vec<(&[f64], &[f64])> = traces
@@ -1023,19 +1038,52 @@ impl PlotDataWindow {
         } else {
             None
         };
+        let peaks_x: Vec<f64> = self.peaks.iter().map(|(_, px, _)| *px).collect();
 
-        // Stack the individual traces (offset i·stack) and draw.
+        // Draw onto the window's own plot.
+        self.plot.clear_curves();
+        crate::plot::set_theme(&mut self.plot, !dark);
+        self.plot.set_graph_x_label(xlabel.as_str());
+        self.plot
+            .set_graph_y_label(ylabel.as_str(), siplot::YAxis::Left);
+
+        // A sent Feffit fit, drawn under the files (disjoint-field borrow: reads
+        // `self.overlay`, writes `self.plot`).
+        if show_overlay
+            && let Some(ov) = &self.overlay
+            && !ov.x.is_empty()
+        {
+            self.plot
+                .add_curve_with_legend(&ov.x, &ov.data, FIT_DATA, "fit data");
+            // "Only FT" overlays carry no model curve.
+            if !ov.model.is_empty() {
+                self.plot
+                    .add_curve_with_legend(&ov.x, &ov.model, FIT_MODEL, "fit model");
+            }
+        }
+
+        // Stack the individual traces (offset i·stack) and draw, emphasizing the
+        // legend-highlighted one.
         for (idx, (label, x, y, color)) in traces.into_iter().enumerate() {
-            let ys = stack_offset_y(y, idx, self.stack);
-            self.add_trace(plot, &label, &x, &ys, color);
+            let ys = stack_offset_y(y, idx, stack);
+            if highlighted.as_deref() == Some(label.as_str()) {
+                self.plot.add_emphasized_curve(&x, &ys, color, label);
+            } else {
+                self.plot.add_curve_with_legend(&x, &ys, color, label);
+            }
         }
 
         if let Some((x, y)) = avg {
-            self.add_trace(plot, "average", &x, &y, fg);
+            if highlighted.as_deref() == Some("average") {
+                self.plot.add_emphasized_curve(&x, &y, fg, "average");
+            } else {
+                self.plot.add_curve_with_legend(&x, &y, fg, "average");
+            }
         }
 
-        for (_, px, _) in &self.peaks {
-            plot.add_x_marker(*px, Color32::from_rgb(0x80, 0x80, 0x80));
+        for px in peaks_x {
+            self.plot
+                .add_x_marker(px, Color32::from_rgb(0x80, 0x80, 0x80));
         }
     }
 }
@@ -1176,6 +1224,21 @@ fn smooth5(y: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+/// Normalize `y` to unit peak-to-peak height, mapping its range onto `[0, 1]`
+/// (min → 0, max → 1) — the original's waterfall "Same height", so every stacked
+/// curve reaches the same height regardless of its native amplitude. A flat
+/// curve (zero span) and an empty slice are returned unchanged. Our
+/// interpretation: no local UWXAFS reference exists for the exact scaling.
+fn same_height_scale(y: &[f64]) -> Vec<f64> {
+    let mn = y.iter().copied().fold(f64::INFINITY, f64::min);
+    let mx = y.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let span = mx - mn;
+    if !span.is_finite() || span == 0.0 {
+        return y.to_vec();
+    }
+    y.iter().map(|v| (v - mn) / span).collect()
+}
+
 /// Raise trace `idx`'s y-values by its stacking offset (`idx · stack`); trace 0
 /// is left unshifted. The single definition of the waterfall offset, shared by
 /// the draw path ([`PlotDataWindow::rebuild`]) and the save path
@@ -1300,6 +1363,17 @@ mod tests {
         assert_eq!(stack_offset_y(y.clone(), 2, 2.5), vec![6.0, 7.0, 8.0]);
         // A zero offset leaves the values untouched (no stacking, no change).
         assert_eq!(stack_offset_y(y.clone(), 3, 0.0), y);
+    }
+
+    #[test]
+    fn same_height_scales_each_curve_to_unit_peak_to_peak() {
+        // A curve spanning [1, 3] maps to [0, 1]: min→0, max→1, midpoints scaled.
+        let s = same_height_scale(&[1.0, 2.0, 3.0, 2.0, 1.0]);
+        assert_eq!(s, vec![0.0, 0.5, 1.0, 0.5, 0.0]);
+        // A flat curve has zero span and is returned unchanged (no divide by zero).
+        assert_eq!(same_height_scale(&[4.0, 4.0, 4.0]), vec![4.0, 4.0, 4.0]);
+        // Empty stays empty.
+        assert!(same_height_scale(&[]).is_empty());
     }
 
     #[test]

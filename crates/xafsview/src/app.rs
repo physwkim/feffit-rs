@@ -191,7 +191,7 @@ impl XafsViewApp {
             .collect();
         plot.add_curve_with_legend(&x, &y, crate::plot::BLUE, "demo edge");
 
-        let plot_data = PlotDataWindow::new();
+        let plot_data = PlotDataWindow::new(render_state);
         let lcf = LcfWindow::new(render_state);
         let pca = PcaWindow::new(render_state);
         let xanes = XanesWindow::new(render_state);
@@ -918,22 +918,15 @@ impl XafsViewApp {
     /// Redraw the shared plot for the active group according to the selected
     /// [`GraphType`]. Curves that need a stage not yet computed are skipped.
     fn replot_graph(&mut self) {
-        // Rebuild the single shared graph: the tab's own base curves first, then
-        // the Plot Data panel's loaded-file overlay on top. The overlay is always
-        // appended — even when there is no current group (so loaded files still
-        // show), since `replot_graph_base` early-returns before drawing any base.
-        // "Clear All" in the Plot Data panel hides the base curves (`show_base`).
+        // The Autobk tab's own graph: the current group's base curves, plus the
+        // other loaded groups overlaid after Multiple_data (the current group is
+        // already drawn in full by `replot_graph_base`). Plot Data is a separate
+        // window now and draws its loaded files onto its own graph.
         self.plot.clear_curves();
-        if self.plot_data.show_base() {
-            self.replot_graph_base();
-            // After Multiple_data, also overlay the other loaded groups so the
-            // whole batch shows at once (the current group is already drawn in
-            // full by `replot_graph_base`).
-            if self.show_all_groups {
-                self.overlay_other_groups();
-            }
+        self.replot_graph_base();
+        if self.show_all_groups {
+            self.overlay_other_groups();
         }
-        self.plot_data.overlay_onto(&mut self.plot);
     }
 
     /// The single "principal" curve `(x, y)` a group contributes for `graph` — the
@@ -1166,30 +1159,10 @@ impl XafsViewApp {
         }
     }
 
-    /// Render the Plot Data controls as a resizable strip below the graph (so the
-    /// central graph keeps the full width) and report whether the shared graph
-    /// must be replotted (the overlay changed: new files, a control edit, a sent
-    /// fit). Added before the central panel so the strip reserves its height first.
-    fn plot_data_strip(&mut self, ui: &mut egui::Ui) -> bool {
-        egui::Panel::bottom("plot_data_strip")
-            .resizable(true)
-            .default_size(180.0)
-            .show_inside(ui, |ui| {
-                ui.add_space(2.0);
-                ui.strong("Plot Data");
-                egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        self.plot_data.controls_ui(ui);
-                    });
-            });
-        self.plot_data.take_dirty()
-    }
-
-    /// The Feffit tab: fit controls on the left, the data-vs-model plot in the
-    /// centre, and the Plot Data controls in a strip below it. The single editor
-    /// *is* the batch configuration; "Batch…" opens the batch in a detached
-    /// window. The Plot Data controls overlay loaded files onto the central graph.
+    /// The Feffit tab: fit controls on the left, the data-vs-model plot filling
+    /// the centre. The single editor *is* the batch configuration; "Batch…" opens
+    /// the batch in a detached window. Plot Data is its own detached window
+    /// (opened from the top bar / "Send to Plot Data"), independent of this graph.
     fn feffit_tab(&mut self, ui: &mut egui::Ui) {
         let mut feffit_action = None;
         // The original Feffit form's bottom "Exit" button is tab chrome, not part
@@ -1226,20 +1199,9 @@ impl XafsViewApp {
                     });
                 });
             });
-        // The Plot Data controls live in a strip below the graph (full graph
-        // width); a change there replots the shared graph — re-appending the
-        // loaded-file overlay — before it shows.
-        if self.plot_data_strip(ui) {
-            self.replot_feffit();
-        }
         egui::CentralPanel::default().show_inside(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });
-        // A legend click on an overlay (loaded-file / average) curve toggles its
-        // highlight; the next replot redraws it emphasized.
-        if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
-            self.plot_data.toggle_highlight(label);
-        }
 
         if exit {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1424,20 +1386,15 @@ impl XafsViewApp {
     /// Redraw the shared plot with the last fit's data vs model in the selected
     /// space/part.
     fn replot_feffit(&mut self) {
-        // Rebuild the single shared graph: the data-vs-model base curves first,
-        // then the Plot Data panel's loaded-file overlay on top (appended even
-        // when there is no fit to plot, so loaded files still show). "Clear All"
-        // in the Plot Data panel hides the base curves (`show_base`).
+        // The Feffit tab's own graph: the focused fit's data-vs-model base curves,
+        // plus every batch run overlaid after a Feffit batch (like Multiple_data
+        // on Autobk). Plot Data is a separate window now and draws its loaded files
+        // onto its own graph.
         self.plot.clear_curves();
-        if self.plot_data.show_base() {
-            self.replot_feffit_base();
-            // After a Feffit batch, also overlay every fitted group's data + model
-            // so the whole batch shows at once (like Multiple_data on Autobk).
-            if self.feffit_batch.show_on_graph() {
-                self.overlay_feffit_runs();
-            }
+        self.replot_feffit_base();
+        if self.feffit_batch.show_on_graph() {
+            self.overlay_feffit_runs();
         }
-        self.plot_data.overlay_onto(&mut self.plot);
     }
 
     /// Overlay every Feffit-batch run's data + model curves for the selected
@@ -1535,12 +1492,14 @@ impl XafsViewApp {
             return;
         };
         let has_model = p.has_model;
-        // The shared graph owns the axis labels, so the fit's own labels are
-        // dropped — it is drawn on top of the loaded files on the tab's axes.
+        // Plot Data's own graph owns the axis labels; the fit's own labels are
+        // dropped — it is drawn on top of the loaded files on that window's axes.
         let (x, data_y, model_y, _xlabel, _ylabel) = p.series(space, part);
         // "Only FT" has no model — send an empty model so Plot Data draws data alone.
         let model_y = if has_model { model_y } else { Vec::new() };
         self.plot_data.set_fit_overlay(label, x, data_y, model_y);
+        // Pop the Plot Data window so the sent fit is visible right away.
+        self.plot_data.open();
         self.status = "Sent the Feffit fit (data + model) to Plot Data.".to_owned();
     }
 
@@ -1989,12 +1948,6 @@ impl XafsViewApp {
                     });
                 });
             });
-        // The Plot Data controls live in a strip below the graph (full graph
-        // width); a change there replots the shared graph — re-appending the
-        // loaded-file overlay — before the band + graph are shown this frame.
-        if self.plot_data_strip(ui) {
-            self.replot_graph();
-        }
         // Draggable FT-window band over the curve: the forward k-window
         // (kmin/kmax) on the kʷ·χ(k) graph, the reverse R-window (rmin/rmax) on
         // the |χ(R)| graph. Other graphs show no band — `set_window` is simply not
@@ -2034,11 +1987,6 @@ impl XafsViewApp {
                 _ => {}
             }
             change.refit = true;
-        }
-        // A legend click on an overlay (loaded-file / average) curve toggles its
-        // highlight; the next replot redraws it emphasized.
-        if let Some(label) = crate::plot::take_legend_click(&mut self.plot) {
-            self.plot_data.toggle_highlight(label);
         }
 
         if open_clicked {
@@ -2137,6 +2085,15 @@ impl XafsViewApp {
             if make_xmu_files {
                 self.tab = Tab::Autobk;
                 self.make_xmu_from_files();
+            }
+            // Plot Data — the cross-stage file-overlay viewer, its own detached
+            // window (kept open alongside any tab, like the original XAFSView).
+            if ui
+                .button("Plot Data")
+                .on_hover_text("Open the Plot Data file-overlay window")
+                .clicked()
+            {
+                self.plot_data.open();
             }
             ui.menu_button("Periodic table", |ui| {
                 if ui.button("Periodic table + atom data…").clicked() {
@@ -2427,8 +2384,8 @@ impl eframe::App for XafsViewApp {
             });
         });
 
-        // Keep the Plot Data panel's folder defaults fresh before its controls
-        // render in the strip below the graph (Autobk / Feffit).
+        // Keep the Plot Data window's folder defaults (file-picker start dir,
+        // save-dialog default) fresh before it renders below.
         self.plot_data.set_dirs(
             self.session.folders.results_dir.as_deref(),
             self.session.folders.data_dir.as_deref(),
@@ -2485,10 +2442,10 @@ impl eframe::App for XafsViewApp {
             None => {}
         }
 
-        // The Plot Data controls render in the strip below the graph tabs and its
-        // overlay is appended to the shared graph by the tab replots; only its
-        // file picker — a transient two-pane dialog in its own sub-window —
-        // renders here.
+        // The detached Plot Data window (its own graph + control column, like the
+        // original XAFSView) and its file-selection sub-window — both render here,
+        // independent of the active tab, and only when opened.
+        self.plot_data.show_window(ui.ctx());
         self.plot_data.file_picker(ui.ctx());
 
         // The detached "Data" window: the loaded-group manager (list + Add +
