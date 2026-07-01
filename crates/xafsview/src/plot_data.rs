@@ -317,7 +317,10 @@ impl PlotDataWindow {
             self.show_overlay = false;
             self.dirty = true;
         }
-        ui.separator();
+        // A plain `ui.separator()` fills the full available width, which would
+        // stretch this strip group; a bare space keeps the group at its content
+        // width.
+        ui.add_space(6.0);
     }
 
     /// The "Display" group: k-weight, stack offset, averaging, smoothing, and the
@@ -512,7 +515,9 @@ impl PlotDataWindow {
                 self.dirty = true;
             }
         }
-        ui.separator();
+        // A bare space, not `ui.separator()` (which fills the full available width
+        // and would stretch this strip group to the whole panel).
+        ui.add_space(6.0);
         // The tab's own curve (the Autobk reduction / Feffit data+model) is drawn
         // by the tab, not loaded here; this checkbox is the visible owner of its
         // visibility, and "Clear All" wipes everything (files + base curve).
