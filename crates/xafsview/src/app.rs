@@ -1431,8 +1431,44 @@ impl XafsViewApp {
         self.plot.clear_curves();
         if self.plot_data.show_base() {
             self.replot_feffit_base();
+            // After a Feffit batch, also overlay every fitted group's data + model
+            // so the whole batch shows at once (like Multiple_data on Autobk).
+            if self.feffit_batch.show_on_graph() {
+                self.overlay_feffit_runs();
+            }
         }
         self.plot_data.overlay_onto(&mut self.plot);
+    }
+
+    /// Overlay every Feffit-batch run's data + model curves for the selected
+    /// space/part onto the shared graph — the batch-comparison view. The tab's own
+    /// focused fit is already drawn by [`replot_feffit_base`], so the run matching
+    /// its group is skipped; the others use palette colours past the focused fit's,
+    /// each legended by group label (`"<label> data"` / `"<label> fit"`).
+    fn overlay_feffit_runs(&mut self) {
+        let (space, part) = self.feffit.plot_selection();
+        let focused = self.feffit_fit_group.as_deref();
+        let palette = &crate::plot::PALETTE;
+        let mut j = 0usize;
+        for (label, p) in self.feffit_batch.runs_with_plots() {
+            if Some(label) == focused {
+                continue;
+            }
+            let (x, data_y, model_y, _xl, _yl) = p.series(space, part);
+            if x.is_empty() {
+                continue;
+            }
+            // Skip the first two palette slots (the focused fit's data/model
+            // colours) so a batch curve never matches the focused fit.
+            let color = palette[2 + j % (palette.len() - 2)];
+            self.plot
+                .add_curve_with_legend(&x, &data_y, color, format!("{label} data"));
+            if p.has_model {
+                self.plot
+                    .add_curve_with_legend(&x, &model_y, color, format!("{label} fit"));
+            }
+            j += 1;
+        }
     }
 
     /// Draw the Feffit tab's own data-vs-model base curves into the
@@ -2469,6 +2505,12 @@ impl eframe::App for XafsViewApp {
             Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
             Some(BatchAction::SaveFeffitOutputs(files)) => self.write_feffit_output_files(files),
             None => {}
+        }
+        // A batch run / clear / overlay-toggle rebuilds the Feffit graph overlay,
+        // but only while the Feffit tab is the one showing the shared plot (the
+        // batch window renders regardless of the active tab).
+        if self.tab == Tab::Feffit && self.feffit_batch.take_graph_dirty() {
+            self.replot_feffit();
         }
 
         // The "Make μ(E) from files" staging picker: OK builds a group per

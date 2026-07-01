@@ -17,7 +17,7 @@ use eframe::egui;
 use feffit::xasdata::XasGroup;
 use rayon::prelude::*;
 
-use crate::feffit_ui::{FeffitUi, SavedPath};
+use crate::feffit_ui::{FeffitPlot, FeffitUi, SavedPath};
 use crate::plot::RED;
 
 /// The eight savable "items" of the original Save-Items dialog, each as
@@ -85,6 +85,13 @@ pub struct FeffitBatch {
     /// Inclusive path-index range written for each item.
     save_from: usize,
     save_to: usize,
+    /// Whether the batch fits are overlaid on the shared Feffit graph (each
+    /// fitted group's data + model). The app reads it in `replot_feffit`.
+    show_on_graph: bool,
+    /// Set when the graph overlay must be rebuilt — a run finished, results were
+    /// cleared, or the overlay was toggled. The app consumes it via
+    /// [`take_graph_dirty`](Self::take_graph_dirty) and replots the Feffit graph.
+    graph_dirty: bool,
 }
 
 impl Default for FeffitBatch {
@@ -97,6 +104,8 @@ impl Default for FeffitBatch {
             save_sel: [false, false, true, false, false, false, false, true],
             save_from: 1,
             save_to: 1,
+            show_on_graph: true,
+            graph_dirty: false,
         }
     }
 }
@@ -147,6 +156,7 @@ impl FeffitBatch {
                 .on_hover_text("Fit each checked group with the Feffit tab's current config")
                 .clicked()
             {
+                // run_all marks the graph dirty; the app replots the overlay.
                 self.run_all(groups, template);
             }
             if ui
@@ -154,8 +164,17 @@ impl FeffitBatch {
                 .clicked()
             {
                 self.runs.clear();
+                self.graph_dirty = true;
             }
         });
+        // Overlay every fitted group's data + model on the Feffit tab's graph.
+        if ui
+            .checkbox(&mut self.show_on_graph, "Show all fits on the graph")
+            .on_hover_text("Overlay every fitted group's data + model on the Feffit tab's graph")
+            .changed()
+        {
+            self.graph_dirty = true;
+        }
 
         ui.separator();
         let any_fit = self.runs.iter().any(|r| r.ui.plot().is_some());
@@ -220,6 +239,26 @@ impl FeffitBatch {
         bubble
     }
 
+    /// Whether the batch fits should be overlaid on the shared Feffit graph.
+    pub fn show_on_graph(&self) -> bool {
+        self.show_on_graph
+    }
+
+    /// Clear and report the "graph overlay needs rebuilding" flag (a run finished,
+    /// results were cleared, or the overlay was toggled). The app replots the
+    /// Feffit graph when it returns `true`.
+    pub fn take_graph_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.graph_dirty)
+    }
+
+    /// Each successful run's `(group label, its fit plot)`, for overlaying the
+    /// whole batch onto the shared Feffit graph.
+    pub fn runs_with_plots(&self) -> impl Iterator<Item = (&str, &FeffitPlot)> + '_ {
+        self.runs
+            .iter()
+            .filter_map(|r| r.ui.plot().map(|p| (r.label.as_str(), p)))
+    }
+
     /// Rebuild the run list from the current members + template and fit each
     /// group. Members are run in ascending group order; the fits are independent
     /// (own config, own FFT planner, reading only the shared `groups`) so they
@@ -241,6 +280,9 @@ impl FeffitBatch {
         self.runs
             .par_iter_mut()
             .for_each(|run| run_one(run, groups));
+        // The run list changed, so the shared Feffit graph's batch overlay is
+        // stale — the app replots when it next reads `take_graph_dirty`.
+        self.graph_dirty = true;
     }
 
     /// Collect the FEFFIT k/r/q `.dat`/`.fit` files for every run that has a
@@ -427,6 +469,13 @@ mod tests {
             b.runs.iter().all(|r| r.ui.plot().is_some()),
             "each run produced a transform"
         );
+        // The graph overlay reads every fitted run through `runs_with_plots`,
+        // labelled by group — the two checked groups, in order.
+        let overlaid: Vec<&str> = b.runs_with_plots().map(|(label, _)| label).collect();
+        assert_eq!(overlaid, vec!["A", "B"]);
+        // Run all flagged the graph for a rebuild; the app consumes it once.
+        assert!(b.take_graph_dirty(), "a finished run marks the graph dirty");
+        assert!(!b.take_graph_dirty(), "the flag is cleared after one read");
         // The data .dat transforms are now saveable across the run groups.
         assert!(
             !b.feffit_output_files(&groups, &FeffitUi::default())
