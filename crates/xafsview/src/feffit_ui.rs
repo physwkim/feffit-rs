@@ -600,6 +600,7 @@ impl ReportKind {
 }
 
 /// Data and model arrays from the last fit, ready to plot in any space.
+#[derive(Clone)]
 pub struct FeffitPlot {
     pub data_k: Vec<f64>,
     pub data_chi: Vec<f64>,

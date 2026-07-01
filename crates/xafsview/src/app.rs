@@ -91,6 +91,15 @@ pub struct XafsViewApp {
     /// Label of the group the last main-tab Feffit fit was run on, so "Send to
     /// Plot Data" names the fitted group even after the current group changes.
     feffit_fit_group: Option<String>,
+    /// Every fit from the last Feffit tab "Run" (`(group label, plot)`), so a
+    /// multi-group run can overlay all fits on the Feffit graph the way AUTOBK's
+    /// "Show all groups" overlays every reduced group. The focused group's fit is
+    /// drawn prominently by the base curves and skipped in the overlay.
+    feffit_run_overlays: Vec<(String, FeffitPlot)>,
+    /// Whether the last Feffit tab run's fits are overlaid on the graph — the
+    /// Feffit-tab twin of [`show_all_groups`]. A multi-group Run turns it on; a
+    /// "Show all fits" checkbox by the Run button is its visible owner.
+    feffit_show_all_fits: bool,
     /// The Feffit batch state (shown in the detached "Feffit — Batch" window,
     /// opened from the Feffit tab's "Batch…" button): runs the tab's config
     /// against several checked groups, tabulates and saves the results.
@@ -213,6 +222,8 @@ impl XafsViewApp {
             show_all_groups: false,
             feffit: FeffitUi::default(),
             feffit_fit_group: None,
+            feffit_run_overlays: Vec::new(),
+            feffit_show_all_fits: false,
             feffit_batch: FeffitBatch::default(),
             batch_load: BatchLoadWindow::default(),
             data_window_open: false,
@@ -1245,6 +1256,7 @@ impl XafsViewApp {
         // and are omitted per the functional-only field rule; "Send to plot
         // data" opens the group's Plot Data overlay.
         let mut exit = false;
+        let mut replot = false;
         egui::Panel::left("feffit_controls")
             .resizable(true)
             .default_size(380.0)
@@ -1272,6 +1284,19 @@ impl XafsViewApp {
                                 self.session.selected.len()
                             ));
                         });
+                        // The AUTOBK "Show all groups" twin: overlay every checked
+                        // group's fit after a multi-group Run.
+                        if n_groups > 1
+                            && ui
+                                .checkbox(&mut self.feffit_show_all_fits, "Show all fits")
+                                .on_hover_text(
+                                    "Overlay every checked group's fit on the graph \
+                                     (the Feffit twin of AUTOBK's \"Show all groups\")",
+                                )
+                                .changed()
+                        {
+                            replot = true;
+                        }
                     }
                     ui.horizontal(|ui| {
                         if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
@@ -1299,6 +1324,9 @@ impl XafsViewApp {
 
         if exit {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if replot {
+            self.replot_feffit();
         }
         match feffit_action {
             Some(FeffitAction::AddPath) => self.add_feff_path(),
@@ -1461,6 +1489,9 @@ impl XafsViewApp {
             Some(c) if targets.contains(&c) => c,
             _ => targets[0],
         };
+        // Collect every fitted group's plot so a multi-group run can overlay all
+        // fits (the AUTOBK "Show all groups" twin). Rebuilt each run.
+        self.feffit_run_overlays.clear();
         let mut fit_ok = 0usize;
         let mut saved = 0usize;
         let mut no_chi = 0usize;
@@ -1489,17 +1520,18 @@ impl XafsViewApp {
                         focused_msg = msg;
                         self.feffit_fit_group = Some(label.clone());
                         // The data .dat files always write; "Only FT" has no model,
-                        // so output_pairs omits the .fit files.
-                        focused_note = match self.feffit.plot() {
-                            Some(plot) => match self.write_feffit_outputs(plot, &label, idx) {
+                        // so output_pairs omits the .fit files. Keep a plot snapshot
+                        // for the overlay (owned, so the write + push don't clash).
+                        if let Some(plot) = self.feffit.plot().cloned() {
+                            focused_note = match self.write_feffit_outputs(&plot, &label, idx) {
                                 Ok(n) => {
                                     saved += 1;
                                     format!(" · saved {n} .dat/.fit files")
                                 }
                                 Err(e) => format!(" · .dat/.fit not written: {e}"),
-                            },
-                            None => String::new(),
-                        };
+                            };
+                            self.feffit_run_overlays.push((label.clone(), plot));
+                        }
                     }
                     Err(e) => {
                         focused_msg = e.clone();
@@ -1513,10 +1545,11 @@ impl XafsViewApp {
                 match cfg.run(&k, &chi) {
                     Ok(_) => {
                         fit_ok += 1;
-                        if let Some(plot) = cfg.plot()
-                            && self.write_feffit_outputs(plot, &label, idx).is_ok()
-                        {
-                            saved += 1;
+                        if let Some(plot) = cfg.plot() {
+                            if self.write_feffit_outputs(plot, &label, idx).is_ok() {
+                                saved += 1;
+                            }
+                            self.feffit_run_overlays.push((label.clone(), plot.clone()));
                         }
                     }
                     Err(e) => {
@@ -1546,6 +1579,10 @@ impl XafsViewApp {
             }
             m
         };
+        // Show the whole batch at once when several were fit (AUTOBK parity).
+        if targets.len() > 1 {
+            self.feffit_show_all_fits = true;
+        }
         self.replot_feffit();
     }
 
@@ -1558,6 +1595,11 @@ impl XafsViewApp {
         // onto its own graph.
         self.plot.clear_curves();
         self.replot_feffit_base();
+        // The Feffit-tab "Show all fits" overlay (AUTOBK "Show all groups" twin):
+        // every group fitted by the last tab Run.
+        if self.feffit_show_all_fits {
+            self.overlay_tab_run_fits();
+        }
         if self.feffit_batch.show_on_graph() {
             self.overlay_feffit_runs();
         }
@@ -1571,9 +1613,47 @@ impl XafsViewApp {
     fn overlay_feffit_runs(&mut self) {
         let (space, part) = self.feffit.plot_selection();
         let focused = self.feffit_fit_group.as_deref();
+        Self::overlay_fit_plots(
+            &mut self.plot,
+            space,
+            part,
+            focused,
+            self.feffit_batch.runs_with_plots(),
+        );
+    }
+
+    /// Overlay every fit from the last Feffit tab "Run" — the AUTOBK "Show all
+    /// groups" twin for the Feffit tab. The focused group is drawn prominently by
+    /// [`replot_feffit_base`] and skipped here.
+    fn overlay_tab_run_fits(&mut self) {
+        let (space, part) = self.feffit.plot_selection();
+        let focused = self.feffit_fit_group.as_deref();
+        Self::overlay_fit_plots(
+            &mut self.plot,
+            space,
+            part,
+            focused,
+            self.feffit_run_overlays
+                .iter()
+                .map(|(l, p)| (l.as_str(), p)),
+        );
+    }
+
+    /// Overlay a set of fits `(label, plot)` onto the shared Feffit graph in the
+    /// selected `space`/`part`, each in a palette colour and legended by label.
+    /// The `focused` group is skipped — its base curves are already drawn. Shared
+    /// by the tab-Run overlay ([`overlay_tab_run_fits`]) and the batch overlay
+    /// ([`overlay_feffit_runs`]).
+    fn overlay_fit_plots<'a>(
+        plot: &mut crate::plot::Plot,
+        space: crate::feffit_ui::PlotSpace,
+        part: crate::feffit_ui::PlotPart,
+        focused: Option<&str>,
+        runs: impl Iterator<Item = (&'a str, &'a FeffitPlot)>,
+    ) {
         let palette = &crate::plot::PALETTE;
         let mut j = 0usize;
-        for (label, p) in self.feffit_batch.runs_with_plots() {
+        for (label, p) in runs {
             if Some(label) == focused {
                 continue;
             }
@@ -1582,13 +1662,11 @@ impl XafsViewApp {
                 continue;
             }
             // Skip the first two palette slots (the focused fit's data/model
-            // colours) so a batch curve never matches the focused fit.
+            // colours) so an overlaid curve never matches the focused fit.
             let color = palette[2 + j % (palette.len() - 2)];
-            self.plot
-                .add_curve_with_legend(&x, &data_y, color, format!("{label} data"));
+            plot.add_curve_with_legend(&x, &data_y, color, format!("{label} data"));
             if p.has_model {
-                self.plot
-                    .add_curve_with_legend(&x, &model_y, color, format!("{label} fit"));
+                plot.add_curve_with_legend(&x, &model_y, color, format!("{label} fit"));
             }
             j += 1;
         }
