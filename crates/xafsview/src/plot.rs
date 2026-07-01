@@ -135,14 +135,17 @@ pub struct AxisWindow {
 ///
 /// siplot exposes no per-item colour, and its own `show_legend` draws a
 /// visibility-toggle control on every row that the GUI does not want; so each
-/// curve's `(label, colour)` is tracked here as it is added and [`show`] draws a
-/// plain in-axes legend from it. Curves added through
+/// curve's `(label, colour, emphasized)` is tracked here as it is added and
+/// [`show`] draws a plain in-axes legend from it. Curves added through
 /// [`Plot::add_curve_with_legend`] are recorded; bare `add_curve` curves (no
 /// legend) are not. Every other operation falls through to the inner [`Plot1D`]
 /// via `Deref`/`DerefMut`, so all existing plot calls are unchanged.
 pub struct Plot {
     inner: Plot1D,
-    legend: Vec<(String, egui::Color32)>,
+    /// Each curve's `(label, colour, emphasized)`. `emphasized` is set for a
+    /// curve added via [`add_emphasized_curve`](Self::add_emphasized_curve) so
+    /// [`show`] can mark that legend row (mirroring the highlighted curve).
+    legend: Vec<(String, egui::Color32, bool)>,
     /// The legend overlay's position as a fraction `(x, y)` of the data-area
     /// rectangle (its RIGHT_TOP pivot), so it keeps the same relative spot when
     /// the plot is resized. `None` until first shown (defaults to top-right);
@@ -225,15 +228,16 @@ impl Plot {
         legend: impl Into<String>,
     ) -> ItemHandle {
         let legend = legend.into();
-        self.legend.push((legend.clone(), color));
+        self.legend.push((legend.clone(), color, false));
         self.inner.add_curve_with_legend(x, y, color, legend)
     }
 
     /// Like [`add_curve_with_legend`](Self::add_curve_with_legend) but draws the
     /// curve emphasized — a thicker line brought to the front — so a selected
     /// curve stands out without dimming the others. Used by Plot Data's
-    /// legend-click highlight. The legend swatch still records the curve's own
-    /// colour, so its identity is unchanged.
+    /// legend-click highlight. The legend entry is recorded as *emphasized* so
+    /// [`show`] marks that row too, making the highlighted curve identifiable in
+    /// the legend as well as on the canvas.
     pub fn add_emphasized_curve(
         &mut self,
         x: &[f64],
@@ -247,7 +251,7 @@ impl Plot {
         const EMPH_WIDTH: f32 = 3.0;
         const EMPH_Z: f32 = 100.0;
         let legend = legend.into();
-        self.legend.push((legend.clone(), color));
+        self.legend.push((legend.clone(), color, true));
         let handle = self.inner.add_curve_spec(CurveSpec {
             line_width: EMPH_WIDTH,
             ..CurveSpec::new(x, y, color)
@@ -534,11 +538,14 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
 /// siplot's `show_legend`, which the GUI deliberately bypasses); just the colour
 /// key over the transparent overlay. Rows sense a *click* (returned as the
 /// clicked label) so a caller can highlight that curve, but not a *drag*, so a
-/// drag anywhere on the legend still moves the enclosing `Area`. Returns the
-/// label clicked this frame, if any.
+/// drag anywhere on the legend still moves the enclosing `Area`. An emphasized
+/// entry (its `bool` set — the highlighted curve) is drawn with a faint
+/// selection background, a bold label, and a thicker swatch, so the selected
+/// curve is identifiable in the legend. Returns the label clicked this frame, if
+/// any.
 fn draw_legend(
     ui: &mut egui::Ui,
-    entries: &[(String, egui::Color32)],
+    entries: &[(String, egui::Color32, bool)],
     data_bg: egui::Color32,
 ) -> Option<String> {
     const SWATCH_W: f32 = 22.0;
@@ -553,22 +560,42 @@ fn draw_legend(
         egui::Color32::from_gray(0xe0)
     };
     ui.spacing_mut().item_spacing.y = 2.0;
+    // The emphasized (highlighted) row gets a faint selection fill that reads on
+    // either canvas — light on a dark background, dark on a light one.
+    let sel_bg = if luma > 128.0 {
+        egui::Color32::from_black_alpha(28)
+    } else {
+        egui::Color32::from_white_alpha(28)
+    };
     let mut clicked = None;
-    for (label, color) in entries {
-        let row = ui
-            .horizontal(|ui| {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(SWATCH_W, SWATCH_H), egui::Sense::hover());
-                let y = rect.center().y;
-                ui.painter().line_segment(
-                    [
-                        egui::pos2(rect.left() + 2.0, y),
-                        egui::pos2(rect.right() - 2.0, y),
-                    ],
-                    egui::Stroke::new(2.0, *color),
-                );
-                ui.add_space(4.0);
-                ui.colored_label(text, label.as_str());
+    for (label, color, emph) in entries {
+        let row = egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(4, 1))
+            .corner_radius(egui::CornerRadius::same(3))
+            .fill(if *emph {
+                sel_bg
+            } else {
+                egui::Color32::TRANSPARENT
+            })
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (rect, _) = ui
+                        .allocate_exact_size(egui::vec2(SWATCH_W, SWATCH_H), egui::Sense::hover());
+                    let y = rect.center().y;
+                    // Thicken the emphasized entry's swatch to mirror the
+                    // emphasized curve (3.0 line width) it stands for.
+                    let swatch_w = if *emph { 3.0 } else { 2.0 };
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(rect.left() + 2.0, y),
+                            egui::pos2(rect.right() - 2.0, y),
+                        ],
+                        egui::Stroke::new(swatch_w, *color),
+                    );
+                    ui.add_space(4.0);
+                    let rich = egui::RichText::new(label.as_str()).color(text);
+                    ui.label(if *emph { rich.strong() } else { rich });
+                });
             })
             .response
             // Add click sense to the whole row without capturing drags, so the
