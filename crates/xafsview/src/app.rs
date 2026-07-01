@@ -1952,10 +1952,12 @@ impl XafsViewApp {
         // Draggable FT-window band over the curve: the forward k-window
         // (kmin/kmax) on the kʷ·χ(k) graph, the reverse R-window (rmin/rmax) on
         // the |χ(R)| graph. Other graphs show no band — `set_window` is simply not
-        // called and `show` removes any stale band. Dragging an edge updates the
-        // bound and recomputes live, the same `change.refit` path a finished
-        // DragValue edit takes (kmin/kmax feed both the AUTOBK background window
-        // and the FT, so a full recompute is the correct cost either way).
+        // called and `show` removes any stale band. The band tracks the cursor
+        // while an edge is dragged, but `take_window_drag` reports the new bounds
+        // only when the drag ends (button released), so the recompute runs once
+        // per drag — the same `change.refit` path a finished DragValue edit takes
+        // (kmin/kmax feed both the AUTOBK background window and the FT, so a full
+        // recompute is the correct cost either way).
         let active_window = match self.reduction.graph {
             GraphType::KChi => Some((self.reduction.kmin, self.reduction.kmax)),
             GraphType::ChiR => Some((self.reduction.rmin, self.reduction.rmax)),

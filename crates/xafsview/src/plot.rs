@@ -166,9 +166,16 @@ pub struct Plot {
     /// Set by [`set_window`] each frame it is called; [`show`] removes the band
     /// when it was *not* requested this frame, then clears the flag.
     window_requested: bool,
-    /// A user drag of either band edge, detected in [`show`] and taken by
-    /// [`take_window_drag`].
+    /// A user drag of either band edge, committed in [`show`] on the frame the
+    /// drag ends and taken by [`take_window_drag`].
     window_dragged: Option<AxisWindow>,
+    /// True while a band-edge drag is in progress (the ROI has moved under the
+    /// pointer but the button is still down). [`set_window`] leaves the ROI to
+    /// siplot's interaction while this holds — re-syncing to the caller's
+    /// still-old bounds would snap the band back and fight the drag — and
+    /// [`show`] defers the [`window_dragged`] commit until the button is
+    /// released, so the reduction recomputes once per drag, not once per frame.
+    window_dragging: bool,
     /// The legend entry the user clicked this frame (its label), set in [`show`]
     /// and consumed by [`take_legend_click`]. Lets a caller (Plot Data) drive a
     /// "highlight the clicked curve" selection; plots that never take it are
@@ -202,6 +209,7 @@ impl Plot {
             window_target: None,
             window_requested: false,
             window_dragged: None,
+            window_dragging: false,
             legend_clicked: None,
         }
     }
@@ -307,9 +315,11 @@ pub fn toolbar(plot: &mut Plot, ui: &mut egui::Ui) {
 /// plot — that has no window). The user drags either edge; [`show`] then reports
 /// the new bounds through [`take_window_drag`].
 ///
-/// The ROI is only re-synced when `window` differs from the value last pushed —
-/// a typed parameter, a graph switch, an Autobk Start — so an in-progress edge
-/// drag is left to siplot's own interaction and not overwritten mid-drag.
+/// The ROI is only re-synced when `window` differs from the value last pushed
+/// *and* no edge-drag is in progress — a typed parameter, a graph switch, an
+/// Autobk Start — so an in-progress edge drag is left to siplot's own
+/// interaction and not overwritten mid-drag (the caller's bounds stay at the
+/// pre-drag value until the drag commits on release).
 pub fn set_window(plot: &mut Plot, window: AxisWindow) {
     plot.window_requested = true;
     match plot.window_roi {
@@ -326,7 +336,7 @@ pub fn set_window(plot: &mut Plot, window: AxisWindow) {
             plot.window_target = Some(window);
         }
         Some(idx) => {
-            if plot.window_target != Some(window) {
+            if !plot.window_dragging && plot.window_target != Some(window) {
                 if let Some(managed) = plot.inner.rois_mut().get_mut(idx) {
                     managed.roi = Roi::VRange {
                         x: (window.min, window.max),
@@ -338,10 +348,12 @@ pub fn set_window(plot: &mut Plot, window: AxisWindow) {
     }
 }
 
-/// Take the FT-window drag detected during the last [`show`], if any: the new
-/// `[min, max]` bounds the user dragged the band to. Returns `Some` once per drag
-/// frame and clears the pending drag, so the caller updates its parameters and
-/// recomputes exactly once.
+/// Take the FT-window drag committed during the last [`show`], if any: the new
+/// `[min, max]` bounds the user dragged the band to. Returns `Some` exactly once
+/// per drag — on the frame the edge-drag ends (button released) — so the caller
+/// updates its parameters and recomputes once, not on every mid-drag frame. The
+/// band still follows the cursor live during the drag ([`show`]); only the
+/// (expensive) recompute is deferred to release.
 pub fn take_window_drag(plot: &mut Plot) -> Option<AxisWindow> {
     plot.window_dragged.take()
 }
@@ -385,21 +397,33 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     // event buffer (RoiAdded/RoiChanged accumulate per frame) since nothing here
     // consumes it — we read state, not events.
     plot.inner.drain_events();
+    // A user edge-drag moves the ROI away from the bounds we last pushed. Track
+    // the live position each frame so the band follows the cursor, but do NOT
+    // commit yet: recomputing the reduction on every mid-drag frame is what made
+    // the FT window sluggish. siplot exposes no ROI-drag-finished event, so the
+    // drag-end signal is egui's pointer release.
     if let Some(idx) = plot.window_roi
         && let Some(managed) = plot.inner.rois().get(idx)
         && let Roi::VRange { x: (min, max) } = managed.roi
         && let Some(t) = plot.window_target
         && ((min - t.min).abs() > 1e-9 || (max - t.max).abs() > 1e-9)
     {
-        let w = AxisWindow { min, max };
-        plot.window_dragged = Some(w);
-        plot.window_target = Some(w);
+        plot.window_target = Some(AxisWindow { min, max });
+        plot.window_dragging = true;
+    }
+    // Commit exactly once, on the frame the drag ends (primary button released).
+    if plot.window_dragging && ui.input(|i| i.pointer.primary_released()) {
+        plot.window_dragged = plot.window_target;
+        plot.window_dragging = false;
     }
     if !plot.window_requested
         && let Some(idx) = plot.window_roi.take()
     {
         plot.inner.remove_roi(idx);
         plot.window_target = None;
+        // Band gone (e.g. graph switched mid-drag): drop any in-progress drag so
+        // a later release cannot commit a stale window onto another graph.
+        plot.window_dragging = false;
     }
     plot.window_requested = false;
 
