@@ -91,7 +91,8 @@ pub struct XafsViewApp {
     /// Label of the group the last main-tab Feffit fit was run on, so "Send to
     /// Plot Data" names the fitted group even after the current group changes.
     feffit_fit_group: Option<String>,
-    /// The Feffit batch panel (right of the Feffit tab): runs the tab's config
+    /// The Feffit batch state (shown in the detached "Feffit — Batch" window,
+    /// opened from the Feffit tab's "Batch…" button): runs the tab's config
     /// against several checked groups, tabulates and saves the results.
     feffit_batch: FeffitBatch,
     /// The "Make μ(E) from files" staging picker (Plot Data-style two-pane add).
@@ -2068,8 +2069,8 @@ impl XafsViewApp {
             let mut make_xmu_files = false;
             ui.menu_button("Multiple_data", |ui| {
                 // Workflow order: build μ(E) for the files first, then reduce
-                // every loaded group. (Batch FEFFIT moved into the Feffit tab's
-                // right-hand panel.)
+                // every loaded group. (Batch FEFFIT is the Feffit tab's "Batch…"
+                // button, which opens its own detached window.)
                 if ui.button("Make μ(E) from files…").clicked() {
                     make_xmu_files = true;
                     ui.close();
