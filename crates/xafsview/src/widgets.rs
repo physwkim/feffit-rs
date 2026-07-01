@@ -54,8 +54,10 @@ pub fn file_name_of(path: &Path) -> String {
 
 /// Render `list` as a multi-select column of file-name rows: a plain click
 /// toggles a row, and a shift-click extends an inclusive range from the last
-/// plain-clicked row (`anchor`). `hi` holds the highlighted paths. Shared by the
-/// Plot Data file picker and the Make-μ(E) batch picker (their two-pane transfer
+/// plain-clicked row (`anchor`). `hi` holds the highlighted paths. Ctrl/Cmd+A
+/// selects the whole list while the pointer is over it (so in a two-pane picker
+/// it targets the pane under the cursor, not both at once). Shared by the Plot
+/// Data file picker and the Make-μ(E) batch picker (their two-pane transfer
 /// lists). Resetting the lists should clear `anchor`, which stales on change.
 pub fn select_list(
     ui: &mut egui::Ui,
@@ -80,6 +82,17 @@ pub fn select_list(
                     *anchor = Some(idx);
                 }
             }
+        }
+    }
+    // Ctrl/Cmd+A selects every item in the list the pointer is over. `command`
+    // is Cmd on macOS / Ctrl elsewhere; `ctrl` also matches so a literal Ctrl+A
+    // works on macOS too. Gated on hover so the shortcut hits the list under the
+    // cursor rather than every `select_list` on screen.
+    if ui.ui_contains_pointer()
+        && ui.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::A))
+    {
+        for path in list {
+            hi.insert(path.clone());
         }
     }
 }
