@@ -80,6 +80,12 @@ pub struct XafsViewApp {
     import: Option<ImportState>,
     /// Reduction (normalize/autobk/FT) parameters and the active graph type.
     reduction: ReductionUi,
+    /// Autobk-graph view mode: when `true`, overlay every loaded group's
+    /// principal curve for the selected graph type (the current group in full,
+    /// the others for comparison) instead of only the current group. Turned on by
+    /// the `Multiple_data` batch actions so a whole batch is shown at once; a
+    /// "Show all groups" checkbox by the group selector is its visible owner.
+    show_all_groups: bool,
     /// FEFFIT tab state: paths, variables, transform, and last fit result.
     feffit: FeffitUi,
     /// Label of the group the last main-tab Feffit fit was run on, so "Send to
@@ -203,6 +209,7 @@ impl XafsViewApp {
             plot,
             import: None,
             reduction: ReductionUi::default(),
+            show_all_groups: false,
             feffit: FeffitUi::default(),
             feffit_fit_group: None,
             feffit_batch: FeffitBatch::default(),
@@ -669,6 +676,8 @@ impl XafsViewApp {
         };
         self.status =
             format!("Multiple AUTOBK: reduced {n} group(s); saved {saved} χ pair(s){fail}.");
+        // Show the whole batch at once, not just the current group.
+        self.show_all_groups = true;
         self.plot_data.mark_dirty();
         self.replot_graph();
     }
@@ -748,6 +757,8 @@ impl XafsViewApp {
             self.reduction.graph = GraphType::MuBkg;
             self.clean_undo.clear();
             self.edit_xmu.reset_seed();
+            // Show every μ(E) just built at once, not just the last group.
+            self.show_all_groups = true;
             self.plot_data.mark_dirty();
             self.replot_graph();
         }
@@ -915,8 +926,91 @@ impl XafsViewApp {
         self.plot.clear_curves();
         if self.plot_data.show_base() {
             self.replot_graph_base();
+            // After Multiple_data, also overlay the other loaded groups so the
+            // whole batch shows at once (the current group is already drawn in
+            // full by `replot_graph_base`).
+            if self.show_all_groups {
+                self.overlay_other_groups();
+            }
         }
         self.plot_data.overlay_onto(&mut self.plot);
+    }
+
+    /// The single "principal" curve `(x, y)` a group contributes for `graph` — the
+    /// one curve used when overlaying several groups (the same quantity
+    /// [`replot_graph_base`] draws as that group's main curve). `None` when the
+    /// stage it needs has not been computed yet.
+    fn group_principal_curve(
+        g: &XasGroup,
+        graph: GraphType,
+        kweight: i32,
+    ) -> Option<(Vec<f64>, Vec<f64>)> {
+        use feffit::xasproc::mathutils::dmude as deriv;
+        let kw_chi = |k: &[f64], chi: &[f64]| {
+            k.iter()
+                .zip(chi)
+                .map(|(&kk, &c)| c * kk.powi(kweight))
+                .collect()
+        };
+        match graph {
+            GraphType::MuBkg => (!g.energy.is_empty()).then(|| (g.energy.clone(), g.mu.clone())),
+            GraphType::Norm => {
+                let flat = g.flat.as_ref().or(g.norm.as_ref())?;
+                (!g.energy.is_empty()).then(|| (g.energy.clone(), flat.clone()))
+            }
+            GraphType::KChi | GraphType::ChiQ => {
+                let (k, chi) = (g.k.as_ref()?, g.chi.as_ref()?);
+                Some((k.clone(), kw_chi(k, chi)))
+            }
+            GraphType::ChiR => {
+                let (r, mag) = (g.r.as_ref()?, g.chir_mag.as_ref()?);
+                Some((r.clone(), mag.clone()))
+            }
+            GraphType::MuDeriv | GraphType::MuBkgEDeriv => (!g.energy.is_empty()
+                && !g.mu.is_empty())
+            .then(|| (g.energy.clone(), deriv(&g.mu, &g.energy))),
+            GraphType::BkgEDeriv => {
+                let bkg = g.bkg.as_ref()?;
+                Some((g.energy.clone(), deriv(bkg, &g.energy)))
+            }
+            GraphType::BkgKDeriv => {
+                let (k, chi, step) = (g.k.as_ref()?, g.chi.as_ref()?, g.edge_step?);
+                let bkg_k: Vec<f64> = chi.iter().map(|&c| -step * c).collect();
+                Some((k.clone(), deriv(&bkg_k, k)))
+            }
+            GraphType::BkgEDeriv2 => {
+                let bkg = g.bkg.as_ref()?;
+                let d1 = deriv(bkg, &g.energy);
+                Some((g.energy.clone(), deriv(&d1, &g.energy)))
+            }
+        }
+    }
+
+    /// Overlay the *other* loaded groups' principal curve for the selected graph
+    /// type onto the shared plot — the batch-comparison view behind
+    /// [`show_all_groups`]. The current group is skipped (already drawn in full by
+    /// [`replot_graph_base`]); the others use palette colours past the current
+    /// group's BLUE / ORANGE, legended by group label.
+    ///
+    /// [`show_all_groups`]: Self::show_all_groups
+    fn overlay_other_groups(&mut self) {
+        let graph = self.reduction.graph;
+        let kweight = self.reduction.kweight;
+        let cur = self.session.current;
+        let palette = &crate::plot::PALETTE;
+        let mut j = 0usize;
+        for (i, g) in self.session.groups.iter().enumerate() {
+            if Some(i) == cur {
+                continue;
+            }
+            if let Some((x, y)) = Self::group_principal_curve(g, graph, kweight) {
+                // Skip BLUE / ORANGE (the current group's colours) so a comparison
+                // curve never shares the focused group's colour.
+                let color = palette[2 + j % (palette.len() - 2)];
+                self.plot.add_curve_with_legend(&x, &y, color, &g.label);
+                j += 1;
+            }
+        }
     }
 
     /// Draw the Autobk tab's own base curves for the selected graph type into the
@@ -1595,6 +1689,19 @@ impl XafsViewApp {
                 self.data_window_open = true;
             }
         });
+        // With several groups loaded, offer the batch-comparison overlay (the
+        // Multiple_data actions turn it on; this is where to turn it back off).
+        if n > 1
+            && ui
+                .checkbox(&mut self.show_all_groups, "Show all groups")
+                .on_hover_text(
+                    "Overlay every loaded group's curve for this graph type, \
+                     not just the selected one",
+                )
+                .changed()
+        {
+            changed = true;
+        }
         changed
     }
 
@@ -2558,6 +2665,26 @@ fn file_name_of(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_principal_curve_matches_the_selected_graph_type() {
+        // μ(E) view → the raw (energy, μ) of the group.
+        let gm = XasGroup::from_mu("m", vec![7000.0, 7001.0, 7002.0], vec![0.1, 0.2, 0.3]);
+        let (x, y) =
+            XafsViewApp::group_principal_curve(&gm, GraphType::MuBkg, 2).expect("μ(E) principal");
+        assert_eq!(x, vec![7000.0, 7001.0, 7002.0]);
+        assert_eq!(y, vec![0.1, 0.2, 0.3]);
+
+        // kʷ·χ(k) view → χ weighted by kʷ (here w = 2), so y = χ·k².
+        let gk = XasGroup::from_chi("k", vec![1.0, 2.0, 3.0], vec![0.5, 0.5, 0.5]);
+        let (xk, yk) =
+            XafsViewApp::group_principal_curve(&gk, GraphType::KChi, 2).expect("kʷ·χ principal");
+        assert_eq!(xk, vec![1.0, 2.0, 3.0]);
+        assert_eq!(yk, vec![0.5, 2.0, 4.5]);
+
+        // A μ(E)-only group has no χ(R) stage → nothing to overlay in the R view.
+        assert!(XafsViewApp::group_principal_curve(&gm, GraphType::ChiR, 2).is_none());
+    }
 
     #[test]
     fn write_xmu_roundtrips_through_the_column_reader() {
