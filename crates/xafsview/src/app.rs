@@ -1309,9 +1309,30 @@ impl XafsViewApp {
                     });
                 });
             });
+        // Draggable FT-window band, the Feffit twin of the Autobk tab's band:
+        // kmin/kmax on the k / q graphs, rmin/rmax on the R graph. Shown only
+        // while "Show k/R range" is on (off by default). A finished edge drag
+        // writes the new bounds back onto the FT window (same as editing the
+        // kmin/kmax/rmin/rmax fields); the values apply on the next Run.
+        if self.feffit.show_range {
+            let (min, max) = self.feffit.range_window();
+            crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
+        }
         egui::CentralPanel::default().show_inside(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });
+        if self.feffit.show_range
+            && let Some(w) = crate::plot::take_window_drag(&mut self.plot)
+        {
+            // A left-edge drag past the right (or vice versa) inverts the pair;
+            // re-order so min < max and keep the lower bound off negative k/R.
+            let (lo, hi) = if w.min <= w.max {
+                (w.min, w.max)
+            } else {
+                (w.max, w.min)
+            };
+            self.feffit.set_range_window(lo.max(0.0), hi);
+        }
 
         if exit {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -2227,19 +2248,24 @@ impl XafsViewApp {
                     });
                 });
             });
-        // Draggable FT-window band over the curve: the forward k-window
-        // (kmin/kmax) on the kʷ·χ(k) graph, the reverse R-window (rmin/rmax) on
-        // the |χ(R)| graph. Other graphs show no band — `set_window` is simply not
-        // called and `show` removes any stale band. The band tracks the cursor
+        // Draggable FT-window band over the curve, shown only while "Show k/R
+        // range" is on (off by default): the forward k-window (kmin/kmax) on the
+        // kʷ·χ(k) graph, the reverse R-window (rmin/rmax) on the |χ(R)| graph.
+        // With the toggle off, or on any other graph, no band — `set_window` is
+        // simply not called and `show` removes any stale band. The band tracks the cursor
         // while an edge is dragged, but `take_window_drag` reports the new bounds
         // only when the drag ends (button released), so the recompute runs once
         // per drag — the same `change.refit` path a finished DragValue edit takes
         // (kmin/kmax feed both the AUTOBK background window and the FT, so a full
         // recompute is the correct cost either way).
-        let active_window = match self.reduction.graph {
-            GraphType::KChi => Some((self.reduction.kmin, self.reduction.kmax)),
-            GraphType::ChiR => Some((self.reduction.rmin, self.reduction.rmax)),
-            _ => None,
+        let active_window = if self.reduction.show_range {
+            match self.reduction.graph {
+                GraphType::KChi => Some((self.reduction.kmin, self.reduction.kmax)),
+                GraphType::ChiR => Some((self.reduction.rmin, self.reduction.rmax)),
+                _ => None,
+            }
+        } else {
+            None
         };
         if let Some((min, max)) = active_window {
             crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });

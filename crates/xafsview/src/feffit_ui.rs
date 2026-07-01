@@ -828,6 +828,11 @@ pub struct FeffitUi {
     param_undo: Option<Vec<ParamRow>>,
     result: Option<FeffitResult>,
     plot: Option<FeffitPlot>,
+    /// When set, draw a draggable FT-window band on the graph so the current
+    /// graph's range — kmin/kmax on the k / q / K+Q graphs, rmin/rmax on the R
+    /// graph — can be set by dragging its edges. Off by default; the Autobk tab
+    /// carries the same toggle. See [`range_window`](Self::range_window).
+    pub show_range: bool,
 }
 
 impl Default for FeffitUi {
@@ -853,6 +858,7 @@ impl Default for FeffitUi {
             param_undo: None,
             result: None,
             plot: None,
+            show_range: false,
         }
     }
 }
@@ -877,6 +883,36 @@ impl FeffitUi {
             param_undo: None,
             result: None,
             plot: None,
+            show_range: false,
+        }
+    }
+
+    /// The FT-window bounds `(min, max)` to draw as a draggable band for the
+    /// current graph: the forward k-window (kmin/kmax) on the k / q / K+Q graphs,
+    /// the reverse R-window (rmin/rmax) on the R graph. Paired with
+    /// [`set_range_window`](Self::set_range_window), this lets the
+    /// kmin/kmax/rmin/rmax fields be set by dragging the band — the Feffit twin
+    /// of the Autobk tab's FT-window band.
+    pub fn range_window(&self) -> (f64, f64) {
+        match self.space {
+            PlotSpace::R => (self.ft.rmin, self.ft.rmax),
+            _ => (self.ft.kmin, self.ft.kmax),
+        }
+    }
+
+    /// Write a band drag back onto the current graph's FT window, mirroring the
+    /// numeric kmin/kmax/rmin/rmax fields. `lo`/`hi` must be pre-ordered and the
+    /// lower bound clamped ≥ 0 by the caller.
+    pub fn set_range_window(&mut self, lo: f64, hi: f64) {
+        match self.space {
+            PlotSpace::R => {
+                self.ft.rmin = lo;
+                self.ft.rmax = hi;
+            }
+            _ => {
+                self.ft.kmin = lo;
+                self.ft.kmax = hi;
+            }
         }
     }
 
@@ -1704,6 +1740,14 @@ impl FeffitUi {
                     }
                 });
             }
+            // A draggable FT-window band so the range can be set on the graph:
+            // kmin/kmax on the k / q graphs, rmin/rmax on the R graph. Off by
+            // default (the Autobk tab carries the same toggle).
+            ui.checkbox(&mut self.show_range, "Show k/R range")
+                .on_hover_text(
+                    "Drag the kmin/kmax (k / q graph) or rmin/rmax (R graph) \
+                     FT-window band on the graph to set the range",
+                );
             // The Feffit twin of AUTOBK's "Show all groups": overlay every checked
             // group's fit on the graph after a multi-group Run.
             if show_all_enabled
@@ -2481,6 +2525,25 @@ mod tests {
         let mut ui = FeffitUi::default();
         assert_eq!(ui.adopt_fit_as_guess(), 0);
         assert!(!ui.undo_guess(), "no snapshot recorded without a fit");
+    }
+
+    #[test]
+    fn range_window_maps_space_to_the_k_or_r_bounds() {
+        let mut ui = FeffitUi::default();
+        // The default graph is R-space → the reverse R-window (rmin/rmax); a
+        // band drag writes straight back onto those bounds.
+        assert_eq!(ui.range_window(), (ui.ft.rmin, ui.ft.rmax));
+        ui.set_range_window(1.1, 3.3);
+        assert_eq!((ui.ft.rmin, ui.ft.rmax), (1.1, 3.3));
+        // k / q / K+Q graphs → the forward k-window (kmin/kmax).
+        for space in [PlotSpace::K, PlotSpace::Q, PlotSpace::KQ] {
+            ui.space = space;
+            assert_eq!(ui.range_window(), (ui.ft.kmin, ui.ft.kmax));
+            ui.set_range_window(2.5, 12.5);
+            assert_eq!((ui.ft.kmin, ui.ft.kmax), (2.5, 12.5));
+        }
+        // Writing the k-window must leave the earlier R-window untouched.
+        assert_eq!((ui.ft.rmin, ui.ft.rmax), (1.1, 3.3));
     }
 
     #[test]

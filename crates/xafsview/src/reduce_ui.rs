@@ -147,6 +147,10 @@ pub struct ReductionUi {
     pub clamp_hi: f64,
     /// Active graph type.
     pub graph: GraphType,
+    /// When set, draw a draggable FT-window band on the kʷ·χ(k) (kmin/kmax) and
+    /// |χ(R)| (rmin/rmax) graphs so the range can be set on the graph. Off by
+    /// default; the Feffit tab carries the same toggle.
+    pub show_range: bool,
     /// Let `pre_edge` auto-determine the pre-edge / normalization ranges; when
     /// off, the `pre1`/`pre2`/`norm1`/`norm2` values below are used.
     pub pre_norm_auto: bool,
@@ -191,6 +195,7 @@ impl Default for ReductionUi {
             clamp_lo: 0.0,
             clamp_hi: 1.0,
             graph: GraphType::MuBkg,
+            show_range: false,
             pre_norm_auto: true,
             // Manual-range fallbacks default to the original XAFSView pre-edge /
             // normalization windows (Pre1/Pre2/Nor1/Nor2 = -200/-50/150/400), so
@@ -443,6 +448,17 @@ impl ReductionUi {
                                     }
                                 }
                             });
+                        ui.end_row();
+
+                        // "Show k/R range": reveal the draggable FT-window band on
+                        // the kʷ·χ(k) (kmin/kmax) and |χ(R)| (rmin/rmax) graphs. Off
+                        // by default; the Feffit tab carries the same toggle.
+                        ui.label("k/R range");
+                        ui.checkbox(&mut self.show_range, "drag on graph")
+                            .on_hover_text(
+                                "Drag the kmin/kmax (kʷ·χ(k) graph) or rmin/rmax \
+                                 (|χ(R)| graph) FT-window band to set the range",
+                            );
                         ui.end_row();
 
                         // Reverse-FT R-window (the back-transform peak selection
