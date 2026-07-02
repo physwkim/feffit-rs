@@ -27,7 +27,7 @@ feffit = { path = "../feffit", version = "0.1.1", features = ["spacegroup"] }
 # renderer is required (Plot1D paints through an egui-wgpu callback).
 eframe = { version = "0.34", default-features = false, features = ["wgpu", "default_fonts"] }
 egui = "0.34"
-siplot = "0.3"
+siplot = "0.4.1"
 # Native file/folder dialogs (Folders tab, Open/Save). Matches siplot's rfd pin.
 rfd = "0.17"
 
