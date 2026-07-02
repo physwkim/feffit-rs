@@ -5,9 +5,12 @@ name: Rust
 # nextest, and doctests. The Windows GUI packaging build lives in
 # windows-build.yml.
 #
-# No system dev packages are installed, and none are needed to *build* here:
+# One system library is installed: libcups. siplot's `print` dialog pulls the
+# `printers` crate, which `#[link]`s libcups on Linux, so the xafsview binary
+# needs libcups.so at link time (the Build/Test steps, not Clippy). Everything
+# else links nothing at build time:
 #   - The GUI stack (egui/eframe/wgpu/winit) loads X11 / Wayland / xkbcommon via
-#     dlopen at runtime (x11rb is pure Rust), so nothing links at build time.
+#     dlopen at runtime (x11rb is pure Rust); arboard's clipboard is pure Rust.
 #   - rfd's default xdg-portal backend needs no GTK.
 #   - feffit's default `feff10` feature pulls feff10-sys, which downloads the
 #     self-contained prebuilt libfeff10-linux-x86_64.a from the feff10-rs
@@ -43,6 +46,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # siplot's print dialog -> `printers` crate #[link]s libcups on Linux, so
+      # the xafsview binary needs libcups.so to link. -dev supplies the .so
+      # symlink for -lcups.
+      - name: Install Linux system libraries
+        run: sudo apt-get update && sudo apt-get install -y libcups2-dev
 
       - uses: dtolnay/rust-toolchain@master
         with:
