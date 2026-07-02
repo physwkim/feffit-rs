@@ -95,6 +95,13 @@ pub struct XafsViewApp {
     ///
     /// [`show_all_groups`]: Self::show_all_groups
     show_bkg: bool,
+    /// Waterfall offset (data units) between the group comparison curves under
+    /// [`show_all_groups`], mirroring Plot Data's "Stacking": the focused group
+    /// sits at the baseline and the j-th comparison overlay is lifted by
+    /// `(j+1) · stack`. `0.0` leaves every curve at its true level.
+    ///
+    /// [`show_all_groups`]: Self::show_all_groups
+    stack: f64,
     /// FEFFIT tab state: paths, variables, transform, and last fit result.
     feffit: FeffitUi,
     /// Label of the group the last main-tab Feffit fit was run on, so "Send to
@@ -230,6 +237,7 @@ impl XafsViewApp {
             reduction: ReductionUi::default(),
             show_all_groups: false,
             show_bkg: true,
+            stack: 0.0,
             feffit: FeffitUi::default(),
             feffit_fit_group: None,
             feffit_run_overlays: Vec::new(),
@@ -1084,6 +1092,7 @@ impl XafsViewApp {
     fn overlay_other_groups(&mut self) {
         let graph = self.reduction.graph;
         let kweight = self.reduction.kweight;
+        let stack = self.stack;
         let cur = self.session.current;
         let palette = &crate::plot::PALETTE;
         let mut j = 0usize;
@@ -1095,6 +1104,15 @@ impl XafsViewApp {
                 // Skip BLUE / ORANGE (the current group's colours) so a comparison
                 // curve never shares the focused group's colour.
                 let color = palette[2 + j % (palette.len() - 2)];
+                // Waterfall: lift the j-th comparison curve by (j+1)·stack above
+                // the focused group (baseline, offset 0), mirroring Plot Data's
+                // per-trace idx·stack. stack == 0 leaves the curve at its level.
+                let off = (j + 1) as f64 * stack;
+                let y: Vec<f64> = if off != 0.0 {
+                    y.iter().map(|v| v + off).collect()
+                } else {
+                    y
+                };
                 self.plot.add_curve_with_legend(&x, &y, color, &g.label);
                 j += 1;
             }
@@ -1963,6 +1981,20 @@ impl XafsViewApp {
                 .on_hover_text(
                     "Overlay every loaded group's curve for this graph type, \
                      not just the selected one",
+                )
+                .changed()
+        {
+            changed = true;
+        }
+        // Waterfall the comparison overlays (Plot Data's "Stacking"). Only shown
+        // once the overlays are actually on screen, since it offsets those curves.
+        if n > 1
+            && self.show_all_groups
+            && ui
+                .add(egui::Slider::new(&mut self.stack, 0.0..=5.0).text("Stacking"))
+                .on_hover_text(
+                    "Vertically offset each comparison overlay so stacked curves \
+                     don't overlap (the focused group stays at the baseline)",
                 )
                 .changed()
         {
