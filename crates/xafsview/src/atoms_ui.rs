@@ -6,8 +6,8 @@
 //! and `feff.inp` parsing live in the headless [`feffinp`] crate; running FEFF is
 //! [`feffrun`] (the external FEFF8.5L pipeline by default — its `feff8l_*`
 //! binaries ship bundled under `assets/feff8l/<platform>/`; the in-process FEFF10
-//! backend stays selectable but is broken on Linux/Windows upstream); the 3D
-//! scene is `siplot`'s [`SceneWidget`].
+//! backend is kept but disabled in the UI, being broken on Linux/Windows
+//! upstream); the 3D scene is `siplot`'s [`SceneWidget`].
 //!
 //! **Scope note.** The Atoms tab does *not* apply space-group symmetry — enter
 //! the full unit cell (every atom), not the asymmetric unit. See [`feffinp`]'s
@@ -341,7 +341,8 @@ fn wrap01(x: f64) -> f64 {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BackendSel {
     /// In-process FEFF10 (no external executables). Broken on Linux/Windows in
-    /// the upstream prebuilt (`Ameyanagi/feff10-rs#1`), so no longer the default.
+    /// the upstream prebuilt (`Ameyanagi/feff10-rs#1`), so disabled in the UI —
+    /// kept for when the upstream prebuilt is fixed.
     Feff10,
     /// External FEFF8.5L subprocess pipeline. The default; its `feff8l_*`
     /// binaries ship bundled (see [`bundled_feff8l_bindir`]).
@@ -481,8 +482,18 @@ impl FeffTab {
             }
             ui.separator();
             ui.label("Select Feff Version");
-            ui.selectable_value(&mut self.backend, BackendSel::Feff10, "FEFF10 (in-process)");
             ui.selectable_value(&mut self.backend, BackendSel::Feff8l, "FEFF8L (external)");
+            // FEFF10 is kept in the tree but disabled: its prebuilt is broken off
+            // macOS (Ameyanagi/feff10-rs#1), so it must not be selectable. Drawn
+            // greyed with the reason on hover; re-enable by restoring the
+            // selectable_value once the upstream prebuilt is fixed.
+            ui.add_enabled(
+                false,
+                egui::Button::selectable(self.backend == BackendSel::Feff10, "FEFF10 (in-process)"),
+            )
+            .on_disabled_hover_text(
+                "FEFF10 is disabled: its prebuilt is broken on Linux/Windows (Ameyanagi/feff10-rs#1).",
+            );
         });
 
         ui.separator();
