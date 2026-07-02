@@ -162,6 +162,10 @@ jobs:
       # libfeff10-windows-x86_64.a (verified against this hash) on first build.
       # FEFF8L_DIR points the feff8l pipeline test at the vendored win64 exes;
       # the broken feff10 e2e test is skipped (see the job comment above).
+      # --nocapture surfaces that test's "RAN feff8l pipeline: N feffNNNN.dat"
+      # stderr line (and, if it ever regressed, its "SKIP" line), so the log
+      # proves feff8l actually ran on Windows rather than self-skipping — which
+      # would otherwise still count as a green pass.
       - name: Test workspace (GNU target)
         shell: msys2 {0}
         env:
@@ -169,4 +173,4 @@ jobs:
           FEFF8L_DIR: ${{ github.workspace }}/crates/xafsview/assets/feff8l/win64
         run: |
           export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:$PATH"
-          cargo test --workspace --target x86_64-pc-windows-gnu -- --skip feff10_pipeline_generates_and_parses_cu_paths
+          cargo test --workspace --target x86_64-pc-windows-gnu -- --nocapture --skip feff10_pipeline_generates_and_parses_cu_paths
