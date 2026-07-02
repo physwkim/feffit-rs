@@ -4,8 +4,10 @@
 //! All three share one `feff.inp` text buffer owned by the app: Atoms *writes*
 //! it, Feff *edits and runs* it, Plot Sites *reads* it. The crystal/cluster math
 //! and `feff.inp` parsing live in the headless [`feffinp`] crate; running FEFF is
-//! [`feffrun`] (default in-process FEFF10 backend, so no external executables are
-//! required); the 3D scene is `siplot`'s [`SceneWidget`].
+//! [`feffrun`] (the external FEFF8.5L pipeline by default — its `feff8l_*`
+//! binaries ship bundled under `assets/feff8l/<platform>/`; the in-process FEFF10
+//! backend stays selectable but is broken on Linux/Windows upstream); the 3D
+//! scene is `siplot`'s [`SceneWidget`].
 //!
 //! **Scope note.** The Atoms tab does *not* apply space-group symmetry — enter
 //! the full unit cell (every atom), not the asymmetric unit. See [`feffinp`]'s
@@ -338,19 +340,79 @@ fn wrap01(x: f64) -> f64 {
 /// Which FEFF backend to run.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BackendSel {
-    /// In-process FEFF10 (no external executables).
+    /// In-process FEFF10 (no external executables). Broken on Linux/Windows in
+    /// the upstream prebuilt (`Ameyanagi/feff10-rs#1`), so no longer the default.
     Feff10,
-    /// External FEFF8L subprocess pipeline (`FEFF8L_DIR`/`PATH`).
+    /// External FEFF8.5L subprocess pipeline. The default; its `feff8l_*`
+    /// binaries ship bundled (see [`bundled_feff8l_bindir`]).
     Feff8l,
 }
 
 impl BackendSel {
-    fn to_engine(self) -> feffit::feffrun::Backend {
+    /// Resolve this choice into a concrete [`Runner`]. FEFF8L prefers the
+    /// bundled binaries, falling back to `FEFF8L_DIR`/`PATH`.
+    fn runner(self) -> Runner {
         match self {
-            BackendSel::Feff10 => feffit::feffrun::Backend::Feff10,
-            BackendSel::Feff8l => feffit::feffrun::Backend::Feff8l,
+            BackendSel::Feff10 => Runner::Feff10,
+            BackendSel::Feff8l => match bundled_feff8l_bindir() {
+                Some(dir) => Runner::Feff8lBundled(dir),
+                None => Runner::Feff8lPath,
+            },
         }
     }
+}
+
+/// A resolved backend, ready to run on the worker thread.
+enum Runner {
+    /// In-process FEFF10 ([`feffit::feffrun::Backend::Feff10`]).
+    Feff10,
+    /// External FEFF8.5L from a specific bundled bin directory.
+    Feff8lBundled(PathBuf),
+    /// External FEFF8.5L resolved from `FEFF8L_DIR`/`PATH`.
+    Feff8lPath,
+}
+
+/// Locate the bundled `feff8l_*` binaries for the current platform.
+///
+/// Resolution order: an explicit `FEFF8L_DIR` override, then a `feff8l/`
+/// directory beside the running executable (the shipped layout), then the repo
+/// `assets/feff8l/<platform>/` (dev builds and tests). Returns `None` when none
+/// of them hold the executables, leaving the caller to fall back to `PATH`.
+fn bundled_feff8l_bindir() -> Option<PathBuf> {
+    let sub = if cfg!(target_os = "windows") {
+        "win64"
+    } else if cfg!(target_os = "macos") {
+        "darwin64"
+    } else {
+        "linux64"
+    };
+    let probe = format!("feff8l_pot{}", std::env::consts::EXE_SUFFIX);
+    let has_exes = |dir: &Path| dir.join(&probe).is_file();
+
+    // 1. Explicit override.
+    if let Some(d) = std::env::var_os(feffit::feffrun::BIN_DIR_ENV) {
+        let p = PathBuf::from(d);
+        if has_exes(&p) {
+            return Some(p);
+        }
+    }
+    // 2. Beside the running executable: <exe_dir>/feff8l/<platform>/.
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let p = dir.join("feff8l").join(sub);
+        if has_exes(&p) {
+            return Some(p);
+        }
+    }
+    // 3. Repo assets (dev builds and tests).
+    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/feff8l")
+        .join(sub);
+    if has_exes(&p) {
+        return Some(p);
+    }
+    None
 }
 
 /// A finished run's summary (the bits we display).
@@ -378,7 +440,7 @@ pub struct FeffTab {
 impl Default for FeffTab {
     fn default() -> Self {
         Self {
-            backend: BackendSel::Feff10,
+            backend: BackendSel::Feff8l,
             running: false,
             rx: None,
             last: None,
@@ -525,12 +587,18 @@ impl FeffTab {
             self.last = Some(Err(format!("create {}: {e}", workdir.display())));
             return;
         }
-        let backend = self.backend.to_engine();
+        let runner = self.backend.runner();
         let text = feff_inp.to_owned();
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let result = backend
-                .run(&text, &workdir)
+            let out = match runner {
+                Runner::Feff10 => feffit::feffrun::Backend::Feff10.run(&text, &workdir),
+                Runner::Feff8lBundled(dir) => {
+                    feffit::feffrun::Feff8l::with_bin_dir(dir).run(&text, &workdir)
+                }
+                Runner::Feff8lPath => feffit::feffrun::Backend::Feff8l.run(&text, &workdir),
+            };
+            let result = out
                 .map(|out| RunSummary {
                     workdir: out.workdir,
                     dat_names: out
@@ -1074,5 +1142,14 @@ mod tests {
         };
         f.geom = vec![leg("Cu"), leg("O"), leg("Cu")];
         assert_eq!(path_label(&f), "Cu – O – Cu");
+    }
+
+    #[test]
+    fn bundled_feff8l_bindir_resolves_vendored_assets() {
+        // A dev checkout (via CARGO_MANIFEST_DIR), or CI with FEFF8L_DIR set,
+        // must resolve to a directory that actually holds feff8l_pot.
+        let dir = bundled_feff8l_bindir().expect("feff8l bin dir should resolve");
+        let probe = format!("feff8l_pot{}", std::env::consts::EXE_SUFFIX);
+        assert!(dir.join(&probe).is_file(), "resolved {dir:?} lacks {probe}");
     }
 }
