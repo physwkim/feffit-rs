@@ -131,6 +131,31 @@ pub struct AxisWindow {
     pub max: f64,
 }
 
+/// One legend-bearing curve's samples, kept so a graph click can hit-test the
+/// plotted data (siplot exposes no queryable copy of a curve's points). Recorded
+/// in lockstep with [`Plot::legend`] and cleared with it.
+struct PickCurve {
+    /// The curve's legend label (shown in the click readout).
+    label: String,
+    /// The curve's colour (drawn as the readout's swatch).
+    color: egui::Color32,
+    /// The curve's `(x, y)` samples, in data coordinates.
+    points: Vec<(f64, f64)>,
+}
+
+/// The nearest data point to the user's last left-click on a plot's data area,
+/// drawn as a pinned bottom readout by [`show`].
+struct Pick {
+    /// The clicked curve's legend label.
+    label: String,
+    /// The clicked curve's colour (the readout swatch).
+    color: egui::Color32,
+    /// The picked vertex's x coordinate.
+    x: f64,
+    /// The picked vertex's y coordinate.
+    y: f64,
+}
+
 /// A [`Plot1D`] bundled with the legend entries for the curves currently on it.
 ///
 /// siplot exposes no per-item colour, and its own `show_legend` draws a
@@ -184,6 +209,16 @@ pub struct Plot {
     /// "highlight the clicked curve" selection; plots that never take it are
     /// unaffected.
     legend_clicked: Option<String>,
+    /// Every legend-bearing curve's samples, recorded alongside
+    /// [`legend`](Self::legend) so a graph *click* can hit-test the plotted data
+    /// (siplot keeps no queryable copy of a curve's samples). Cleared with the
+    /// legend; see [`show`]'s click handler and [`last_pick`](Self::last_pick).
+    pick_curves: Vec<PickCurve>,
+    /// The nearest data point to the user's last left-click on the data area. Set
+    /// in [`show`] when a click lands near a curve, cleared when a click lands near
+    /// none, and drawn as a pinned bottom readout so the clicked curve's name and
+    /// coordinates stay visible.
+    last_pick: Option<Pick>,
 }
 
 impl std::ops::Deref for Plot {
@@ -214,6 +249,8 @@ impl Plot {
             window_dragged: None,
             window_dragging: false,
             legend_clicked: None,
+            pick_curves: Vec::new(),
+            last_pick: None,
         }
     }
 
@@ -229,7 +266,20 @@ impl Plot {
     ) -> ItemHandle {
         let legend = legend.into();
         self.legend.push((legend.clone(), color, false));
+        self.record_pick_curve(&legend, color, x, y);
         self.inner.add_curve_with_legend(x, y, color, legend)
+    }
+
+    /// Record a curve's samples for click hit-testing. Kept in lockstep with the
+    /// [`legend`](Self::legend) push so [`show`]'s click handler can find the
+    /// nearest point without siplot exposing the drawn data.
+    fn record_pick_curve(&mut self, label: &str, color: egui::Color32, x: &[f64], y: &[f64]) {
+        let points: Vec<(f64, f64)> = x.iter().copied().zip(y.iter().copied()).collect();
+        self.pick_curves.push(PickCurve {
+            label: label.to_owned(),
+            color,
+            points,
+        });
     }
 
     /// Like [`add_curve_with_legend`](Self::add_curve_with_legend) but draws the
@@ -252,6 +302,7 @@ impl Plot {
         const EMPH_Z: f32 = 100.0;
         let legend = legend.into();
         self.legend.push((legend.clone(), color, true));
+        self.record_pick_curve(&legend, color, x, y);
         let handle = self.inner.add_curve_spec(CurveSpec {
             line_width: EMPH_WIDTH,
             ..CurveSpec::new(x, y, color)
@@ -268,6 +319,8 @@ impl Plot {
         self.inner.clear();
         self.legend.clear();
         self.rearm_reset_zoom();
+        self.pick_curves.clear();
+        self.last_pick = None;
     }
 
     /// Clear curve items and the recorded legend together. Shadows
@@ -276,6 +329,8 @@ impl Plot {
         self.inner.clear_curves();
         self.legend.clear();
         self.rearm_reset_zoom();
+        self.pick_curves.clear();
+        self.last_pick = None;
     }
 
     /// Re-arm the toolbar's "Reset Zoom" to refit the *current* data.
@@ -451,6 +506,22 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     {
         let data = transform.pixel_to_data(pos);
         draw_cursor_overlay(ui, area, pos, data, readout_on, crosshair_on, data_bg);
+    }
+
+    // Left-click on the data area pins the nearest curve's name and (x, y) as a
+    // bottom readout (a *separate* area from the pointer-following cursor overlay,
+    // per the request). The hit-test runs in pixel space via siplot's
+    // `nearest_point`, so "nearest" matches what the eye sees regardless of how
+    // the two axes' data scales differ. A click that lands near no curve clears it.
+    if resp.response.clicked()
+        && let Some(pos) = resp.response.interact_pointer_pos()
+        && area.contains(pos)
+    {
+        const PICK_THRESHOLD_PX: f32 = 40.0;
+        plot.last_pick = nearest_pick(&plot.pick_curves, &transform, pos, PICK_THRESHOLD_PX);
+    }
+    if let Some(pick) = &plot.last_pick {
+        draw_pick_readout(ui, area, pick, data_bg);
     }
 
     // No labelled curve — nothing to put in the legend, so skip the overlay.
@@ -685,6 +756,89 @@ fn draw_cursor_overlay(
     }
 }
 
+/// The vertex nearest to `cursor` (screen pixels) across every curve in `curves`,
+/// within `threshold_px`, or `None` if no curve has a vertex that close. Each
+/// curve is hit-tested in pixel space through `transform` (siplot's
+/// [`nearest_point`](siplot::nearest_point)), so "nearest" is visual, not skewed
+/// by the two axes' differing data scales; the global minimum across curves wins
+/// (ties break to the earliest curve). Factored out of [`show`] so the
+/// multi-curve reduction is unit-testable without an egui frame.
+fn nearest_pick(
+    curves: &[PickCurve],
+    transform: &siplot::Transform,
+    cursor: egui::Pos2,
+    threshold_px: f32,
+) -> Option<Pick> {
+    let mut best: Option<(f32, Pick)> = None;
+    for c in curves {
+        if let Some(p) = siplot::nearest_point(&c.points, transform, cursor, threshold_px)
+            && best.as_ref().is_none_or(|(d, _)| p.dist_px < *d)
+        {
+            best = Some((
+                p.dist_px,
+                Pick {
+                    label: c.label.clone(),
+                    color: c.color,
+                    x: p.x,
+                    y: p.y,
+                },
+            ));
+        }
+    }
+    best.map(|(_, pick)| pick)
+}
+
+/// Draw the last graph-click pick — the clicked curve's colour swatch, its name,
+/// and the picked `(x, y)` — pinned at the bottom-left of the data area `area`, so
+/// it stays put as a *separate* readout (unlike the pointer-following cursor
+/// overlay). `data_bg` is the canvas colour the text/box tones contrast against.
+fn draw_pick_readout(ui: &egui::Ui, area: egui::Rect, pick: &Pick, data_bg: egui::Color32) {
+    let painter = ui.painter();
+    let luma = 0.299 * data_bg.r() as f32 + 0.587 * data_bg.g() as f32 + 0.114 * data_bg.b() as f32;
+    let dark_canvas = luma <= 128.0;
+    let fg = if dark_canvas {
+        egui::Color32::from_gray(0xe0)
+    } else {
+        egui::Color32::from_gray(0x20)
+    };
+    let text = format!(
+        "{}   x = {}, y = {}",
+        pick.label,
+        siplot::format_value(pick.x),
+        siplot::format_value(pick.y)
+    );
+    let font = egui::FontId::proportional(11.0);
+    let galley = painter.layout_no_wrap(text, font, fg);
+    let pad = egui::vec2(4.0, 2.0);
+    // A colour swatch keys the readout to the picked curve (matching its legend row).
+    const SWATCH: f32 = 8.0;
+    const GAP: f32 = 5.0;
+    let size = egui::vec2(
+        galley.size().x + SWATCH + GAP + pad.x * 2.0,
+        galley.size().y + pad.y * 2.0,
+    );
+    // Pin to the bottom-left of the data area, inset so it clears the axes.
+    const INSET: f32 = 4.0;
+    let min = egui::pos2(area.left() + INSET, area.bottom() - INSET - size.y);
+    let box_bg = if dark_canvas {
+        egui::Color32::from_black_alpha(0xc8)
+    } else {
+        egui::Color32::from_white_alpha(0xc8)
+    };
+    painter.rect_filled(
+        egui::Rect::from_min_size(min, size),
+        egui::CornerRadius::same(2),
+        box_bg,
+    );
+    let swatch_center = egui::pos2(min.x + pad.x + SWATCH * 0.5, min.y + size.y * 0.5);
+    painter.circle_filled(swatch_center, SWATCH * 0.5, pick.color);
+    painter.galley(
+        egui::pos2(min.x + pad.x + SWATCH + GAP, min.y + pad.y),
+        galley,
+        fg,
+    );
+}
+
 /// A toolbar toggle button for the crosshair guide lines drawn by
 /// [`draw_cursor_overlay`]. siplot's built-in cursor button (a
 /// crosshair-with-circle icon) is repurposed as the coordinate-*readout* toggle,
@@ -760,4 +914,59 @@ fn symbol_menu(plot: &mut Plot1D, ui: &mut egui::Ui) {
         }
     });
     ui.data_mut(|d| d.insert_temp(size_id, size));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Color32, pos2, vec2};
+
+    /// Data `[0,10] × [0,10]` mapped onto a 100×100 px area, so `data_to_pixel`
+    /// gives round pixel coordinates for the fixtures below.
+    fn transform_10x10() -> siplot::Transform {
+        siplot::Transform::new(
+            0.0,
+            10.0,
+            0.0,
+            10.0,
+            egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0)),
+        )
+    }
+
+    fn curve(label: &str, points: &[(f64, f64)]) -> PickCurve {
+        PickCurve {
+            label: label.to_owned(),
+            color: Color32::WHITE,
+            points: points.to_vec(),
+        }
+    }
+
+    #[test]
+    fn nearest_pick_takes_the_global_minimum_across_curves_not_the_first() {
+        // Curve "far" is listed first but "near" holds the closest vertex, so the
+        // pick must cross curves to the global minimum, not stop at the first hit.
+        let t = transform_10x10();
+        let curves = vec![curve("far", &[(1.0, 1.0)]), curve("near", &[(5.0, 5.0)])];
+        let cursor = t.data_to_pixel(5.0, 5.0) + vec2(2.0, 0.0);
+        let pick = nearest_pick(&curves, &t, cursor, 10.0).expect("a pick");
+        assert_eq!(pick.label, "near");
+        assert_eq!((pick.x, pick.y), (5.0, 5.0));
+    }
+
+    #[test]
+    fn nearest_pick_respects_the_threshold_boundary() {
+        // A single vertex exactly 5 px from the cursor: inside a 6 px threshold,
+        // outside a 4 px one.
+        let t = transform_10x10();
+        let curves = vec![curve("a", &[(5.0, 5.0)])];
+        let cursor = t.data_to_pixel(5.0, 5.0) + vec2(5.0, 0.0);
+        assert!(nearest_pick(&curves, &t, cursor, 6.0).is_some());
+        assert!(nearest_pick(&curves, &t, cursor, 4.0).is_none());
+    }
+
+    #[test]
+    fn nearest_pick_is_none_with_no_curves() {
+        let t = transform_10x10();
+        assert!(nearest_pick(&[], &t, pos2(50.0, 50.0), 100.0).is_none());
+    }
 }
