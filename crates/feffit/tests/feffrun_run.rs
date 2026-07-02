@@ -6,33 +6,14 @@
 //! When they are not available the test prints a SKIP notice and returns rather
 //! than failing, so it is inert on machines without FEFF built.
 
-use std::path::PathBuf;
+mod common;
 
 /// The real Copper `feff.inp` (fcc, a = 3.61 Å), embedded at compile time.
 const CU_FEFF_INP: &str = include_str!("data/feff.inp");
 
-/// A runner if the executables are reachable, else `None` (with the reason).
-fn runner() -> Option<feffit::feffrun::Feff8l> {
-    // Explicit FEFF8L_DIR wins.
-    if let Some(dir) = std::env::var_os(feffit::feffrun::BIN_DIR_ENV)
-        && PathBuf::from(&dir).join("feff8l_pot").is_file()
-    {
-        return Some(feffit::feffrun::Feff8l::with_bin_dir(dir));
-    }
-    // Otherwise look for it on PATH.
-    if let Some(paths) = std::env::var_os("PATH") {
-        for d in std::env::split_paths(&paths) {
-            if d.join("feff8l_pot").is_file() {
-                return Some(feffit::feffrun::Feff8l::new());
-            }
-        }
-    }
-    None
-}
-
 #[test]
 fn feff8l_pipeline_generates_and_parses_cu_paths() {
-    let Some(runner) = runner() else {
+    let Some(runner) = common::runner() else {
         eprintln!(
             "SKIP feff8l_pipeline_generates_and_parses_cu_paths: \
              feff8l_* not found (set {} or add to PATH)",
