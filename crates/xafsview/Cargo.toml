@@ -25,7 +25,17 @@ feffit = { path = "../feffit", version = "0.1.1", features = ["spacegroup"] }
 
 # GUI stack. Pinned to 0.34 to match siplot's egui/egui-wgpu pins; the wgpu
 # renderer is required (Plot1D paints through an egui-wgpu callback).
-eframe = { version = "0.34", default-features = false, features = ["wgpu", "default_fonts"] }
+# `default-features = false` drops eframe's glow/accesskit defaults, but it also
+# drops `x11` + `wayland` — and those gate winit's Linux windowing backends. So
+# they must be re-enabled explicitly, or winit finds no platform backend on Linux
+# ("unresolved import self::platform") and the build fails. On macOS/Windows the
+# winit x11/wayland code is cfg-gated to free-unix, so these are inert there.
+eframe = { version = "0.34", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
 egui = "0.34"
 siplot = "0.4.2"
 # Native file/folder dialogs (Folders tab, Open/Save). Matches siplot's rfd pin.
