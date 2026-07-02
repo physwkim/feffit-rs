@@ -423,44 +423,13 @@ impl ReductionUi {
                     });
 
                 ui.add_space(16.0);
-                // column 3: file-loading mode + graph type
+                // column 3: the reverse-FT R-window. (The file-loading mode and the
+                // graph-type / k-R-range display controls moved to the Autobk tab's
+                // "Data" and "Graph" boxes, mirroring the Feffit panel's grouping.)
                 egui::Grid::new("autobk_col3")
                     .num_columns(2)
                     .spacing([6.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label("Loading");
-                        egui::ComboBox::from_id_salt("autobk_loading")
-                            .selected_text(self.loading.label())
-                            .show_ui(ui, |ui| {
-                                for l in LoadingType::ALL {
-                                    ui.selectable_value(&mut self.loading, l, l.label());
-                                }
-                            });
-                        ui.end_row();
-                        ui.label("Graph");
-                        egui::ComboBox::from_id_salt("autobk_graph")
-                            .selected_text(self.graph.label())
-                            .show_ui(ui, |ui| {
-                                for g in GraphType::ALL {
-                                    if ui.selectable_value(&mut self.graph, g, g.label()).clicked()
-                                    {
-                                        change.replot = true;
-                                    }
-                                }
-                            });
-                        ui.end_row();
-
-                        // "Show k/R range": reveal the draggable FT-window band on
-                        // the kʷ·χ(k) (kmin/kmax) and |χ(R)| (rmin/rmax) graphs. Off
-                        // by default; the Feffit tab carries the same toggle.
-                        ui.label("k/R range");
-                        ui.checkbox(&mut self.show_range, "drag on graph")
-                            .on_hover_text(
-                                "Drag the kmin/kmax (kʷ·χ(k) graph) or rmin/rmax \
-                                 (|χ(R)| graph) FT-window band to set the range",
-                            );
-                        ui.end_row();
-
                         // Reverse-FT R-window (the back-transform peak selection
                         // for the *Q.CHI graph; also the band draggable on *R.CHI).
                         for (label, value, speed, range) in [

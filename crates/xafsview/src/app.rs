@@ -1998,7 +1998,7 @@ impl XafsViewApp {
         let n = self.session.groups.len();
         let mut changed = false;
         ui.horizontal(|ui| {
-            ui.label("Data");
+            ui.label("Group");
             let current = self.session.current;
             let text = current
                 .and_then(|i| self.session.groups.get(i))
@@ -2028,53 +2028,13 @@ impl XafsViewApp {
             }
         });
         // The shared Run scope, so it is visible without opening the Data window.
+        // (The graph-display toggles — Show all groups / Stacking / Show background
+        // — moved to the Autobk tab's "Graph" box, mirroring the Feffit panel.)
         if n > 0 {
             ui.weak(format!(
                 "{}/{n} checked for Run",
                 self.session.selected.len()
             ));
-        }
-        // With several groups loaded, offer the batch-comparison overlay (the
-        // Multiple_data actions turn it on; this is where to turn it back off).
-        if n > 1
-            && ui
-                .checkbox(&mut self.show_all_groups, "Show all groups")
-                .on_hover_text(
-                    "Overlay every loaded group's curve for this graph type, \
-                     not just the selected one",
-                )
-                .changed()
-        {
-            changed = true;
-        }
-        // Waterfall the comparison overlays (Plot Data's "Stacking"). Only shown
-        // once the overlays are actually on screen, since it offsets those curves.
-        if n > 1
-            && self.show_all_groups
-            && ui
-                .add(egui::Slider::new(&mut self.stack, 0.0..=5.0).text("Stacking"))
-                .on_hover_text(
-                    "Vertically offset each comparison overlay so stacked curves \
-                     don't overlap (the focused group stays at the baseline)",
-                )
-                .changed()
-        {
-            changed = true;
-        }
-        // The Autobk-computed background μ₀(E) is only drawn in the μ(E)+background
-        // view, so its show/hide toggle is offered only there. Unchecking removes
-        // the Autobk-drawn background, leaving just the raw μ(E) data files
-        // (including the per-group comparison overlays).
-        if self.reduction.graph == GraphType::MuBkg
-            && ui
-                .checkbox(&mut self.show_bkg, "Show background")
-                .on_hover_text(
-                    "Hide the Autobk-computed background μ₀(E) to see only the raw \
-                     μ(E) data files",
-                )
-                .changed()
-        {
-            changed = true;
         }
         changed
     }
@@ -2250,57 +2210,59 @@ impl XafsViewApp {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Autobk");
 
+                        // --- Data: active group, per-group info, loading mode ---
                         // Compact current-group selector; the full loaded-group
                         // manager (add / remove / clear) lives in the detached
-                        // "Data" window opened from here. A switch repopulates
-                        // the plot.
-                        if self.current_group_selector(ui) {
-                            self.replot_graph();
-                        }
-                        ui.separator();
+                        // "Data" window opened from here. A switch repopulates the
+                        // plot (deferred to `group_switched` below so the replot is
+                        // not called from inside the box closure).
+                        let mut group_switched = false;
+                        ui.group(|ui| {
+                            ui.strong("Data");
+                            group_switched = self.current_group_selector(ui);
 
-                        // info rows: Title (group label) / Data File / Theory
-                        egui::Grid::new("autobk_info")
-                            .num_columns(2)
-                            .spacing([6.0, 4.0])
-                            .show(ui, |ui| {
-                                ui.label("Title");
-                                match self.session.current_group_mut() {
-                                    Some(g) => {
-                                        ui.text_edit_singleline(&mut g.label);
+                            // info rows: Title (group label) / Data File / Theory
+                            egui::Grid::new("autobk_info")
+                                .num_columns(2)
+                                .spacing([6.0, 4.0])
+                                .show(ui, |ui| {
+                                    ui.label("Title");
+                                    match self.session.current_group_mut() {
+                                        Some(g) => {
+                                            ui.text_edit_singleline(&mut g.label);
+                                        }
+                                        None => {
+                                            ui.weak("— no data —");
+                                        }
                                     }
-                                    None => {
-                                        ui.weak("— no data —");
-                                    }
-                                }
-                                ui.end_row();
+                                    ui.end_row();
 
-                                ui.label("Data File");
-                                match &data_file {
-                                    Some(name) => {
-                                        ui.monospace(name.as_str());
+                                    ui.label("Data File");
+                                    match &data_file {
+                                        Some(name) => {
+                                            ui.monospace(name.as_str());
+                                        }
+                                        None => {
+                                            ui.weak("—");
+                                        }
                                     }
-                                    None => {
-                                        ui.weak("—");
-                                    }
-                                }
-                                ui.end_row();
+                                    ui.end_row();
 
-                                ui.label("Output file");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.reduction.output_file)
-                                        .desired_width(180.0)
-                                        .hint_text("(auto)"),
-                                )
-                                .on_hover_text(
-                                    "AUTOBK Start writes <stem>k.chi (χ(k)) and \
+                                    ui.label("Output file");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.reduction.output_file)
+                                            .desired_width(180.0)
+                                            .hint_text("(auto)"),
+                                    )
+                                    .on_hover_text(
+                                        "AUTOBK Start writes <stem>k.chi (χ(k)) and \
                                      <stem>r.chi (χ(R)) into the Autobk folder",
-                                );
-                                ui.end_row();
+                                    );
+                                    ui.end_row();
 
-                                ui.label("Theory");
-                                ui.horizontal(|ui| {
-                                    if ui
+                                    ui.label("Theory");
+                                    ui.horizontal(|ui| {
+                                        if ui
                                         .button("Load…")
                                         .on_hover_text(
                                             "FEFF chi.dat standard for the background constraint",
@@ -2309,33 +2271,129 @@ impl XafsViewApp {
                                     {
                                         theory_pick = true;
                                     }
-                                    match &theory_name {
-                                        Some(name) => {
-                                            ui.monospace(name.as_str());
-                                            if crate::widgets::delete_box(ui).clicked() {
-                                                theory_clear = true;
+                                        match &theory_name {
+                                            Some(name) => {
+                                                ui.monospace(name.as_str());
+                                                if crate::widgets::delete_box(ui).clicked() {
+                                                    theory_clear = true;
+                                                }
+                                            }
+                                            None => {
+                                                ui.weak("(none)");
                                             }
                                         }
-                                        None => {
-                                            ui.weak("(none)");
-                                        }
-                                    }
+                                    });
+                                    ui.end_row();
                                 });
-                                ui.end_row();
-                            });
 
-                        // column chooser, shown while a raw / μ file is open
+                            // File-loading mode (drives "Open New file"); moved here
+                            // from the parameters box so all load settings sit together.
+                            ui.horizontal(|ui| {
+                                ui.label("Loading");
+                                egui::ComboBox::from_id_salt("autobk_loading")
+                                    .selected_text(self.reduction.loading.label())
+                                    .show_ui(ui, |ui| {
+                                        for l in LoadingType::ALL {
+                                            ui.selectable_value(
+                                                &mut self.reduction.loading,
+                                                l,
+                                                l.label(),
+                                            );
+                                        }
+                                    });
+                            });
+                        }); // end Data box
+                        if group_switched {
+                            self.replot_graph();
+                        }
+
+                        // Column chooser, shown while a raw / μ file is open
+                        // (transient — not one of the persistent boxes).
                         if let Some(import) = self.import.as_mut() {
-                            ui.separator();
                             import_action = import.ui(ui);
                         }
 
-                        // the "Autobk parameters" grid (+ loading mode + graph type)
-                        ui.separator();
+                        // --- Autobk parameters (already wrapped in its own group) -
                         change = self.reduction.controls(ui);
 
-                        // The 2×2 action block (그림 1-2-1-1) sits directly below
-                        // the parameters — no pinned-bottom gap.
+                        // --- Graph: graph type + comparison-overlay display options
+                        // (Feffit's panel gathers its graph controls the same way).
+                        ui.group(|ui| {
+                            ui.strong("Graph");
+                            let n = self.session.groups.len();
+                            ui.horizontal(|ui| {
+                                ui.label("Graph type");
+                                egui::ComboBox::from_id_salt("autobk_graph")
+                                    .selected_text(self.reduction.graph.label())
+                                    .show_ui(ui, |ui| {
+                                        for g in GraphType::ALL {
+                                            if ui
+                                                .selectable_value(
+                                                    &mut self.reduction.graph,
+                                                    g,
+                                                    g.label(),
+                                                )
+                                                .clicked()
+                                            {
+                                                change.replot = true;
+                                            }
+                                        }
+                                    });
+                            });
+                            // Overlay every loaded group's curve for this graph type.
+                            if n > 1
+                                && ui
+                                    .checkbox(&mut self.show_all_groups, "Show all groups")
+                                    .on_hover_text(
+                                        "Overlay every loaded group's curve for this \
+                                         graph type, not just the selected one",
+                                    )
+                                    .changed()
+                            {
+                                change.replot = true;
+                            }
+                            // Waterfall the overlays (Plot Data's "Stacking"); only
+                            // shown once the overlays are on screen, since it offsets
+                            // those curves.
+                            if n > 1
+                                && self.show_all_groups
+                                && ui
+                                    .add(
+                                        egui::Slider::new(&mut self.stack, 0.0..=5.0)
+                                            .text("Stacking"),
+                                    )
+                                    .on_hover_text(
+                                        "Vertically offset each comparison overlay so \
+                                         stacked curves don't overlap (the focused group \
+                                         stays at the baseline)",
+                                    )
+                                    .changed()
+                            {
+                                change.replot = true;
+                            }
+                            // The Autobk-computed background μ₀(E) is only drawn in
+                            // the μ(E)+background view, so its toggle is offered there.
+                            if self.reduction.graph == GraphType::MuBkg
+                                && ui
+                                    .checkbox(&mut self.show_bkg, "Show background")
+                                    .on_hover_text(
+                                        "Hide the Autobk-computed background μ₀(E) to \
+                                         see only the raw μ(E) data files",
+                                    )
+                                    .changed()
+                            {
+                                change.replot = true;
+                            }
+                            // Reveal the draggable FT-window band on the kʷ·χ(k)
+                            // (kmin/kmax) and |χ(R)| (rmin/rmax) graphs.
+                            ui.checkbox(&mut self.reduction.show_range, "Show k/R range")
+                                .on_hover_text(
+                                    "Drag the kmin/kmax (kʷ·χ(k) graph) or rmin/rmax \
+                                     (|χ(R)| graph) FT-window band to set the range",
+                                );
+                        });
+
+                        // The 2×2 action block (그림 1-2-1-1) sits below the boxes.
                         ui.add_space(8.0);
                         use crate::widgets::{self, CHUNKY_BTN};
                         ui.horizontal(|ui| {
