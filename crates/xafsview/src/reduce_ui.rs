@@ -6,7 +6,7 @@
 //! [`autobk_params`](ReductionUi::autobk_params) / [`ft_params`](ReductionUi::ft_params)
 //! into engine calls via `feffit::xasdata::reduce`, and reads [`graph`](ReductionUi::graph)
 //! to decide what to plot. The Title / Data File / Theory rows and the
-//! Open / Start / Exit / Edit button cluster live in the app (they need session
+//! Open / Start / Edit button cluster live in the app (they need session
 //! and file-dialog access).
 
 use std::path::PathBuf;

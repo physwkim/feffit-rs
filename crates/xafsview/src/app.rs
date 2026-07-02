@@ -1279,12 +1279,9 @@ impl XafsViewApp {
     /// (opened from the top bar / "Send to Plot Data"), independent of this graph.
     fn feffit_tab(&mut self, ui: &mut egui::Ui) {
         let mut feffit_action = None;
-        // The original Feffit form's bottom "Exit" button is tab chrome, not part
-        // of the reusable control set, so it lives in this wrapper rather than in
-        // `FeffitUi::controls`. Hide Log / Load result don't map to the engine
-        // and are omitted per the functional-only field rule; "Send to plot
-        // data" opens the group's Plot Data overlay.
-        let mut exit = false;
+        // Hide Log / Load result don't map to the engine and are omitted per the
+        // functional-only field rule; "Send to plot data" opens the group's Plot
+        // Data overlay.
         egui::Panel::left("feffit_controls")
             .resizable(true)
             .default_size(380.0)
@@ -1319,9 +1316,6 @@ impl XafsViewApp {
                         });
                     }
                     ui.horizontal(|ui| {
-                        if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                            exit = true;
-                        }
                         // The batch — an occasional bulk op — opens in its own
                         // window (data_manager-style) so the central plot keeps
                         // the full width.
@@ -1363,9 +1357,6 @@ impl XafsViewApp {
             self.feffit.set_range_window(lo.max(0.0), hi);
         }
 
-        if exit {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-        }
         match feffit_action {
             Some(FeffitAction::AddPath) => self.add_feff_path(),
             Some(FeffitAction::Run) => self.run_feffit(),
@@ -1412,12 +1403,6 @@ impl XafsViewApp {
             ui.heading("Feffit_txt");
             ui.add_space(8.0);
             ui.weak("Text report of the last FEFFIT fit");
-            // The original Feffit_txt form's "Exit" button (this view is the
-            // functional equivalent of its feffit text output).
-            ui.add_space(12.0);
-            if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
         });
         ui.separator();
         let report = self.feffit.report_text();
@@ -2148,7 +2133,6 @@ impl XafsViewApp {
     fn autobk_tab(&mut self, ui: &mut egui::Ui) {
         let mut open_clicked = false;
         let mut start_clicked = false;
-        let mut exit_clicked = false;
         let mut edit_clicked = false;
         let mut theory_pick = false;
         let mut theory_clear = false;
@@ -2294,9 +2278,6 @@ impl XafsViewApp {
                             }
                         });
                         ui.horizontal(|ui| {
-                            if widgets::exit(ui, CHUNKY_BTN).clicked() {
-                                exit_clicked = true;
-                            }
                             if widgets::action_enabled(ui, "Edit μ(E)", CHUNKY_BTN, has_mu)
                                 .clicked()
                             {
@@ -2386,9 +2367,6 @@ impl XafsViewApp {
         }
         if edit_clicked {
             self.open_edit_xmu();
-        }
-        if exit_clicked {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -2573,7 +2551,6 @@ impl XafsViewApp {
     /// working folders (Data / Autobk / Feffit / Atoms / Results); each is also
     /// editable individually.
     fn folders_panel(&mut self, ui: &mut egui::Ui) {
-        let mut exit_clicked = false;
         let mut sub_base_pick: Option<std::path::PathBuf> = None;
         egui::CentralPanel::default().show_inside(ui, |ui| {
             // `auto_shrink` off on the horizontal axis: otherwise the scroll area
@@ -2684,19 +2661,10 @@ impl XafsViewApp {
                             );
                             ui.end_row();
                         });
-
-                    // Exit sits directly below the folder rows (그림 1-2-6), no gap.
-                    ui.add_space(8.0);
-                    if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                        exit_clicked = true;
-                    }
                 });
         });
         if let Some(root) = sub_base_pick {
             self.apply_sub_base(root);
-        }
-        if exit_clicked {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 }
@@ -2767,7 +2735,6 @@ impl eframe::App for XafsViewApp {
             Tab::Atoms => match self.atoms_tab.ui(ui, &mut self.feff_inp) {
                 // Hand off to the Feff tab so the user can run the new input.
                 Some(AtomsAction::BuiltFeffInp) => self.tab = Tab::Feff,
-                Some(AtomsAction::Exit) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
                 None => {}
             },
             Tab::Feff => {
@@ -2777,9 +2744,6 @@ impl eframe::App for XafsViewApp {
                     self.session.folders.atoms_dir.as_deref(),
                 ) {
                     Some(FeffAction::ViewStructure) => self.plot_sites.open = true,
-                    Some(FeffAction::Exit) => {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close)
-                    }
                     None => {}
                 }
             }

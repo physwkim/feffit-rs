@@ -42,8 +42,7 @@ impl TimeResolvedWindow {
         if !self.open {
             return;
         }
-        // `keep_open` tracks the OS window close button; the in-window "Exit"
-        // button sets `self.open` directly. Either path closes the window.
+        // `keep_open` tracks the OS window close button, which closes the window.
         let mut keep_open = true;
         crate::window::detached(
             ctx,
@@ -118,9 +117,6 @@ impl TimeResolvedWindow {
                 .clicked()
             {
                 self.save_single_file();
-            }
-            if ui.button("Exit").clicked() {
-                self.open = false;
             }
         });
         if !self.status.is_empty() {

@@ -46,8 +46,6 @@ struct SiteRow {
 pub enum AtomsAction {
     /// A `feff.inp` was built into the shared buffer; switch to the Feff tab.
     BuiltFeffInp,
-    /// Close the application (the original Atoms form's "Exit").
-    Exit,
 }
 
 /// The **Atoms** tab state: a unit cell plus the absorber/edge/cluster choices.
@@ -230,15 +228,12 @@ impl AtomsTab {
                     );
                 });
 
-                // Execute / Exit row + build status, directly below the cell
-                // inputs (그림 1-2-4) — no pinned-bottom gap. Reload (re-read
-                // atoms.inp from disk) has no file source for the structured
-                // builder, so it is omitted per the functional-only field rule.
+                // Execute row + build status, directly below the cell inputs
+                // (그림 1-2-4) — no pinned-bottom gap. Reload (re-read atoms.inp
+                // from disk) has no file source for the structured builder, so it
+                // is omitted per the functional-only field rule.
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                        action = Some(AtomsAction::Exit);
-                    }
                     if crate::widgets::primary(ui, "Execute", crate::widgets::ROW_BTN, true)
                         .on_hover_text("Build feff.inp from the cell")
                         .clicked()
@@ -365,13 +360,11 @@ struct RunSummary {
 }
 
 /// Signals the app should act after the Feff tab renders (the original Feff
-/// form's "View Structure" and "Exit" buttons, which the tab itself can't honor
-/// — they touch the app-owned Plot Sites window / the viewport).
+/// form's "View Structure" button, which the tab itself can't honor — it touches
+/// the app-owned Plot Sites window).
 pub enum FeffAction {
     /// Open the Plot Sites 3D cluster viewer (original "View Structure").
     ViewStructure,
-    /// Close the application (original "Exit").
-    Exit,
 }
 
 /// The **Feff** tab state: the backend choice and the in-flight/last run.
@@ -395,7 +388,7 @@ impl Default for FeffTab {
 
 impl FeffTab {
     /// Render the Feff tab; edits `feff_inp` in place and can run FEFF. Returns a
-    /// [`FeffAction`] for the buttons the app must service (View Structure, Exit).
+    /// [`FeffAction`] for the buttons the app must service (View Structure).
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -465,14 +458,11 @@ impl FeffTab {
             }
         }
 
-        // Bottom action row (그림 1-2-5: Exit / Select Feff Version / View
-        // Structure / Execute), uniform width, with "Execute" (= Run FEFF) as the
-        // amber primary action.
+        // Bottom action row (그림 1-2-5: Select Feff Version / View Structure /
+        // Execute), uniform width, with "Execute" (= Run FEFF) as the amber
+        // primary action.
         ui.separator();
         ui.horizontal(|ui| {
-            if crate::widgets::exit(ui, crate::widgets::ROW_BTN).clicked() {
-                action = Some(FeffAction::Exit);
-            }
             let has_inp = !feff_inp.trim().is_empty();
             if crate::widgets::action_enabled(
                 ui,
