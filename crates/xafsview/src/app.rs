@@ -86,6 +86,15 @@ pub struct XafsViewApp {
     /// the `Multiple_data` batch actions so a whole batch is shown at once; a
     /// "Show all groups" checkbox by the group selector is its visible owner.
     show_all_groups: bool,
+    /// Autobk μ(E)+background view: when `false`, the Autobk-computed background
+    /// μ₀(E) is hidden so only the raw μ(E) data files are shown. The per-group
+    /// μ(E) comparison overlays (under [`show_all_groups`]) are never touched by
+    /// this toggle — they are data files too. Only meaningful for
+    /// [`GraphType::MuBkg`] (the only view that draws a separate background), so
+    /// its "Show background" checkbox is shown only there.
+    ///
+    /// [`show_all_groups`]: Self::show_all_groups
+    show_bkg: bool,
     /// FEFFIT tab state: paths, variables, transform, and last fit result.
     feffit: FeffitUi,
     /// Label of the group the last main-tab Feffit fit was run on, so "Send to
@@ -220,6 +229,7 @@ impl XafsViewApp {
             import: None,
             reduction: ReductionUi::default(),
             show_all_groups: false,
+            show_bkg: true,
             feffit: FeffitUi::default(),
             feffit_fit_group: None,
             feffit_run_overlays: Vec::new(),
@@ -1099,6 +1109,7 @@ impl XafsViewApp {
 
         let graph = self.reduction.graph;
         let kweight = self.reduction.kweight;
+        let show_bkg = self.show_bkg;
         let Some(g) = self.session.current_group() else {
             return;
         };
@@ -1115,7 +1126,7 @@ impl XafsViewApp {
                     self.plot
                         .add_curve_with_legend(&g.energy, &g.mu, BLUE, "μ(E)");
                 }
-                if let Some(bkg) = &g.bkg {
+                if show_bkg && let Some(bkg) = &g.bkg {
                     self.plot
                         .add_curve_with_legend(&g.energy, bkg, ORANGE, "background");
                 }
@@ -1952,6 +1963,21 @@ impl XafsViewApp {
                 .on_hover_text(
                     "Overlay every loaded group's curve for this graph type, \
                      not just the selected one",
+                )
+                .changed()
+        {
+            changed = true;
+        }
+        // The Autobk-computed background μ₀(E) is only drawn in the μ(E)+background
+        // view, so its show/hide toggle is offered only there. Unchecking removes
+        // the Autobk-drawn background, leaving just the raw μ(E) data files
+        // (including the per-group comparison overlays).
+        if self.reduction.graph == GraphType::MuBkg
+            && ui
+                .checkbox(&mut self.show_bkg, "Show background")
+                .on_hover_text(
+                    "Hide the Autobk-computed background μ₀(E) to see only the raw \
+                     μ(E) data files",
                 )
                 .changed()
         {
