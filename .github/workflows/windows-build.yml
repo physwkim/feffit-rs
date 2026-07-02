@@ -95,3 +95,43 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: xafsview-windows-x86_64.zip
+
+  # Exercise the test suite on Windows, built for x86_64-pc-windows-gnu -- the
+  # same GNU/MinGW toolchain the release exe uses (MSVC cannot link libgfortran).
+  # The `build` job only *links* the in-process FEFF10 backend; this is the only
+  # place it actually *runs* on Windows. Unlike the Linux gate (rust.yml), this
+  # does NOT exclude feff10_pipeline_generates_and_parses_cu_paths -- proving the
+  # FEFF10 Fortran engine writes feffNNNN.dat on Windows is the whole point.
+  # Independent of `build` (no `needs:`), so a red test never blocks the release
+  # zip. Runs on the same events as `build` (main push, tags, manual dispatch).
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, GNU target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install MSYS2 + gfortran runtime
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc-fortran curl
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # Same PATH/pin as the build step: the test binaries link feff10-sys ->
+      # libgfortran under /mingw64, and feff10-sys fetches the prebuilt
+      # libfeff10-windows-x86_64.a (verified against this hash) on first build.
+      - name: Test workspace (GNU target)
+        shell: msys2 {0}
+        env:
+          FEFF10_LIB_SHA256: b575f0a92aaa8862b24a7326210a1c8fb42faed24cd2338bf67b547f8c8354a7
+        run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:$PATH"
+          cargo test --workspace --target x86_64-pc-windows-gnu
