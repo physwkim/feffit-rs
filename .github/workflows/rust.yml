@@ -1,0 +1,75 @@
+name: Rust
+
+# Lint + test gate on Linux x86_64 (the canonical target), modelled on
+# epics-rs's rust.yml: rustfmt, clippy -D warnings, a full workspace build,
+# nextest, and doctests. The Windows GUI packaging build lives in
+# windows-build.yml.
+#
+# No system dev packages are installed, and none are needed to *build* here:
+#   - The GUI stack (egui/eframe/wgpu/winit) loads X11 / Wayland / xkbcommon via
+#     dlopen at runtime (x11rb is pure Rust), so nothing links at build time.
+#   - rfd's default xdg-portal backend needs no GTK.
+#   - feffit's default `feff10` feature pulls feff10-sys, which downloads the
+#     self-contained prebuilt libfeff10-linux-x86_64.a from the feff10-rs
+#     release (libgfortran/quadmath merged in), so the link needs no gfortran.
+# The unit tests are pure logic (no window / GPU / render context), so nextest
+# runs headless.
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# A new push to the same ref cancels the in-flight run.
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pin the prebuilt libfeff10-linux-x86_64.a to a vetted hash — the same policy
+  # windows-build.yml applies to the Windows .a. With this set, feff10-sys
+  # verifies the download against this constant instead of the sha256sums.txt it
+  # would otherwise fetch from the same release (which only catches a tampered
+  # .a, not an upstream that swaps both). An upstream asset swap then fails the
+  # build instead of being trusted. Update this when the feff10 dep is bumped.
+  FEFF10_LIB_SHA256: dc6fe339d55275de70c7326a7c0890a10d2aba2143333f79cfda93278db7a410
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+
+      - uses: taiki-e/install-action@nextest
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --workspace --verbose
+
+      - name: Test (nextest)
+        run: cargo nextest run --workspace
+
+      - name: Doctests
+        run: cargo test --doc --workspace
+
+      # feffit's in-process FEFF10 backend is an optional feature; prove the
+      # library still compiles and tests with it off (this path pulls no Fortran
+      # prebuilt at all).
+      - name: Test feffit without the feff10 backend
+        run: cargo nextest run -p feffit --no-default-features --features spacegroup
