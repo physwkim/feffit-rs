@@ -122,14 +122,6 @@ pub struct XafsViewApp {
     feffit_batch: FeffitBatch,
     /// The "Make μ(E) from files" staging picker (Plot Data-style two-pane add).
     batch_load: BatchLoadWindow,
-    /// Whether the pending [`batch_load`] build should also run AUTOBK on the
-    /// just-built groups. Set `true` when the picker was opened from the Autobk
-    /// "Data…" manager (so loading a batch reduces it end-to-end, and every graph
-    /// type shows the new files at once), `false` from the explicit μ(E)-only
-    /// "Make μ(E) from files" menu (which keeps its build-then-reduce two-step).
-    ///
-    /// [`batch_load`]: Self::batch_load
-    batch_reduce_on_build: bool,
     /// Whether the detached "Data" window (the loaded-group manager: the list,
     /// "Add data files…", and "Clear all") is shown. The Autobk sidebar keeps
     /// only a compact current-group combo; the full list lives here.
@@ -252,7 +244,6 @@ impl XafsViewApp {
             feffit_show_all_fits: false,
             feffit_batch: FeffitBatch::default(),
             batch_load: BatchLoadWindow::default(),
-            batch_reduce_on_build: false,
             data_window_open: false,
             feffit_batch_open: false,
             edit_xmu: EditXmuState::default(),
@@ -797,16 +788,14 @@ impl XafsViewApp {
     /// Open the "Make μ(E) from files" staging picker (Plot Data-style two-pane
     /// add/remove), so several raw scan files can be chosen — and a wrong pick
     /// moved back out — before the groups are built on OK. Requires an open
-    /// import so the column mapping is known; OK routes to [`build_xmu_from_paths`].
-    /// `reduce` records whether the built groups should also be run through AUTOBK
-    /// (see [`batch_reduce_on_build`](Self::batch_reduce_on_build)).
-    fn make_xmu_from_files(&mut self, reduce: bool) {
+    /// import so the column mapping is known; OK routes to [`build_xmu_from_paths`],
+    /// which builds μ(E) and runs AUTOBK on each new group.
+    fn make_xmu_from_files(&mut self) {
         if self.import.is_none() {
             self.status =
                 "Open one file and choose its columns first, then batch the rest.".to_owned();
             return;
         }
-        self.batch_reduce_on_build = reduce;
         self.batch_load
             .open_on(self.session.folders.data_dir.clone());
     }
@@ -871,12 +860,11 @@ impl XafsViewApp {
             }
         }
 
-        // Auto-reduce the just-built groups when the add came from the Autobk
-        // "Data…" manager: normalize → AUTOBK → forward-FT on the new groups only,
-        // so background/EXAFS graphs show them immediately (not just μ(E)). The
-        // .xmu were already written above; χ(k)/χ(R) files are not — that stays
-        // the explicit "Multiple AUTOBK" action.
-        let reduced = if self.batch_reduce_on_build && built > 0 {
+        // Auto-reduce the just-built groups: normalize → AUTOBK → forward-FT on the
+        // new groups only, so background/EXAFS graphs show them immediately (not
+        // just μ(E)). The .xmu were already written above; χ(k)/χ(R) files are not
+        // — that stays the explicit "Multiple AUTOBK" action.
+        let reduced = if built > 0 {
             let pre = self.reduction.pre_params();
             let bk = self.reduction.autobk_params();
             let ft = self.reduction.ft_params();
@@ -893,15 +881,10 @@ impl XafsViewApp {
             self.plot_data.mark_dirty();
             self.replot_graph();
         }
-        let reduced_note = if self.batch_reduce_on_build {
-            format!(", AUTOBK reduced {reduced}")
-        } else {
-            String::new()
-        };
         self.status = format!(
             "Batch μ(E): built {built}, wrote {written} .xmu \
              ({write_failed} not written), build errors {build_errors}, \
-             unreadable {read_errors}{reduced_note}."
+             unreadable {read_errors}, AUTOBK reduced {reduced}."
         );
     }
 
@@ -2157,8 +2140,7 @@ impl XafsViewApp {
         );
         self.data_window_open = keep_open;
         if add_clicked {
-            // Loading through the Autobk data manager reduces end-to-end.
-            self.make_xmu_from_files(true);
+            self.make_xmu_from_files();
         }
         changed
     }
@@ -2168,6 +2150,7 @@ impl XafsViewApp {
         let mut open_clicked = false;
         let mut start_clicked = false;
         let mut edit_clicked = false;
+        let mut multi_autobk_clicked = false;
         let mut theory_pick = false;
         let mut theory_clear = false;
         let mut import_action = None;
@@ -2317,6 +2300,19 @@ impl XafsViewApp {
                             {
                                 edit_clicked = true;
                             }
+                            // Batch reduce: normalize → AUTOBK → FT every loaded
+                            // group and save each χ(k)/χ(R) (moved here from the
+                            // former "Multiple_data" menu).
+                            let many = self.session.groups.len() > 1;
+                            if widgets::action_enabled(ui, "Multiple AUTOBK", CHUNKY_BTN, many)
+                                .on_hover_text(
+                                    "Reduce every loaded group and save each \
+                                     χ(k)/χ(R) file",
+                                )
+                                .clicked()
+                            {
+                                multi_autobk_clicked = true;
+                            }
                         });
                     });
                 });
@@ -2402,31 +2398,15 @@ impl XafsViewApp {
         if edit_clicked {
             self.open_edit_xmu();
         }
+        if multi_autobk_clicked {
+            self.run_multi_autobk();
+        }
     }
 
     /// The top menu bar (XAFSView's menus; most entries are stubs until their
     /// phase lands).
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            let mut open_clicked = false;
-            ui.menu_button("File", |ui| {
-                if ui.button("Open data file…").clicked() {
-                    open_clicked = true;
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Quit").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            });
-            if open_clicked {
-                self.tab = Tab::Autobk;
-                // Generic "Open data file…" can load raw or a precomputed .xmu,
-                // so leave the picker unfiltered.
-                self.open_file(false);
-            }
-            // Flow order: single-file cleaning (Smoothing) before the multi-file
-            // batch operations (Multiple_data).
             let mut edit_clicked = false;
             ui.menu_button("Smoothing", |ui| {
                 if ui.button("Edit μ(E) (deglitch / trim / smooth)…").clicked() {
@@ -2437,34 +2417,6 @@ impl XafsViewApp {
             if edit_clicked {
                 self.tab = Tab::Autobk;
                 self.open_edit_xmu();
-            }
-            // Multiple_data holds the batch *processing* actions only; Plot Data
-            // (a cross-stage viewer, kept open simultaneously in the original) is
-            // promoted to a button in the tab strip (after About, past a
-            // separator), so it reads as a persistent viewer, not a menu action.
-            let mut run_multi_autobk = false;
-            let mut make_xmu_files = false;
-            ui.menu_button("Multiple_data", |ui| {
-                // Workflow order: build μ(E) for the files first, then reduce
-                // every loaded group. (Batch FEFFIT is the Feffit tab's "Batch…"
-                // button, which opens its own detached window.)
-                if ui.button("Make μ(E) from files…").clicked() {
-                    make_xmu_files = true;
-                    ui.close();
-                }
-                if ui.button("Multiple AUTOBK (reduce all loaded)").clicked() {
-                    run_multi_autobk = true;
-                    ui.close();
-                }
-            });
-            if run_multi_autobk {
-                self.run_multi_autobk();
-            }
-            if make_xmu_files {
-                self.tab = Tab::Autobk;
-                // The explicit μ(E)-only step: build μ(E) now, reduce later via
-                // "Multiple AUTOBK" (this menu's documented two-step workflow).
-                self.make_xmu_from_files(false);
             }
             ui.menu_button("Periodic table", |ui| {
                 if ui.button("Periodic table + atom data…").clicked() {
