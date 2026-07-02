@@ -76,9 +76,14 @@ jobs:
         # parses_cu_paths` drives the in-process FEFF10 Fortran engine. On the
         # Linux runner the linux-x86_64 prebuilt runs but writes no feffNNNN.dat
         # (FeffError::NoOutput), though it passes locally on macOS — a FEFF10
-        # linux-prebuilt runtime issue tracked separately, not a feffit
-        # regression. Every unit + larch-parity test still runs; the feff8l
-        # sibling self-skips when no FEFF8L binaries are present.
+        # linux-prebuilt runtime issue tracked upstream (Ameyanagi/feff10-rs#1),
+        # not a feffit regression. FEFF8L_DIR points the feff8l sibling test at
+        # the vendored linux64 binaries so it now *runs* (it self-skips without
+        # them); their DT_NEEDED closure is self-contained ($ORIGIN RUNPATH +
+        # glibc), so no extra apt package is required. Every unit + larch-parity
+        # test runs too.
+        env:
+          FEFF8L_DIR: ${{ github.workspace }}/crates/xafsview/assets/feff8l/linux64
         run: cargo nextest run --workspace -E 'not test(feff10_pipeline_generates_and_parses_cu_paths)'
 
       - name: Doctests

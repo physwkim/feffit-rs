@@ -9,6 +9,12 @@ name: Windows build
 # MinGW runtime DLLs it loads, giving a no-install folder -- unzip and run on a
 # clean Windows 10/11, nothing to install.
 #
+# The default *runtime* backend, though, is the external FEFF8.5L pipeline: the
+# vendored win64 feff8l_* binaries are packaged under dist/feff8l/win64/ beside
+# the exe, where the app's resolver finds them. The in-process FEFF10 backend
+# stays linked and selectable but is broken on Windows upstream
+# (Ameyanagi/feff10-rs#1), so it is no longer the default.
+#
 # Runs on every push to main (CI signal), on release tags like `0.1.0` (the zip
 # is also attached to the GitHub Release), and on demand from the Actions tab.
 on:
@@ -79,6 +85,19 @@ jobs:
           echo "--- dist contents ---"
           ls -la dist
 
+      # The default backend is external FEFF8.5L; ship its vendored win64
+      # binaries under dist/feff8l/win64/ (beside the exe), where the app's
+      # resolver looks (`<exe_dir>/feff8l/win64/`). Each feff8l_*.exe finds its
+      # co-located MinGW DLLs there. Only win64 is copied -- the linux64/darwin64
+      # sets in the repo are irrelevant to the Windows zip.
+      - name: Bundle FEFF8.5L win64 binaries
+        shell: msys2 {0}
+        run: |
+          mkdir -p dist/feff8l/win64
+          cp -v crates/xafsview/assets/feff8l/win64/* dist/feff8l/win64/
+          echo "--- dist/feff8l/win64 contents ---"
+          ls -la dist/feff8l/win64
+
       - name: Zip the distribution
         shell: pwsh
         run: Compress-Archive -Path dist/* -DestinationPath xafsview-windows-x86_64.zip -Force
@@ -98,12 +117,13 @@ jobs:
 
   # Exercise the test suite on Windows, built for x86_64-pc-windows-gnu -- the
   # same GNU/MinGW toolchain the release exe uses (MSVC cannot link libgfortran).
-  # The `build` job only *links* the in-process FEFF10 backend; this is the only
-  # place it actually *runs* on Windows. Unlike the Linux gate (rust.yml), this
-  # does NOT exclude feff10_pipeline_generates_and_parses_cu_paths -- proving the
-  # FEFF10 Fortran engine writes feffNNNN.dat on Windows is the whole point.
-  # Independent of `build` (no `needs:`), so a red test never blocks the release
-  # zip. Runs on the same events as `build` (main push, tags, manual dispatch).
+  # Like the Linux gate (rust.yml), this excludes the in-process FEFF10 e2e test
+  # feff10_pipeline_generates_and_parses_cu_paths: that prebuilt aborts on Windows
+  # (`Fortran runtime error: Attempting to allocate already allocated variable
+  # 'lrstat'`, upstream Ameyanagi/feff10-rs#1). Instead FEFF8L_DIR points the
+  # feff8l pipeline test at the vendored win64 binaries, so the *default* backend
+  # is what gets proven on Windows. Independent of `build` (no `needs:`), so a red
+  # test never blocks the release zip. Runs on the same events as `build`.
   test:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -128,10 +148,13 @@ jobs:
       # Same PATH/pin as the build step: the test binaries link feff10-sys ->
       # libgfortran under /mingw64, and feff10-sys fetches the prebuilt
       # libfeff10-windows-x86_64.a (verified against this hash) on first build.
+      # FEFF8L_DIR points the feff8l pipeline test at the vendored win64 exes;
+      # the broken feff10 e2e test is skipped (see the job comment above).
       - name: Test workspace (GNU target)
         shell: msys2 {0}
         env:
           FEFF10_LIB_SHA256: b575f0a92aaa8862b24a7326210a1c8fb42faed24cd2338bf67b547f8c8354a7
+          FEFF8L_DIR: ${{ github.workspace }}/crates/xafsview/assets/feff8l/win64
         run: |
           export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:$PATH"
-          cargo test --workspace --target x86_64-pc-windows-gnu
+          cargo test --workspace --target x86_64-pc-windows-gnu -- --skip feff10_pipeline_generates_and_parses_cu_paths
