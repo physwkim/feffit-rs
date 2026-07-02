@@ -1,0 +1,71 @@
+name: macOS
+
+# Lint/test gate on macOS, the platform where BOTH FEFF backends can run. The
+# Apple-Silicon (arm64) runner matches the real user machine: the vendored
+# FEFF8.5L binaries are x86_64 (larch's darwin64 set), so users on Apple Silicon
+# run them under Rosetta 2 — this job installs Rosetta and does the same, so the
+# default backend is exercised exactly as shipped. The in-process FEFF10 backend
+# links here against its known-good arm64 prebuilt (macOS is the one platform
+# where it works), but its end-to-end test stays excluded to keep all three
+# platform gates uniform.
+#
+# No system libraries are installed: unlike Linux, macOS ships libcups, and the
+# GUI/GPU stack is loaded at runtime. Linux (rust.yml) owns the rustfmt/clippy
+# checks; this job only builds + tests, so the platform-independent lints aren't
+# duplicated three times.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same ref cancels the in-flight run (matches rust.yml).
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pin the prebuilt libfeff10-macos-arm64.a to a vetted hash, same policy as the
+  # Linux/Windows gates. macOS is the one platform where the FEFF10 prebuilt
+  # actually works, so the workspace links it here. Update when the feff10 dep is
+  # bumped.
+  FEFF10_LIB_SHA256: 321b6d1f65c106152f7af2c1744a4247499b0d65c917a593e64dbb95f3893be5
+
+jobs:
+  checks:
+    runs-on: macos-14 # Apple Silicon (arm64), matching the arm64 feff10 prebuilt
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+
+      - uses: taiki-e/install-action@nextest
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The vendored feff8l darwin64 binaries are x86_64; on the arm64 runner they
+      # run under Rosetta 2, exactly as they do for users on Apple Silicon.
+      - name: Install Rosetta 2
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      - name: Build
+        run: cargo build --workspace --verbose
+
+      - name: Test (nextest)
+        # FEFF8L_DIR points the feff8l pipeline test at the vendored darwin64 set
+        # (x86_64, run via Rosetta). The FEFF10 end-to-end test is excluded to keep
+        # all three platform gates uniform — it stays in the tree as the
+        # upstream-tracking case, only excluded from CI runs.
+        env:
+          FEFF8L_DIR: ${{ github.workspace }}/crates/xafsview/assets/feff8l/darwin64
+        run: cargo nextest run --workspace -E 'not test(feff10_pipeline_generates_and_parses_cu_paths)'
+
+      - name: Doctests
+        run: cargo test --doc --workspace
