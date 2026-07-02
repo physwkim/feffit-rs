@@ -1022,6 +1022,10 @@ impl PlotDataWindow {
         };
         let (xlabel, ylabel) = self.axis_labels();
         let highlighted = self.highlighted.clone();
+        // While one curve is highlighted, every other curve is drawn translucent
+        // so the picked one reads clearly on a crowded plot — a mere thicker line
+        // (add_emphasized_curve) was too weak to spot. `dim` fades the rest.
+        let dimming = highlighted.is_some();
         let stack = self.stack;
         let show_overlay = self.show_overlay;
 
@@ -1053,12 +1057,17 @@ impl PlotDataWindow {
             && let Some(ov) = &self.overlay
             && !ov.x.is_empty()
         {
+            let (data_c, model_c) = if dimming {
+                (dim(FIT_DATA), dim(FIT_MODEL))
+            } else {
+                (FIT_DATA, FIT_MODEL)
+            };
             self.plot
-                .add_curve_with_legend(&ov.x, &ov.data, FIT_DATA, "fit data");
+                .add_curve_with_legend(&ov.x, &ov.data, data_c, "fit data");
             // "Only FT" overlays carry no model curve.
             if !ov.model.is_empty() {
                 self.plot
-                    .add_curve_with_legend(&ov.x, &ov.model, FIT_MODEL, "fit model");
+                    .add_curve_with_legend(&ov.x, &ov.model, model_c, "fit model");
             }
         }
 
@@ -1069,7 +1078,8 @@ impl PlotDataWindow {
             if highlighted.as_deref() == Some(label.as_str()) {
                 self.plot.add_emphasized_curve(&x, &ys, color, label);
             } else {
-                self.plot.add_curve_with_legend(&x, &ys, color, label);
+                let c = if dimming { dim(color) } else { color };
+                self.plot.add_curve_with_legend(&x, &ys, c, label);
             }
         }
 
@@ -1077,7 +1087,8 @@ impl PlotDataWindow {
             if highlighted.as_deref() == Some("average") {
                 self.plot.add_emphasized_curve(&x, &y, fg, "average");
             } else {
-                self.plot.add_curve_with_legend(&x, &y, fg, "average");
+                let c = if dimming { dim(fg) } else { fg };
+                self.plot.add_curve_with_legend(&x, &y, c, "average");
             }
         }
 
@@ -1237,6 +1248,15 @@ fn same_height_scale(y: &[f64]) -> Vec<f64> {
         return y.to_vec();
     }
     y.iter().map(|v| (v - mn) / span).collect()
+}
+
+/// Fade a curve colour (translucent) so a legend-highlighted selection stands
+/// out: while one curve is emphasized, every *other* curve is drawn dimmed, so
+/// the picked one reads clearly even on a crowded plot. The highlighted curve
+/// keeps its full colour (and thicker line via [`add_emphasized_curve`]), and
+/// its legend swatch stays full colour while the dimmed rows fade too.
+fn dim(c: Color32) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 70)
 }
 
 /// Raise trace `idx`'s y-values by its stacking offset (`idx · stack`); trace 0

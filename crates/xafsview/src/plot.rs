@@ -560,23 +560,24 @@ fn draw_legend(
         egui::Color32::from_gray(0xe0)
     };
     ui.spacing_mut().item_spacing.y = 2.0;
-    // The emphasized (highlighted) row gets a faint selection fill that reads on
-    // either canvas — light on a dark background, dark on a light one.
+    // The emphasized (highlighted) row gets a clear selection fill plus an
+    // outline that reads on either canvas — light on a dark background, dark on a
+    // light one. A near-invisible tint (alpha 28) was the old value; this is
+    // strong enough to spot at a glance.
     let sel_bg = if luma > 128.0 {
-        egui::Color32::from_black_alpha(28)
+        egui::Color32::from_black_alpha(110)
     } else {
-        egui::Color32::from_white_alpha(28)
+        egui::Color32::from_white_alpha(110)
     };
     let mut clicked = None;
     for (label, color, emph) in entries {
-        let row = egui::Frame::new()
+        let mut frame = egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(4, 1))
-            .corner_radius(egui::CornerRadius::same(3))
-            .fill(if *emph {
-                sel_bg
-            } else {
-                egui::Color32::TRANSPARENT
-            })
+            .corner_radius(egui::CornerRadius::same(3));
+        if *emph {
+            frame = frame.fill(sel_bg).stroke(egui::Stroke::new(1.0, text));
+        }
+        let row = frame
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let (rect, _) = ui
