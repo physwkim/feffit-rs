@@ -184,18 +184,22 @@ impl Feff8l {
 
         if dirs.is_empty() {
             // Nothing configured: hand a bare name to the OS and let it search
-            // PATH at spawn time.
+            // PATH at spawn time (Windows' PATH search appends `.exe` itself).
             return Ok(Command::new(module));
         }
+        // A configured directory holds the on-disk file, whose name carries the
+        // platform executable suffix: `feff8l_pot.exe` on Windows, `feff8l_pot`
+        // elsewhere (`EXE_SUFFIX` is empty on non-Windows).
+        let file_name = format!("{module}{}", std::env::consts::EXE_SUFFIX);
         for d in &dirs {
-            let p = d.join(module);
+            let p = d.join(&file_name);
             if p.is_file() {
                 return Ok(Command::new(p));
             }
         }
         Err(FeffError::ExeNotFound {
             module: module.to_string(),
-            searched: dirs.iter().map(|d| d.join(module)).collect(),
+            searched: dirs.iter().map(|d| d.join(&file_name)).collect(),
         })
     }
 
