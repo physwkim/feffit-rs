@@ -122,6 +122,14 @@ pub struct XafsViewApp {
     feffit_batch: FeffitBatch,
     /// The "Make μ(E) from files" staging picker (Plot Data-style two-pane add).
     batch_load: BatchLoadWindow,
+    /// Whether the pending [`batch_load`] build should also run AUTOBK on the
+    /// just-built groups. Set `true` when the picker was opened from the Autobk
+    /// "Data…" manager (so loading a batch reduces it end-to-end, and every graph
+    /// type shows the new files at once), `false` from the explicit μ(E)-only
+    /// "Make μ(E) from files" menu (which keeps its build-then-reduce two-step).
+    ///
+    /// [`batch_load`]: Self::batch_load
+    batch_reduce_on_build: bool,
     /// Whether the detached "Data" window (the loaded-group manager: the list,
     /// "Add data files…", and "Clear all") is shown. The Autobk sidebar keeps
     /// only a compact current-group combo; the full list lives here.
@@ -244,6 +252,7 @@ impl XafsViewApp {
             feffit_show_all_fits: false,
             feffit_batch: FeffitBatch::default(),
             batch_load: BatchLoadWindow::default(),
+            batch_reduce_on_build: false,
             data_window_open: false,
             feffit_batch_open: false,
             edit_xmu: EditXmuState::default(),
@@ -789,12 +798,15 @@ impl XafsViewApp {
     /// add/remove), so several raw scan files can be chosen — and a wrong pick
     /// moved back out — before the groups are built on OK. Requires an open
     /// import so the column mapping is known; OK routes to [`build_xmu_from_paths`].
-    fn make_xmu_from_files(&mut self) {
+    /// `reduce` records whether the built groups should also be run through AUTOBK
+    /// (see [`batch_reduce_on_build`](Self::batch_reduce_on_build)).
+    fn make_xmu_from_files(&mut self, reduce: bool) {
         if self.import.is_none() {
             self.status =
                 "Open one file and choose its columns first, then batch the rest.".to_owned();
             return;
         }
+        self.batch_reduce_on_build = reduce;
         self.batch_load
             .open_on(self.session.folders.data_dir.clone());
     }
@@ -824,6 +836,9 @@ impl XafsViewApp {
         // "Output file numbering": append a sequence number to each .xmu so the
         // batch outputs stay distinct (the original toggles this in the dialog).
         let number = self.import.as_ref().is_some_and(|i| i.number_outputs);
+        // The groups built here are appended to `session.groups`, so remember
+        // where they start — the auto-reduce below only touches the new ones.
+        let start = self.session.groups.len();
         let mut built = 0usize;
         let mut build_errors = 0usize;
         let mut written = 0usize;
@@ -856,6 +871,19 @@ impl XafsViewApp {
             }
         }
 
+        // Auto-reduce the just-built groups when the add came from the Autobk
+        // "Data…" manager: normalize → AUTOBK → forward-FT on the new groups only,
+        // so background/EXAFS graphs show them immediately (not just μ(E)). The
+        // .xmu were already written above; χ(k)/χ(R) files are not — that stays
+        // the explicit "Multiple AUTOBK" action.
+        let reduced = if self.batch_reduce_on_build && built > 0 {
+            let pre = self.reduction.pre_params();
+            let bk = self.reduction.autobk_params();
+            let ft = self.reduction.ft_params();
+            feffit::xasdata::reduce_all(&mut self.session.groups[start..], &pre, &bk, &ft, 1.0)
+        } else {
+            0
+        };
         if built > 0 {
             self.reduction.graph = GraphType::MuBkg;
             self.clean_undo.clear();
@@ -865,10 +893,15 @@ impl XafsViewApp {
             self.plot_data.mark_dirty();
             self.replot_graph();
         }
+        let reduced_note = if self.batch_reduce_on_build {
+            format!(", AUTOBK reduced {reduced}")
+        } else {
+            String::new()
+        };
         self.status = format!(
             "Batch μ(E): built {built}, wrote {written} .xmu \
              ({write_failed} not written), build errors {build_errors}, \
-             unreadable {read_errors}."
+             unreadable {read_errors}{reduced_note}."
         );
     }
 
@@ -2124,7 +2157,8 @@ impl XafsViewApp {
         );
         self.data_window_open = keep_open;
         if add_clicked {
-            self.make_xmu_from_files();
+            // Loading through the Autobk data manager reduces end-to-end.
+            self.make_xmu_from_files(true);
         }
         changed
     }
@@ -2428,7 +2462,9 @@ impl XafsViewApp {
             }
             if make_xmu_files {
                 self.tab = Tab::Autobk;
-                self.make_xmu_from_files();
+                // The explicit μ(E)-only step: build μ(E) now, reduce later via
+                // "Multiple AUTOBK" (this menu's documented two-step workflow).
+                self.make_xmu_from_files(false);
             }
             ui.menu_button("Periodic table", |ui| {
                 if ui.button("Periodic table + atom data…").clicked() {
