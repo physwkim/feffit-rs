@@ -12,22 +12,34 @@ name: Windows build
 # The default *runtime* backend, though, is the external FEFF8.5L pipeline: the
 # vendored win64 feff8l_* binaries are packaged under dist/feff8l/win64/ beside
 # the exe, where the app's resolver finds them. The in-process FEFF10 backend
-# stays linked and selectable but is broken on Windows upstream
-# (Ameyanagi/feff10-rs#1), so it is no longer the default.
+# stays linked but is disabled in the UI, being broken on Windows upstream
+# (Ameyanagi/feff10-rs#1).
 #
-# Runs on every push to main (CI signal), on release tags like `0.1.0` (the zip
-# is also attached to the GitHub Release), and on demand from the Actions tab.
+# Runs on every push to main (CI signal) and on release tags like `0.1.0` (the
+# zip is also attached to the GitHub Release); the `test` job additionally runs
+# as a gate on pull requests to main. Also on demand from the Actions tab.
 on:
   push:
     branches: [main]
     tags: ['*.*.*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+# A busy PR shouldn't pile up Windows minutes: a new push to the same ref cancels
+# the in-flight run (matches rust.yml). Distinct tags keep distinct groups.
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write # attach the zip to the GitHub Release on tag builds
 
 jobs:
   build:
+    # Release packaging (the zip) is for main / tags / manual dispatch. On pull
+    # requests only the `test` job runs as the gate, to keep Windows minutes down.
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
