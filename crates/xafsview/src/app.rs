@@ -122,6 +122,13 @@ pub struct XafsViewApp {
     feffit_batch: FeffitBatch,
     /// The "Make μ(E) from files" staging picker (Plot Data-style two-pane add).
     batch_load: BatchLoadWindow,
+    /// Files picked in one multi-select "Open New file" for a column-chooser mode
+    /// (Calc-XMU / Load-μ). The first file drives the column chooser ([`import`]);
+    /// the whole set is built with that mapping when the user clicks "Calc XMU"
+    /// (see [`calc_xmu`](Self::calc_xmu)). Empty in single-file mode.
+    ///
+    /// [`import`]: Self::import
+    pending_open_paths: Vec<std::path::PathBuf>,
     /// Whether the detached "Data" window (the loaded-group manager: the list,
     /// "Add data files…", and "Clear all") is shown. The Autobk sidebar keeps
     /// only a compact current-group combo; the full list lives here.
@@ -244,6 +251,7 @@ impl XafsViewApp {
             feffit_show_all_fits: false,
             feffit_batch: FeffitBatch::default(),
             batch_load: BatchLoadWindow::default(),
+            pending_open_paths: Vec::new(),
             data_window_open: false,
             feffit_batch_open: false,
             edit_xmu: EditXmuState::default(),
@@ -291,9 +299,15 @@ impl XafsViewApp {
         dlg.add_filter("Scan data (.000–.999)", &exts)
     }
 
-    /// Open a single data file for the Autobk flow. `scan_only` restricts the
-    /// picker to raw scan files (Calc-XMU); Load-μ and the File-menu open pass
+    /// Open one *or more* data files for the Autobk column-chooser flow.
+    /// `scan_only` restricts the picker to raw scan files (Calc-XMU); Load-μ passes
     /// `false` so precomputed `.xmu` files stay selectable.
+    ///
+    /// The first picked file drives the column chooser ([`import`](Self::import)).
+    /// On a multi-select the remaining files are held in
+    /// [`pending_open_paths`](Self::pending_open_paths) and built with the same
+    /// column mapping when the user clicks "Calc XMU"; a single pick clears that
+    /// list and stays the plain one-file flow.
     fn open_file(&mut self, scan_only: bool) {
         let mut dlg = rfd::FileDialog::new();
         if scan_only {
@@ -302,19 +316,31 @@ impl XafsViewApp {
         if let Some(dir) = &self.session.folders.data_dir {
             dlg = dlg.set_directory(dir);
         }
-        let Some(path) = dlg.pick_file() else {
+        let Some(paths) = dlg.pick_files().filter(|p| !p.is_empty()) else {
             return;
         };
-        self.set_data_dir_from(&path);
-        match ColumnFile::from_path(&path) {
+        let first = paths[0].clone();
+        self.set_data_dir_from(&first);
+        match ColumnFile::from_path(&first) {
             Ok(cf) => {
-                self.status = format!(
-                    "Loaded {} — {} columns × {} rows",
-                    path.display(),
-                    cf.ncols(),
-                    cf.nrows()
-                );
+                let (ncols, nrows) = (cf.ncols(), cf.nrows());
                 self.import = Some(ImportState::new(cf));
+                if paths.len() > 1 {
+                    // Multi-select: the first file sets the mapping; the whole set
+                    // is built by that mapping on the next "Calc XMU".
+                    let n = paths.len();
+                    self.pending_open_paths = paths;
+                    self.status = format!(
+                        "Selected {n} files — set the first file's columns, \
+                         then Calc XMU builds all {n} with that mapping."
+                    );
+                } else {
+                    self.pending_open_paths.clear();
+                    self.status = format!(
+                        "Loaded {} — {ncols} columns × {nrows} rows",
+                        first.display()
+                    );
+                }
             }
             Err(e) => self.status = format!("Open failed: {e}"),
         }
@@ -333,35 +359,61 @@ impl XafsViewApp {
         }
     }
 
-    /// Load a FEFF `chi.dat` directly as a χ(k)-only group (no μ(E)).
+    /// Load one *or more* FEFF `chi.dat` files directly as χ(k)-only groups (no
+    /// μ(E)). Each picked file is read independently — no column mapping is needed
+    /// — so a multi-select just loads them all.
     fn open_chi_dat(&mut self) {
         let mut dlg = rfd::FileDialog::new();
         if let Some(dir) = &self.session.folders.data_dir {
             dlg = dlg.set_directory(dir);
         }
-        let Some(path) = dlg.pick_file() else {
+        let Some(paths) = dlg.pick_files().filter(|p| !p.is_empty()) else {
             return;
         };
-        self.set_data_dir_from(&path);
-        match feffit::xasdata::read_chi_dat(&path) {
-            Ok((k, chi)) => {
-                let label = path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| format!("chi{}", self.session.groups.len() + 1));
-                let n = k.len();
-                // Seed the Autobk "Output file" chi base from the loaded name.
-                self.reduction.output_file = format!("{label}.chi");
-                let mut g = XasGroup::from_chi(label, k, chi);
-                g.filename = Some(path.clone());
-                self.session.add_group(g);
-                self.reduction.graph = GraphType::KChi;
-                self.plot_data.mark_dirty();
-                self.replot_graph();
-                self.status = format!("Loaded χ(k): {n} points from {}", path.display());
+        // Loading χ(k) directly abandons any pending column-chooser batch from a
+        // prior Calc-XMU / Load-μ multi-select, so its files can't leak into a
+        // later "Calc XMU".
+        self.pending_open_paths.clear();
+        self.set_data_dir_from(&paths[0]);
+        let mut loaded = 0usize;
+        let mut errors = 0usize;
+        let mut last: Option<(String, usize, std::path::PathBuf)> = None;
+        for path in &paths {
+            match feffit::xasdata::read_chi_dat(path) {
+                Ok((k, chi)) => {
+                    let label = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| format!("chi{}", self.session.groups.len() + 1));
+                    let n = k.len();
+                    // Seed the Autobk "Output file" chi base from the loaded name.
+                    self.reduction.output_file = format!("{label}.chi");
+                    let mut g = XasGroup::from_chi(label.clone(), k, chi);
+                    g.filename = Some(path.clone());
+                    self.session.add_group(g);
+                    last = Some((label, n, path.clone()));
+                    loaded += 1;
+                }
+                Err(_) => errors += 1,
             }
-            Err(e) => self.status = format!("chi.dat open failed: {e}"),
         }
+        if loaded > 0 {
+            self.reduction.graph = GraphType::KChi;
+            // Show every χ(k) just loaded at once, not only the last group.
+            if loaded > 1 {
+                self.show_all_groups = true;
+            }
+            self.plot_data.mark_dirty();
+            self.replot_graph();
+        }
+        self.status = match (&last, loaded, errors) {
+            (Some((_, n, path)), 1, 0) => {
+                format!("Loaded χ(k): {n} points from {}", path.display())
+            }
+            (Some(_), _, 0) => format!("Loaded {loaded} χ(k) file(s)"),
+            (Some(_), _, _) => format!("Loaded {loaded} χ(k) file(s), {errors} failed"),
+            (None, _, _) => format!("chi.dat open failed: {errors} file(s) unreadable"),
+        };
     }
 
     /// Load a FEFF `chi.dat` as the **Theory** standard — the `k_std`/`chi_std`
@@ -387,6 +439,14 @@ impl XafsViewApp {
 
     /// Build `mu(E)` from the current import selection and add it as a group.
     fn calc_xmu(&mut self) {
+        // Multi-select "Open New file": the first file set the column mapping, so
+        // build every picked file with that same mapping in one batch (which
+        // auto-reduces and writes each .xmu), then drop back to single-file mode.
+        if !self.pending_open_paths.is_empty() {
+            let paths = std::mem::take(&mut self.pending_open_paths);
+            self.build_xmu_from_paths(paths);
+            return;
+        }
         let Some(import) = self.import.as_ref() else {
             return;
         };
@@ -2279,7 +2339,14 @@ impl XafsViewApp {
                         ui.add_space(8.0);
                         use crate::widgets::{self, CHUNKY_BTN};
                         ui.horizontal(|ui| {
-                            if widgets::action(ui, "Open New file", CHUNKY_BTN).clicked() {
+                            if widgets::action(ui, "Open New file", CHUNKY_BTN)
+                                .on_hover_text(
+                                    "Pick one or more files. For Calc XMU / Load μ(E), \
+                                     the first file sets the columns and Calc XMU then \
+                                     builds them all; χ(k).dat files load directly.",
+                                )
+                                .clicked()
+                            {
                                 open_clicked = true;
                             }
                             let start = widgets::primary(ui, "Autobk Start", CHUNKY_BTN, can_start);
