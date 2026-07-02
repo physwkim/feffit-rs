@@ -29,6 +29,10 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
         y_min: DATA_MARGIN,
         y_max: DATA_MARGIN,
     });
+    // Disable wheel/scroll zoom on every GUI plot: it fought the macOS trackpad
+    // momentum guard repeatedly, so zoom is done through box-drag, the toolbar
+    // Home/Zoom buttons, and the context menu instead. (siplot 0.4.2 `scroll_zoom`.)
+    plot.plot_mut().scroll_zoom = false;
     // Coordinate-readout toggle state. siplot fuses the crosshair guide lines and
     // the coordinate readout behind this single `graph_cursor` flag (drawing both
     // or neither); xafsview instead draws the cursor overlay itself and splits the
@@ -318,7 +322,6 @@ impl Plot {
     pub fn clear(&mut self) {
         self.inner.clear();
         self.legend.clear();
-        self.rearm_reset_zoom();
         self.pick_curves.clear();
         self.last_pick = None;
     }
@@ -328,22 +331,8 @@ impl Plot {
     pub fn clear_curves(&mut self) {
         self.inner.clear_curves();
         self.legend.clear();
-        self.rearm_reset_zoom();
         self.pick_curves.clear();
         self.last_pick = None;
-    }
-
-    /// Re-arm the toolbar's "Reset Zoom" to refit the *current* data.
-    ///
-    /// siplot captures the home view once on the plot's first show and the
-    /// "Reset Zoom" menu item restores exactly that snapshot — it never refreshes
-    /// it when the content changes. A long-lived plot whose data, item, or loaded
-    /// files change (every window here) would then reset to a stale range from
-    /// the first frame. Every rebuild funnels through `clear`/`clear_curves`, so
-    /// dropping `home_limits` here makes siplot recapture the freshly auto-fit
-    /// view (autoscale refits the live view on the following add) as the new home.
-    fn rearm_reset_zoom(&mut self) {
-        self.inner.plot_mut().home_limits = None;
     }
 }
 
