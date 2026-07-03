@@ -5,6 +5,28 @@ here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/
 the release version tracks the `xafsview` binary. The `feffit` library crate is
 versioned independently.
 
+## [0.1.4] - 2026-07-03
+
+### Changed
+
+- Autobk data loading is now one in-app **"Open data"** window: an Up / sub-folder
+  browser anchored on the Data folder plus a two-pane staging list (`=>`/`<=`,
+  Sort, Clear all) that lists raw scans only. A single **Autobk Start** builds
+  μ(E) for every staged file and reduces them. Both "Open New file" and the Data
+  window's "Add data files…" open it, replacing the separate "Make μ(E) from
+  files" batch picker.
+- The Open-data file preview shows the whole file (was capped at a few rows).
+- Removed **Calc XMU** and the **Loading** mode; the flow is unified on Autobk
+  Start.
+- The Open-data Selected pane mirrors the currently loaded groups on open, so
+  reopening shows the session; Autobk Start builds only the not-yet-loaded files.
+
+### Fixed
+
+- Autobk and Feffit plots legend each trace by its data / group (file) name, so
+  the focused group matches the multi-group overlays instead of showing a bare
+  quantity ("μ(E)", "kʷ·χ(k)", …) or "data".
+
 ## [0.1.3] - 2026-07-02
 
 ### FEFF backend
@@ -81,6 +103,7 @@ Earlier releases predate this changelog; see the GitHub release notes.
 
 See the GitHub release notes.
 
+[0.1.4]: https://github.com/physwkim/feffit-rs/compare/0.1.3...0.1.4
 [0.1.3]: https://github.com/physwkim/feffit-rs/compare/0.1.2...0.1.3
 [0.1.2]: https://github.com/physwkim/feffit-rs/compare/0.1.1...0.1.2
 [0.1.1]: https://github.com/physwkim/feffit-rs/releases/tag/0.1.1
