@@ -1177,8 +1177,11 @@ impl XafsViewApp {
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot.set_graph_y_label("μ(E)", siplot::YAxis::Left);
                 if !g.energy.is_empty() {
+                    // Legend the μ(E) trace with the data's own name (the y-axis
+                    // already says it is μ(E)), so the AUTOBK view identifies which
+                    // scan is shown rather than repeating "μ(E)".
                     self.plot
-                        .add_curve_with_legend(&g.energy, &g.mu, BLUE, "μ(E)");
+                        .add_curve_with_legend(&g.energy, &g.mu, BLUE, &g.label);
                 }
                 if show_bkg && let Some(bkg) = &g.bkg {
                     self.plot
@@ -1194,14 +1197,14 @@ impl XafsViewApp {
                         .zip(chi)
                         .map(|(&kk, &c)| c * kk.powi(kweight))
                         .collect();
-                    self.plot.add_curve_with_legend(k, &y, BLUE, "kʷ·χ(k)");
+                    self.plot.add_curve_with_legend(k, &y, BLUE, &g.label);
                 }
             }
             GraphType::ChiR => {
                 self.plot.set_graph_x_label("R (Å)");
                 self.plot.set_graph_y_label("|χ(R)|", siplot::YAxis::Left);
                 if let (Some(r), Some(mag)) = (&g.r, &g.chir_mag) {
-                    self.plot.add_curve_with_legend(r, mag, BLUE, "|χ(R)|");
+                    self.plot.add_curve_with_legend(r, mag, BLUE, &g.label);
                 }
             }
             GraphType::ChiQ => {
@@ -1217,7 +1220,7 @@ impl XafsViewApp {
                         .zip(chi)
                         .map(|(&kk, &c)| c * kk.powi(kweight))
                         .collect();
-                    self.plot.add_curve_with_legend(k, &y, BLUE, "kʷ·χ(k)");
+                    self.plot.add_curve_with_legend(k, &y, BLUE, &g.label);
                 }
                 if let (Some(q), Some(re)) = (&g.q, &g.chiq_re) {
                     self.plot
@@ -1234,7 +1237,7 @@ impl XafsViewApp {
                     let d1 = deriv(&g.mu, &g.energy);
                     let d2 = deriv(&d1, &g.energy);
                     self.plot
-                        .add_curve_with_legend(&g.energy, &d1, BLUE, "XMU'");
+                        .add_curve_with_legend(&g.energy, &d1, BLUE, &g.label);
                     self.plot
                         .add_curve_with_legend(&g.energy, &d2, ORANGE, "XMU''");
                 }
@@ -1247,7 +1250,7 @@ impl XafsViewApp {
                 if let Some(bkg) = &g.bkg {
                     let d1 = deriv(bkg, &g.energy);
                     self.plot
-                        .add_curve_with_legend(&g.energy, &d1, BLUE, "BKG(E)'");
+                        .add_curve_with_legend(&g.energy, &d1, BLUE, &g.label);
                 }
             }
             GraphType::BkgKDeriv => {
@@ -1260,7 +1263,7 @@ impl XafsViewApp {
                 if let (Some(k), Some(chi), Some(step)) = (&g.k, &g.chi, g.edge_step) {
                     let bkg_k: Vec<f64> = chi.iter().map(|&c| -step * c).collect();
                     let d1 = deriv(&bkg_k, k);
-                    self.plot.add_curve_with_legend(k, &d1, BLUE, "BKG(k)'");
+                    self.plot.add_curve_with_legend(k, &d1, BLUE, &g.label);
                 }
             }
             GraphType::MuBkgEDeriv => {
@@ -1272,7 +1275,7 @@ impl XafsViewApp {
                 if !g.energy.is_empty() && !g.mu.is_empty() {
                     let dmu = deriv(&g.mu, &g.energy);
                     self.plot
-                        .add_curve_with_legend(&g.energy, &dmu, BLUE, "XMU'");
+                        .add_curve_with_legend(&g.energy, &dmu, BLUE, &g.label);
                 }
                 if let Some(bkg) = &g.bkg {
                     let dbkg = deriv(bkg, &g.energy);
@@ -1289,7 +1292,7 @@ impl XafsViewApp {
                     let d1 = deriv(bkg, &g.energy);
                     let d2 = deriv(&d1, &g.energy);
                     self.plot
-                        .add_curve_with_legend(&g.energy, &d2, BLUE, "BKG(E)''");
+                        .add_curve_with_legend(&g.energy, &d2, BLUE, &g.label);
                 }
             }
             GraphType::Norm => {
@@ -1303,7 +1306,7 @@ impl XafsViewApp {
                 // somehow unavailable — `reduce` always sets them together.
                 if let Some(flat) = g.flat.as_ref().or(g.norm.as_ref()) {
                     self.plot
-                        .add_curve_with_legend(&g.energy, flat, BLUE, "norm");
+                        .add_curve_with_legend(&g.energy, flat, BLUE, &g.label);
                 }
             }
         }
