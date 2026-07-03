@@ -1,6 +1,6 @@
 //! Autobk-tab reduction controls: edge/background/FT parameters laid out as the
-//! original XAFSView "Autobk parameters" 3-column grid, plus the file-loading
-//! mode and graph selector. [`ReductionUi`] holds the editable values and
+//! original XAFSView "Autobk parameters" 3-column grid, plus the graph selector.
+//! [`ReductionUi`] holds the editable values and
 //! renders the parameter grid; the app turns its
 //! [`pre_params`](ReductionUi::pre_params) /
 //! [`autobk_params`](ReductionUi::autobk_params) / [`ft_params`](ReductionUi::ft_params)
@@ -72,37 +72,6 @@ impl GraphType {
     }
 }
 
-/// How the "Open New file" button interprets the chosen file (the original
-/// "Loading file type" ring: Calc. XMU / Load XMU / chi.dat).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LoadingType {
-    /// Raw beamline columns → build μ(E) via the column chooser.
-    CalcXmu,
-    /// An already-built μ(E) file → load via the same column chooser (it adapts
-    /// to a 2-column energy/μ file).
-    LoadXmu,
-    /// A FEFF `chi.dat` (k, χ) → load χ(k) directly as the working data.
-    ChiDat,
-}
-
-impl LoadingType {
-    /// All modes in display order.
-    pub const ALL: [LoadingType; 3] = [
-        LoadingType::CalcXmu,
-        LoadingType::LoadXmu,
-        LoadingType::ChiDat,
-    ];
-
-    /// Menu label, matching the original ring text.
-    pub fn label(self) -> &'static str {
-        match self {
-            LoadingType::CalcXmu => "Calc. XMU",
-            LoadingType::LoadXmu => "Load XMU",
-            LoadingType::ChiDat => "chi.dat",
-        }
-    }
-}
-
 /// A loaded theoretical χ(k) standard (a FEFF `chi.dat`) used to constrain the
 /// background fit via autobk's `k_std`/`chi_std` — the original "Theory" field.
 pub struct TheoryStd {
@@ -114,8 +83,8 @@ pub struct TheoryStd {
     pub chi: Vec<f64>,
 }
 
-/// Editable reduction parameters plus the active graph type, loading mode, and
-/// the optional theory standard.
+/// Editable reduction parameters plus the active graph type and the optional
+/// theory standard.
 pub struct ReductionUi {
     /// Let `pre_edge`/`autobk` find E0 automatically.
     pub e0_auto: bool,
@@ -167,8 +136,6 @@ pub struct ReductionUi {
     /// the auto rule picks 1 for a <300 eV norm window, which underestimates the
     /// edge step by ~1.6% on the KSW Mn data — exposing this lets the user match.
     pub nnorm: usize,
-    /// How "Open New file" interprets the chosen file.
-    pub loading: LoadingType,
     /// Optional theoretical χ(k) standard constraining the background fit.
     pub theory: Option<TheoryStd>,
     /// The "Output file" chi base name (original Autobk "Output file" field):
@@ -206,7 +173,6 @@ impl Default for ReductionUi {
             norm1: 150.0,
             norm2: 400.0,
             nnorm: 2,
-            loading: LoadingType::CalcXmu,
             theory: None,
             output_file: String::new(),
         }
@@ -274,8 +240,8 @@ impl ReductionUi {
         }
     }
 
-    /// Render the "Autobk parameters" grid plus the loading-mode and graph-type
-    /// selectors, mirroring the original 3-column layout. The returned
+    /// Render the "Autobk parameters" grid plus the graph-type selector,
+    /// mirroring the original 3-column layout. The returned
     /// [`ControlsChange`] reports whether a reduction parameter's edit just
     /// finished (`refit`, re-run Autobk) and/or only the graph type changed
     /// (`replot`, a cheap re-render).
@@ -423,9 +389,9 @@ impl ReductionUi {
                     });
 
                 ui.add_space(16.0);
-                // column 3: the reverse-FT R-window. (The file-loading mode and the
-                // graph-type / k-R-range display controls moved to the Autobk tab's
-                // "Data" and "Graph" boxes, mirroring the Feffit panel's grouping.)
+                // column 3: the reverse-FT R-window. (The graph-type / k-R-range
+                // display controls moved to the Autobk tab's "Graph" box, mirroring
+                // the Feffit panel's grouping.)
                 egui::Grid::new("autobk_col3")
                     .num_columns(2)
                     .spacing([6.0, 4.0])

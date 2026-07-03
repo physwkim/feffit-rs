@@ -1,10 +1,11 @@
-//! Column → role mapping for the Autobk tab's "Open file → Calc XMU" flow.
+//! Column → role mapping for the Autobk "Open data" loader.
 //!
 //! After a [`ColumnFile`] is read, [`ImportState`] holds the user's choice of
 //! energy column, measurement mode, and monitor columns (seeded from the file's
-//! own [`RoleGuess`](feffit::xasdata::RoleGuess)). Its [`ui`](ImportState::ui) renders
-//! the chooser and returns [`ImportAction::CalcXmu`] when the user is ready to
-//! build `mu(E)`; [`to_spec`](ImportState::to_spec) turns the choices into a
+//! own [`RoleGuess`](feffit::xasdata::RoleGuess)). Its [`ui`](ImportState::ui)
+//! renders the reading-format chooser (header-line count, full-file preview,
+//! Mode, column roles) inside the Open-data window; the window's **Autobk Start**
+//! drives the build. [`to_spec`](ImportState::to_spec) turns the choices into a
 //! [`MuSpec`] for [`feffit::xasdata::build_mu`].
 
 use eframe::egui;
@@ -21,12 +22,6 @@ pub enum ImportMode {
     Reference,
     /// A precomputed mu column, used as-is.
     Raw,
-}
-
-/// What the chooser is asking the app to do.
-pub enum ImportAction {
-    /// Build `mu(E)` from the current selection.
-    CalcXmu,
 }
 
 /// The loaded file plus the in-progress column-role selection.
@@ -140,8 +135,10 @@ impl ImportState {
         }
     }
 
-    /// Render the chooser; returns an action when the user clicks "Calc XMU".
-    pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<ImportAction> {
+    /// Render the reading-format chooser (header-line count, full-file preview,
+    /// Mode, column roles). The Open-data window's "Autobk Start" builds μ(E) from
+    /// the current selection, so this renders controls only.
+    pub fn ui(&mut self, ui: &mut egui::Ui) {
         let labels = self.file.labels.clone();
 
         if let Some(p) = self.file.path.as_ref() {
@@ -189,29 +186,35 @@ impl ImportState {
             self.file.nrows()
         ));
 
-        // File preview (the original "File preview" pane): the header metadata
-        // block plus the first few data rows, each line-numbered as XAFSView
-        // does, so the right columns can be picked by inspecting the header.
+        // File preview (the original "File preview" pane): the full file — the
+        // header metadata block followed by *every* data row, each line-numbered
+        // as XAFSView does, so the right columns can be picked by inspecting the
+        // header. Rendered with `show_rows` so only the visible lines are laid out
+        // (a several-hundred-row scan stays cheap).
+        let header_n = self.file.header.len();
+        let ncols = self.file.ncols();
+        let total = header_n + self.file.nrows();
+        let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
         egui::CollapsingHeader::new("File preview")
             .default_open(true)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical()
-                    .max_height(150.0)
+                    .max_height(240.0)
                     .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        for (i, line) in self.file.header.iter().enumerate() {
-                            ui.monospace(format!("{:>3}  {}", i + 1, line));
-                        }
-                        let base = self.file.header.len();
-                        let ncols = self.file.ncols();
-                        for r in 0..self.file.nrows().min(6) {
-                            let mut row = String::new();
-                            for c in 0..ncols {
-                                if let Some(col) = self.file.column(c) {
-                                    row.push_str(&format!("{:>12.5}", col[r]));
+                    .show_rows(ui, row_h, total, |ui, range| {
+                        for i in range {
+                            if i < header_n {
+                                ui.monospace(format!("{:>4}  {}", i + 1, self.file.header[i]));
+                            } else {
+                                let r = i - header_n;
+                                let mut row = String::new();
+                                for c in 0..ncols {
+                                    if let Some(col) = self.file.column(c) {
+                                        row.push_str(&format!("{:>12.5}", col[r]));
+                                    }
                                 }
+                                ui.monospace(format!("{:>4} {row}", i + 1));
                             }
-                            ui.monospace(format!("{:>3} {row}", base + r + 1));
                         }
                     });
             });
@@ -251,22 +254,6 @@ impl ImportState {
                 column_combo(ui, "imp_mu", "μ column", &mut self.mu_col, &labels);
             }
         }
-
-        ui.separator();
-        ui.checkbox(
-            &mut self.number_outputs,
-            "Output file numbering (batch outputs)",
-        )
-        .on_hover_text(
-            "When making μ(E) from several files at once, append 0001, 0002, … to each \
-             written .xmu so the outputs stay distinct.",
-        );
-        ui.weak("Calc XMU writes a .xmu next to each source file.");
-
-        ui.separator();
-        ui.button("Calc XMU")
-            .clicked()
-            .then_some(ImportAction::CalcXmu)
     }
 }
 

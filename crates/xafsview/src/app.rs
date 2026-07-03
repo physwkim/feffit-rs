@@ -7,15 +7,15 @@ use feffit::xasdata::{ColumnFile, Folders, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
 use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindow};
-use crate::batch_load::{BatchLoadAction, BatchLoadWindow};
 use crate::calc_ui::{IonChamberWindow, KeConvertWindow, PeriodicTableWindow, PowderWindow};
 use crate::clean_ui::{CleanAction, EditXmuState};
 use crate::feffit_batch::{BatchAction, FeffitBatch};
 use crate::feffit_ui::{FeffitAction, FeffitPlot, FeffitUi};
-use crate::import::{ImportAction, ImportState};
+use crate::import::ImportState;
 use crate::mback_ui::MbackWindow;
+use crate::open_data::OpenDataBrowser;
 use crate::plot_data::PlotDataWindow;
-use crate::reduce_ui::{ControlsChange, GraphType, LoadingType, ReductionUi, TheoryStd};
+use crate::reduce_ui::{ControlsChange, GraphType, ReductionUi, TheoryStd};
 use crate::timeres_ui::TimeResolvedWindow;
 use crate::wavelet::{WaveletAction, WaveletWindow, morlet_cwt};
 use crate::xanes_ui::XanesWindow;
@@ -120,8 +120,11 @@ pub struct XafsViewApp {
     /// opened from the Feffit tab's "Batch…" button): runs the tab's config
     /// against several checked groups, tabulates and saves the results.
     feffit_batch: FeffitBatch,
-    /// The "Make μ(E) from files" staging picker (Plot Data-style two-pane add).
-    batch_load: BatchLoadWindow,
+    /// The detached "Open data" loader: the in-app raw-scan browser + two-pane
+    /// staging that replaces both the OS file dialog and the old batch picker.
+    /// Only the browse/staging state lives here; the app hosts the reading-format
+    /// chooser ([`import`](Self::import)) and the Autobk Start build around it.
+    open_data: OpenDataBrowser,
     /// Whether the detached "Data" window (the loaded-group manager: the list,
     /// "Add data files…", and "Clear all") is shown. The Autobk sidebar keeps
     /// only a compact current-group combo; the full list lives here.
@@ -243,7 +246,7 @@ impl XafsViewApp {
             feffit_run_overlays: Vec::new(),
             feffit_show_all_fits: false,
             feffit_batch: FeffitBatch::default(),
-            batch_load: BatchLoadWindow::default(),
+            open_data: OpenDataBrowser::default(),
             data_window_open: false,
             feffit_batch_open: false,
             edit_xmu: EditXmuState::default(),
@@ -281,130 +284,121 @@ impl XafsViewApp {
         }
     }
 
-    /// Restrict a file dialog to raw scan files — numeric extensions `.000`–
-    /// `.999`, the beamline scan-number suffix. The `.xmu` / `.chi` we write
-    /// back into the same folder are outputs, so this hides them from the
-    /// raw-data pickers (batch make-μ and single Calc-XMU open). Shared so the
-    /// two stay in sync.
-    fn add_scan_filter(dlg: rfd::FileDialog) -> rfd::FileDialog {
-        let exts: Vec<String> = (0..1000).map(|n| format!("{n:03}")).collect();
-        dlg.add_filter("Scan data (.000–.999)", &exts)
-    }
-
-    /// Open one *or more* data files for the Autobk column-chooser flow.
-    /// `scan_only` restricts the picker to raw scan files (Calc-XMU); Load-μ passes
-    /// `false` so precomputed `.xmu` files stay selectable.
+    /// "Open New file" / "Add data files…": open the unified [`open_data_window`]
+    /// loader (in-app raw-scan browser + two-pane staging + reading-format
+    /// chooser). Autobk loads raw scans from the Folders Data folder; the chooser
+    /// starts fresh and is seeded from the first staged file.
     ///
-    /// A single pick seeds the column chooser ([`import`](Self::import)) and waits
-    /// for "Calc XMU". A multi-select builds every file *immediately* with the
-    /// first file's guessed column mapping — the whole set lands in the Data list
-    /// at once, exactly like [`open_chi_dat`](Self::open_chi_dat) — so there is no
-    /// deferred build step. (To hand-tune columns, open one file at a time.)
-    fn open_file(&mut self, scan_only: bool) {
-        let mut dlg = rfd::FileDialog::new();
-        if scan_only {
-            dlg = Self::add_scan_filter(dlg);
-        }
-        if let Some(dir) = &self.session.folders.data_dir {
-            dlg = dlg.set_directory(dir);
-        }
-        let Some(paths) = dlg.pick_files().filter(|p| !p.is_empty()) else {
-            return;
-        };
-        let first = paths[0].clone();
-        self.set_data_dir_from(&first);
-        match ColumnFile::from_path(&first) {
-            Ok(cf) => {
-                let (ncols, nrows) = (cf.ncols(), cf.nrows());
-                self.import = Some(ImportState::new(cf));
-                if paths.len() > 1 {
-                    // Multi-select: build the whole set now with the first file's
-                    // guessed mapping (build_xmu_from_paths reads self.import), so
-                    // every group lands in the Data list immediately. Clear the
-                    // chooser afterward — the batch is loaded, and a stray "Calc
-                    // XMU" must not re-append the first file as a duplicate.
-                    self.build_xmu_from_paths(paths);
-                    self.import = None;
-                } else {
-                    self.status = format!(
-                        "Loaded {} — {ncols} columns × {nrows} rows",
-                        first.display()
-                    );
-                }
-            }
-            Err(e) => self.status = format!("Open failed: {e}"),
-        }
-    }
-
-    /// "Open New file": route the chosen file by the Loading-file-type ring.
-    /// `chi.dat` loads χ(k) directly; the μ(E) modes go through the column
-    /// chooser (which adapts to a raw multi-column file or a 2-column μ file).
+    /// [`open_data_window`]: Self::open_data_window
     fn open_new_file(&mut self) {
-        match self.reduction.loading {
-            LoadingType::ChiDat => self.open_chi_dat(),
-            // Calc-XMU opens raw scan data, so hide the .xmu/.chi outputs;
-            // Load-XMU opens a precomputed .xmu, so it must stay visible.
-            LoadingType::CalcXmu => self.open_file(true),
-            LoadingType::LoadXmu => self.open_file(false),
-        }
+        self.import = None;
+        // Seed the Selected pane with the files already loaded as groups, so the
+        // loader shows the current session rather than an empty pane.
+        let loaded: Vec<std::path::PathBuf> = self
+            .session
+            .groups
+            .iter()
+            .filter_map(|g| g.filename.clone())
+            .collect();
+        self.open_data
+            .open_on(self.session.folders.data_dir.clone(), loaded);
     }
 
-    /// Load one *or more* FEFF `chi.dat` files directly as χ(k)-only groups (no
-    /// μ(E)). Each picked file is read independently — no column mapping is needed
-    /// — so a multi-select just loads them all.
-    fn open_chi_dat(&mut self) {
-        let mut dlg = rfd::FileDialog::new();
-        if let Some(dir) = &self.session.folders.data_dir {
-            dlg = dlg.set_directory(dir);
-        }
-        let Some(paths) = dlg.pick_files().filter(|p| !p.is_empty()) else {
+    /// The detached "Open data" loader window: the in-app browser + two-pane
+    /// staging ([`open_data`](Self::open_data)), the reading-format chooser
+    /// ([`import`](Self::import), previewing the first staged file), and an
+    /// **Autobk Start** button that builds μ(E) for every staged file and reduces
+    /// them ([`build_xmu_from_paths`](Self::build_xmu_from_paths)).
+    fn open_data_window(&mut self, ctx: &egui::Context) {
+        if !self.open_data.open {
             return;
-        };
-        self.set_data_dir_from(&paths[0]);
-        let mut loaded = 0usize;
-        let mut errors = 0usize;
-        let mut last: Option<(String, usize, std::path::PathBuf)> = None;
-        for path in &paths {
-            match feffit::xasdata::read_chi_dat(path) {
-                Ok((k, chi)) => {
-                    let label = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| format!("chi{}", self.session.groups.len() + 1));
-                    let n = k.len();
-                    // Seed the Autobk "Output file" chi base from the loaded name.
-                    self.reduction.output_file = format!("{label}.chi");
-                    let mut g = XasGroup::from_chi(label.clone(), k, chi);
-                    g.filename = Some(path.clone());
-                    self.session.add_group(g);
-                    last = Some((label, n, path.clone()));
-                    loaded += 1;
-                }
-                Err(_) => errors += 1,
+        }
+        let mut keep_open = true;
+        // Deferred out of the render closure (which reads disjoint `self` fields):
+        // the representative re-read and `build_xmu_from_paths` borrow all of self.
+        let mut do_start = false;
+        crate::window::detached(
+            ctx,
+            "open_data",
+            "Open data",
+            &mut keep_open,
+            [640.0, 720.0],
+            |ui| {
+                // Wrap in a CentralPanel like every other detached window so the
+                // content gets the standard frame margin instead of hugging the
+                // window edges.
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    self.open_data.ui(ui);
+                    ui.separator();
+                    match self.import.as_mut() {
+                        Some(import) => import.ui(ui),
+                        None => {
+                            ui.weak("Stage a raw scan file above to set its columns.");
+                        }
+                    }
+                    ui.separator();
+                    let start = crate::widgets::primary(
+                        ui,
+                        "Autobk Start",
+                        crate::widgets::CHUNKY_BTN,
+                        self.open_data.has_staged(),
+                    )
+                    .on_hover_text("Build μ(E) from every staged file, then run AUTOBK");
+                    if start.clicked() {
+                        do_start = true;
+                    }
+                });
+            },
+        );
+        self.open_data.open = self.open_data.open && keep_open;
+
+        // Keep the reading-format chooser pointed at the representative (first
+        // staged) file: re-read only when it changes, so the user's column picks
+        // persist while the representative stays put.
+        let rep = self.open_data.representative().cloned();
+        let cur = self.import.as_ref().and_then(|i| i.file.path.clone());
+        if rep != cur {
+            match rep {
+                Some(path) => match ColumnFile::from_path(&path) {
+                    Ok(cf) => self.import = Some(ImportState::new(cf)),
+                    Err(e) => self.status = format!("Open failed: {e}"),
+                },
+                None => self.import = None,
             }
         }
-        if loaded > 0 {
-            self.reduction.graph = GraphType::KChi;
-            // Show every χ(k) just loaded at once, not only the last group.
-            if loaded > 1 {
-                self.show_all_groups = true;
+
+        // Build + reduce every staged file with the representative's mapping.
+        // Guard on a seeded import so a failed representative read never drops the
+        // staged set (the re-read above seeds it whenever anything is staged).
+        if do_start && self.import.is_some() {
+            let staged = self.open_data.take_staged();
+            // The Selected pane is seeded with the already-loaded files, so build
+            // only the newly-staged ones — rebuilding an existing group would
+            // duplicate it. Groups are keyed by their source path.
+            let loaded: std::collections::HashSet<std::path::PathBuf> = self
+                .session
+                .groups
+                .iter()
+                .filter_map(|g| g.filename.clone())
+                .collect();
+            let to_build: Vec<std::path::PathBuf> =
+                staged.into_iter().filter(|p| !loaded.contains(p)).collect();
+            // Track the folder the data came from (as the old single-file open
+            // did), so outputs and the next open default to it.
+            if let Some(first) = to_build.first() {
+                self.set_data_dir_from(first);
             }
-            self.plot_data.mark_dirty();
-            self.replot_graph();
+            self.open_data.open = false;
+            if !to_build.is_empty() {
+                self.build_xmu_from_paths(to_build);
+            }
         }
-        self.status = match (&last, loaded, errors) {
-            (Some((_, n, path)), 1, 0) => {
-                format!("Loaded χ(k): {n} points from {}", path.display())
-            }
-            (Some(_), _, 0) => format!("Loaded {loaded} χ(k) file(s)"),
-            (Some(_), _, _) => format!("Loaded {loaded} χ(k) file(s), {errors} failed"),
-            (None, _, _) => format!("chi.dat open failed: {errors} file(s) unreadable"),
-        };
     }
 
     /// Load a FEFF `chi.dat` as the **Theory** standard — the `k_std`/`chi_std`
     /// constraint applied by AUTOBK so the background does not absorb real
-    /// first-shell amplitude.
+    /// first-shell amplitude. Entry point is the "Theory" row in the Autobk tab's
+    /// Data box.
     fn open_theory_file(&mut self) {
         let mut dlg = rfd::FileDialog::new();
         if let Some(dir) = &self.session.folders.data_dir {
@@ -424,8 +418,9 @@ impl XafsViewApp {
     }
 
     /// Build `mu(E)` from the current import selection and add it as a group.
-    /// (Multi-file opens build immediately in [`open_file`](Self::open_file); this
-    /// handles the single-file chooser flow.)
+    /// Used by the Autobk tab's "Autobk Start" auto-calc fallback (a single
+    /// representative import). The Open-data loader builds staged files directly
+    /// through [`build_xmu_from_paths`](Self::build_xmu_from_paths).
     fn calc_xmu(&mut self) {
         let Some(import) = self.import.as_ref() else {
             return;
@@ -456,9 +451,9 @@ impl XafsViewApp {
                 };
                 // Seed the Autobk "Output file" chi base from the loaded name.
                 self.reduction.output_file = format!("{label}.chi");
-                // Record the source path on the group (as `open_chi_dat` does),
-                // so the "Data File" field shows it and AUTOBK's χ-file writer can
-                // fall back to the source folder instead of the launch directory.
+                // Record the source path on the group, so the "Data File" field
+                // shows it and AUTOBK's χ-file writer can fall back to the source
+                // folder instead of the launch directory.
                 let mut g = XasGroup::from_mu(label, energy, mu);
                 g.filename = input_path;
                 g.source_header = source_header;
@@ -823,21 +818,6 @@ impl XafsViewApp {
         self.show_all_groups = true;
         self.plot_data.mark_dirty();
         self.replot_graph();
-    }
-
-    /// Open the "Make μ(E) from files" staging picker (Plot Data-style two-pane
-    /// add/remove), so several raw scan files can be chosen — and a wrong pick
-    /// moved back out — before the groups are built on OK. Requires an open
-    /// import so the column mapping is known; OK routes to [`build_xmu_from_paths`],
-    /// which builds μ(E) and runs AUTOBK on each new group.
-    fn make_xmu_from_files(&mut self) {
-        if self.import.is_none() {
-            self.status =
-                "Open one file and choose its columns first, then batch the rest.".to_owned();
-            return;
-        }
-        self.batch_load
-            .open_on(self.session.folders.data_dir.clone());
     }
 
     /// Build a μ(E) group from each path using the active import's column
@@ -2140,7 +2120,7 @@ impl XafsViewApp {
         );
         self.data_window_open = keep_open;
         if add_clicked {
-            self.make_xmu_from_files();
+            self.open_new_file();
         }
         changed
     }
@@ -2153,7 +2133,6 @@ impl XafsViewApp {
         let mut multi_autobk_clicked = false;
         let mut theory_pick = false;
         let mut theory_clear = false;
-        let mut import_action = None;
         let mut change = ControlsChange::default();
 
         // μ(E)-dependent actions (Autobk Start, Edit μ(E)) need a real spectrum,
@@ -2243,14 +2222,15 @@ impl XafsViewApp {
                                     ui.label("Theory");
                                     ui.horizontal(|ui| {
                                         if ui
-                                        .button("Load…")
-                                        .on_hover_text(
-                                            "FEFF chi.dat standard for the background constraint",
-                                        )
-                                        .clicked()
-                                    {
-                                        theory_pick = true;
-                                    }
+                                            .button("Load…")
+                                            .on_hover_text(
+                                                "FEFF chi.dat χ(k) standard that constrains \
+                                                 the AUTOBK background (k_std/chi_std)",
+                                            )
+                                            .clicked()
+                                        {
+                                            theory_pick = true;
+                                        }
                                         match &theory_name {
                                             Some(name) => {
                                                 ui.monospace(name.as_str());
@@ -2265,33 +2245,15 @@ impl XafsViewApp {
                                     });
                                     ui.end_row();
                                 });
-
-                            // File-loading mode (drives "Open New file"); moved here
-                            // from the parameters box so all load settings sit together.
-                            ui.horizontal(|ui| {
-                                ui.label("Loading");
-                                egui::ComboBox::from_id_salt("autobk_loading")
-                                    .selected_text(self.reduction.loading.label())
-                                    .show_ui(ui, |ui| {
-                                        for l in LoadingType::ALL {
-                                            ui.selectable_value(
-                                                &mut self.reduction.loading,
-                                                l,
-                                                l.label(),
-                                            );
-                                        }
-                                    });
-                            });
                         }); // end Data box
                         if group_switched {
                             self.replot_graph();
                         }
 
-                        // Column chooser, shown while a raw / μ file is open
-                        // (transient — not one of the persistent boxes).
-                        if let Some(import) = self.import.as_mut() {
-                            import_action = import.ui(ui);
-                        }
+                        // The reading-format column chooser moved out of here into
+                        // the detached "Open data" window (see `open_data_window`),
+                        // so "Open New file" opens an in-app browser + chooser
+                        // instead of an OS dialog + inline panel.
 
                         // --- Autobk parameters (already wrapped in its own group) -
                         change = self.reduction.controls(ui);
@@ -2379,9 +2341,8 @@ impl XafsViewApp {
                         ui.horizontal(|ui| {
                             if widgets::action(ui, "Open New file", CHUNKY_BTN)
                                 .on_hover_text(
-                                    "Pick one or more files. For Calc XMU / Load μ(E), \
-                                     the first file sets the columns and Calc XMU then \
-                                     builds them all; χ(k).dat files load directly.",
+                                    "Open the raw-scan loader: stage files, set columns, \
+                                     then Autobk Start builds μ(E) for each and reduces.",
                                 )
                                 .clicked()
                             {
@@ -2389,9 +2350,7 @@ impl XafsViewApp {
                             }
                             let start = widgets::primary(ui, "Autobk Start", CHUNKY_BTN, can_start);
                             let start = if start_autocalc {
-                                start.on_hover_text(
-                                    "No μ(E) yet — builds it (Calc XMU), then AUTOBK",
-                                )
+                                start.on_hover_text("No μ(E) yet — builds it, then AUTOBK")
                             } else {
                                 start
                             };
@@ -2473,15 +2432,6 @@ impl XafsViewApp {
         if open_clicked {
             self.open_new_file();
         }
-        if theory_pick {
-            self.open_theory_file();
-        }
-        if theory_clear {
-            self.reduction.theory = None;
-        }
-        if let Some(ImportAction::CalcXmu) = import_action {
-            self.calc_xmu();
-        }
         // "Autobk Start" runs the full reduction *and* writes the χ files. A
         // finished Autobk parameter edit (change.refit) instead auto-runs a live
         // preview — recompute + replot only, no file write — so the graph tracks
@@ -2505,6 +2455,12 @@ impl XafsViewApp {
         }
         if multi_autobk_clicked {
             self.run_multi_autobk();
+        }
+        if theory_pick {
+            self.open_theory_file();
+        }
+        if theory_clear {
+            self.reduction.theory = None;
         }
     }
 
@@ -2881,6 +2837,11 @@ impl eframe::App for XafsViewApp {
             self.replot_graph();
         }
 
+        // The detached "Open data" loader: the in-app raw-scan browser + two-pane
+        // staging + reading-format chooser that "Open New file" / "Add data files…"
+        // open; its Autobk Start builds μ(E) for every staged file and reduces.
+        self.open_data_window(&ctx);
+
         // The detached "Feffit — Batch" window: the batch panel moved out of the
         // Feffit tab's right side. Its disk-write actions are app-owned.
         match self.feffit_batch_window(&ctx) {
@@ -2893,12 +2854,6 @@ impl eframe::App for XafsViewApp {
         // batch window renders regardless of the active tab).
         if self.tab == Tab::Feffit && self.feffit_batch.take_graph_dirty() {
             self.replot_feffit();
-        }
-
-        // The "Make μ(E) from files" staging picker: OK builds a group per
-        // staged file using the active import's column mapping + header-skip.
-        if let Some(BatchLoadAction::Load(paths)) = self.batch_load.ui(ui.ctx()) {
-            self.build_xmu_from_paths(paths);
         }
 
         // The LCF and PCA windows each overlay several groups onto one common

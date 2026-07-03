@@ -8,7 +8,6 @@
 mod analysis_ui;
 mod app;
 mod atoms_ui;
-mod batch_load;
 mod calc_ui;
 mod chi_io;
 mod clean_ui;
@@ -17,6 +16,7 @@ mod feffit_ui;
 mod fonts;
 mod import;
 mod mback_ui;
+mod open_data;
 mod plot;
 mod plot_data;
 mod plot_files;
