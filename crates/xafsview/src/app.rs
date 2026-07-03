@@ -1754,18 +1754,32 @@ impl XafsViewApp {
             self.plot.set_graph_x_label("k, q (Å⁻¹)");
             self.plot
                 .set_graph_y_label("kʷ·χ(k), χ(q)", siplot::YAxis::Left);
+            // Legend each focused curve with the group name (like the overlaid
+            // fits), keeping the k/q + data/fit qualifier to tell the four apart.
+            let (dk, mk, dq, mq) = match self.feffit_fit_group.as_deref() {
+                Some(n) => (
+                    format!("{n} data k"),
+                    format!("{n} fit k"),
+                    format!("{n} data q"),
+                    format!("{n} fit q"),
+                ),
+                None => (
+                    "data k".to_owned(),
+                    "model k".to_owned(),
+                    "data q".to_owned(),
+                    "model q".to_owned(),
+                ),
+            };
             if !kx.is_empty() {
-                self.plot
-                    .add_curve_with_legend(&kx, &kd, FIT_DATA, "data k");
+                self.plot.add_curve_with_legend(&kx, &kd, FIT_DATA, dk);
                 if has_model {
-                    self.plot
-                        .add_curve_with_legend(&kx, &km, FIT_MODEL, "model k");
+                    self.plot.add_curve_with_legend(&kx, &km, FIT_MODEL, mk);
                 }
             }
             if !qx.is_empty() {
-                self.plot.add_curve_with_legend(&qx, &qd, GREEN, "data q");
+                self.plot.add_curve_with_legend(&qx, &qd, GREEN, dq);
                 if has_model {
-                    self.plot.add_curve_with_legend(&qx, &qm, ORANGE, "model q");
+                    self.plot.add_curve_with_legend(&qx, &qm, ORANGE, mq);
                 }
             }
             return;
@@ -1774,13 +1788,19 @@ impl XafsViewApp {
         let (x, data_y, model_y, xlabel, ylabel) = p.series(space, part);
         self.plot.set_graph_x_label(xlabel);
         self.plot.set_graph_y_label(ylabel, siplot::YAxis::Left);
+        // Legend the focused fit with its group name (like the overlaid fits), so
+        // every trace is identified by file name — not a bare "data"/"model".
+        let (data_legend, model_legend) = match self.feffit_fit_group.as_deref() {
+            Some(n) => (format!("{n} data"), format!("{n} fit")),
+            None => ("data".to_owned(), "model".to_owned()),
+        };
         if !x.is_empty() {
             self.plot
-                .add_curve_with_legend(&x, &data_y, FIT_DATA, "data");
+                .add_curve_with_legend(&x, &data_y, FIT_DATA, data_legend);
             // "Only FT" mode has no model — draw the data alone.
             if has_model {
                 self.plot
-                    .add_curve_with_legend(&x, &model_y, FIT_MODEL, "model");
+                    .add_curve_with_legend(&x, &model_y, FIT_MODEL, model_legend);
             }
         }
     }
