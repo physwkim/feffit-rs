@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # siplot's print dialog -> `printers` crate #[link]s libcups on Linux, so
       # the xafsview binary needs libcups.so to link. -dev supplies the .so
