@@ -2,7 +2,7 @@
 //!
 //! Re-implements the feature set of the old LabVIEW `XAFSView` on top of the
 //! `feffit-rs` engines (pre-edge/normalize, AUTOBK, FEFFIT, LCF/PCA, FEFF8L/
-//! FEFF10) and `siplot` for plotting. This binary is the GUI shell; the data
+//! FEFF10) and `rsplot` for plotting. This binary is the GUI shell; the data
 //! model lives in the `xasdata` crate and the math in the other workspace crates.
 
 mod analysis_ui;
@@ -41,7 +41,7 @@ fn main() -> eframe::Result {
     let icon =
         eframe::icon_data::from_png_bytes(ICON_PNG).expect("bundled icon.png is a valid PNG");
 
-    // siplot paints through an egui-wgpu callback, so the wgpu renderer is
+    // rsplot paints through an egui-wgpu callback, so the wgpu renderer is
     // mandatory (the OpenGL backend has no RenderState to install into).
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,

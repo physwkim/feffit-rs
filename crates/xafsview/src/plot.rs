@@ -1,7 +1,7 @@
-//! Shared `siplot::Plot1D` construction for the GUI.
+//! Shared `rsplot::Plot1D` construction for the GUI.
 //!
 //! Every plot-bearing tab/window builds its plot through [`new_plot1d`] so they
-//! all get the same house data margins. siplot's `DataMargins` default to zero,
+//! all get the same house data margins. rsplot's `DataMargins` default to zero,
 //! which draws curves flush against the axis frame (a sample at the data maximum
 //! sits exactly on the top frame line and is visually clipped). A uniform margin
 //! on every side — matching matplotlib's `axes.margins` default — keeps the data
@@ -10,7 +10,7 @@
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use siplot::{CurveSpec, DataMargins, ItemHandle, Plot1D, PlotId, Roi, Symbol};
+use rsplot::{CurveSpec, DataMargins, ItemHandle, Plot1D, PlotId, Roi, Symbol};
 
 /// Fraction of the data range left blank on each side of the data extent, so
 /// samples at the extremes are lifted just off the axis frame without wasting
@@ -19,7 +19,7 @@ use siplot::{CurveSpec, DataMargins, ItemHandle, Plot1D, PlotId, Roi, Symbol};
 const DATA_MARGIN: f64 = 0.02;
 
 /// Build a [`Plot1D`] with the house data margins applied. All GUI plots are
-/// constructed through this so none can forget the margin — siplot defaults
+/// constructed through this so none can forget the margin — rsplot defaults
 /// `DataMargins` to zero (data flush against the frame).
 pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
     let mut plot = Plot1D::new(render_state, id);
@@ -31,9 +31,9 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
     });
     // Disable wheel/scroll zoom on every GUI plot: it fought the macOS trackpad
     // momentum guard repeatedly, so zoom is done through box-drag, the toolbar
-    // Home/Zoom buttons, and the context menu instead. (siplot 0.4.2 `scroll_zoom`.)
+    // Home/Zoom buttons, and the context menu instead. (rsplot 0.5.0 `scroll_zoom`.)
     plot.plot_mut().scroll_zoom = false;
-    // Coordinate-readout toggle state. siplot fuses the crosshair guide lines and
+    // Coordinate-readout toggle state. rsplot fuses the crosshair guide lines and
     // the coordinate readout behind this single `graph_cursor` flag (drawing both
     // or neither); xafsview instead draws the cursor overlay itself and splits the
     // two controls — `graph_cursor` now backs only the toolbar's "Show cursor
@@ -51,7 +51,7 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
 
 /// Apply a self-consistent colour scheme to `plot`: the chrome + data-area
 /// background, the axis/frame foreground, and the grid, chosen so curves and
-/// labels read clearly *independent of the egui panel theme* (siplot otherwise
+/// labels read clearly *independent of the egui panel theme* (rsplot otherwise
 /// derives the axis colour from `ui.visuals()`, which would render light axes
 /// on a light canvas under a dark UI theme). `light = false` is the cohesive
 /// dark canvas used as the house default for every plot; `true` is the white
@@ -59,10 +59,10 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
 pub fn set_theme(plot: &mut Plot1D, light: bool) {
     // `(chrome, data, fg, grid)`: the surround behind the axes, the data area
     // itself, the axis/frame/text colour, and the grid lines. `grid` is passed
-    // *translucent* on purpose: siplot applies an override grid colour at full
+    // *translucent* on purpose: rsplot applies an override grid colour at full
     // opacity (chrome.rs `with_overrides`), so a solid grey would draw crisp
     // lines that fight the curve — a low-alpha tint composites to a faint grid
-    // over either canvas, matching siplot's own `with_alpha(text, 28)` default.
+    // over either canvas, matching rsplot's own `with_alpha(text, 28)` default.
     let (chrome, data, fg, grid) = if light {
         (
             egui::Color32::WHITE,
@@ -104,7 +104,7 @@ pub const PINK: egui::Color32 = egui::Color32::from_rgb(0xf5, 0x8f, 0xd6);
 pub const PALETTE: [egui::Color32; 8] = [BLUE, ORANGE, GREEN, RED, PURPLE, BROWN, PINK, CYAN];
 
 /// Colour of the draggable FT-window band ([`set_window`]): a translucent amber
-/// that reads against the blue χ curves. siplot fills the band at half this
+/// that reads against the blue χ curves. rsplot fills the band at half this
 /// alpha (`color.a()/2`) and outlines the edges at full alpha, so the edges stay
 /// clearly grabbable while the interior never hides the data underneath.
 const WINDOW_COLOR: egui::Color32 = egui::Color32::from_rgba_premultiplied(0xcc, 0x8c, 0x30, 0xcc);
@@ -136,7 +136,7 @@ pub struct AxisWindow {
 }
 
 /// One legend-bearing curve's samples, kept so a graph click can hit-test the
-/// plotted data (siplot exposes no queryable copy of a curve's points). Recorded
+/// plotted data (rsplot exposes no queryable copy of a curve's points). Recorded
 /// in lockstep with [`Plot::legend`] and cleared with it.
 struct PickCurve {
     /// The curve's legend label (shown in the click readout).
@@ -162,7 +162,7 @@ struct Pick {
 
 /// A [`Plot1D`] bundled with the legend entries for the curves currently on it.
 ///
-/// siplot exposes no per-item colour, and its own `show_legend` draws a
+/// rsplot exposes no per-item colour, and its own `show_legend` draws a
 /// visibility-toggle control on every row that the GUI does not want; so each
 /// curve's `(label, colour, emphasized)` is tracked here as it is added and
 /// [`show`] draws a plain in-axes legend from it. Curves added through
@@ -182,10 +182,10 @@ pub struct Plot {
     legend_frac: Option<egui::Pos2>,
     /// Whether the crosshair guide lines are drawn under the pointer. Toggled by
     /// the toolbar's own crosshair button ([`crosshair_button`]); independent of
-    /// the coordinate readout, which is gated by siplot's `graph_cursor` flag.
+    /// the coordinate readout, which is gated by rsplot's `graph_cursor` flag.
     /// On by default. See [`show`] and [`draw_cursor_overlay`].
     crosshair: bool,
-    /// The draggable FT-window band, a siplot `VRange` ROI: `Some(index)` once
+    /// The draggable FT-window band, a rsplot `VRange` ROI: `Some(index)` once
     /// added. Managed entirely by [`set_window`]/[`show`] — the band is shown
     /// only on frames where [`set_window`] was called and removed otherwise, so
     /// it never leaks onto a graph (or a tab sharing this plot) that has no
@@ -203,7 +203,7 @@ pub struct Plot {
     window_dragged: Option<AxisWindow>,
     /// True while a band-edge drag is in progress (the ROI has moved under the
     /// pointer but the button is still down). [`set_window`] leaves the ROI to
-    /// siplot's interaction while this holds — re-syncing to the caller's
+    /// rsplot's interaction while this holds — re-syncing to the caller's
     /// still-old bounds would snap the band back and fight the drag — and
     /// [`show`] defers the [`window_dragged`] commit until the button is
     /// released, so the reduction recomputes once per drag, not once per frame.
@@ -215,7 +215,7 @@ pub struct Plot {
     legend_clicked: Option<String>,
     /// Every legend-bearing curve's samples, recorded alongside
     /// [`legend`](Self::legend) so a graph *click* can hit-test the plotted data
-    /// (siplot keeps no queryable copy of a curve's samples). Cleared with the
+    /// (rsplot keeps no queryable copy of a curve's samples). Cleared with the
     /// legend; see [`show`]'s click handler and [`last_pick`](Self::last_pick).
     pick_curves: Vec<PickCurve>,
     /// The nearest data point to the user's last left-click on the data area. Set
@@ -276,7 +276,7 @@ impl Plot {
 
     /// Record a curve's samples for click hit-testing. Kept in lockstep with the
     /// [`legend`](Self::legend) push so [`show`]'s click handler can find the
-    /// nearest point without siplot exposing the drawn data.
+    /// nearest point without rsplot exposing the drawn data.
     fn record_pick_curve(&mut self, label: &str, color: egui::Color32, x: &[f64], y: &[f64]) {
         let points: Vec<(f64, f64)> = x.iter().copied().zip(y.iter().copied()).collect();
         self.pick_curves.push(PickCurve {
@@ -339,12 +339,12 @@ impl Plot {
 /// Draw `plot`'s standard toolbar plus the house extras on one row, then leave
 /// the plot itself to a following [`show`]. Every plot-bearing tab/window draws
 /// its toolbar through this (instead of `plot.show_toolbar` directly) so they all
-/// expose the same controls beyond siplot's built-ins:
+/// expose the same controls beyond rsplot's built-ins:
 ///
-/// - a [`crosshair_button`] that toggles the crosshair guide lines (siplot's own
+/// - a [`crosshair_button`] that toggles the crosshair guide lines (rsplot's own
 ///   cursor button is repurposed as the coordinate-readout toggle, see [`show`]);
 /// - a "Symbol" menu that toggles data-point markers (size + shape) on every
-///   curve, which the bare toolbar omits. siplot's ready-made `symbol_tool_button`
+///   curve, which the bare toolbar omits. rsplot's ready-made `symbol_tool_button`
 ///   is a `Plot2D` (image) method, so for the curve `Plot1D` the same control is
 ///   built here on top of `PlotWidget::set_all_symbols` / `set_all_symbol_sizes`.
 pub fn toolbar(plot: &mut Plot, ui: &mut egui::Ui) {
@@ -365,7 +365,7 @@ pub fn toolbar(plot: &mut Plot, ui: &mut egui::Ui) {
 ///
 /// The ROI is only re-synced when `window` differs from the value last pushed
 /// *and* no edge-drag is in progress — a typed parameter, a graph switch, an
-/// Autobk Start — so an in-progress edge drag is left to siplot's own
+/// Autobk Start — so an in-progress edge drag is left to rsplot's own
 /// interaction and not overwritten mid-drag (the caller's bounds stay at the
 /// pre-drag value until the drag commits on release).
 pub fn set_window(plot: &mut Plot, window: AxisWindow) {
@@ -418,18 +418,18 @@ pub fn take_legend_click(plot: &mut Plot) -> Option<String> {
 /// area (matplotlib-style), mapping each curve's color/symbol to the name set
 /// with `set_item_legend`. Every plot-bearing tab/window draws through this
 /// (instead of `toolbar` + `plot.show` by hand) so they all get the same toolbar
-/// *and* a visible legend — siplot draws no in-axes legend, so without this call
+/// *and* a visible legend — rsplot draws no in-axes legend, so without this call
 /// the curve names never appear. The legend floats over the canvas (an egui
 /// `Area`) instead of taking a separate column, so it no longer steals width.
 pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     toolbar(plot, ui);
 
-    // siplot fuses the crosshair guide lines and the coordinate readout behind a
+    // rsplot fuses the crosshair guide lines and the coordinate readout behind a
     // single `graph_cursor` flag, drawing both or neither. The GUI splits them so
     // each has its own toolbar toggle: `graph_cursor` (the toolbar's "Show cursor
     // coordinates" button) gates the *readout*, and `Plot::crosshair` (our own
     // toolbar button) gates the *lines*. xafsview draws the overlay itself: read
-    // the readout toggle off the flag, suppress siplot's own (fused) cursor for
+    // the readout toggle off the flag, suppress rsplot's own (fused) cursor for
     // this frame's render, then restore the flag so the toolbar button keeps its
     // state. `set_graph_cursor` only flips a bool, so this is cheap.
     let readout_on = plot.inner.graph_cursor();
@@ -437,18 +437,18 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     let resp = plot.inner.show(ui);
     plot.inner.set_graph_cursor(readout_on);
 
-    // FT-window band. siplot drives the VRange edge drag inside the inner `show`
+    // FT-window band. rsplot drives the VRange edge drag inside the inner `show`
     // above, mutating the ROI in place; detect that by comparing the post-show
     // bounds against the value we last pushed (`window_target`). Then keep the
     // band only if it was requested this frame, else remove it so it never leaks
-    // onto a windowless graph or another tab sharing this plot. Drain siplot's
+    // onto a windowless graph or another tab sharing this plot. Drain rsplot's
     // event buffer (RoiAdded/RoiChanged accumulate per frame) since nothing here
     // consumes it — we read state, not events.
     plot.inner.drain_events();
     // A user edge-drag moves the ROI away from the bounds we last pushed. Track
     // the live position each frame so the band follows the cursor, but do NOT
     // commit yet: recomputing the reduction on every mid-drag frame is what made
-    // the FT window sluggish. siplot exposes no ROI-drag-finished event, so the
+    // the FT window sluggish. rsplot exposes no ROI-drag-finished event, so the
     // drag-end signal is egui's pointer release.
     if let Some(idx) = plot.window_roi
         && let Some(managed) = plot.inner.rois().get(idx)
@@ -499,7 +499,7 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
 
     // Left-click on the data area pins the nearest curve's name and (x, y) as a
     // bottom readout (a *separate* area from the pointer-following cursor overlay,
-    // per the request). The hit-test runs in pixel space via siplot's
+    // per the request). The hit-test runs in pixel space via rsplot's
     // `nearest_point`, so "nearest" matches what the eye sees regardless of how
     // the two axes' data scales differ. A click that lands near no curve clears it.
     if resp.response.clicked()
@@ -521,7 +521,7 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     // Float the legend over the canvas, draggable from anywhere on it (no
     // handle): a movable foreground `Area` holds the legend, and egui's hit test
     // routes a *drag* to the movable Area while a *click* still reaches the rows
-    // beneath. siplot's rows sense click only, so `hit_test` reports click→row,
+    // beneath. rsplot's rows sense click only, so `hit_test` reports click→row,
     // drag→Area; the user grabs the labels themselves to move it. `constrain_to`
     // keeps it within the axes.
     //
@@ -595,7 +595,7 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
 
 /// Draw the plain in-axes legend: one row per entry — a short line swatch in the
 /// curve's colour, then its label. No fill, border, or visibility toggle (unlike
-/// siplot's `show_legend`, which the GUI deliberately bypasses); just the colour
+/// rsplot's `show_legend`, which the GUI deliberately bypasses); just the colour
 /// key over the transparent overlay. Rows sense a *click* (returned as the
 /// clicked label) so a caller can highlight that curve, but not a *drag*, so a
 /// drag anywhere on the legend still moves the enclosing `Area`. An emphasized
@@ -676,7 +676,7 @@ fn draw_legend(
 /// `pos`: the `(x, y)` coordinate readout in a small box near the pointer when
 /// `readout` is on, and thin guide lines through the pointer spanning the data
 /// area when `crosshair` is on. xafsview draws this itself rather than using
-/// siplot's `graph_cursor`, which fuses the lines and the readout behind one
+/// rsplot's `graph_cursor`, which fuses the lines and the readout behind one
 /// flag; splitting it lets each get its own toolbar toggle (see [`show`]).
 ///
 /// `data` is the pointer's data-space coordinate (`Transform::pixel_to_data`);
@@ -684,7 +684,7 @@ fn draw_legend(
 /// `area`. Colours contrast with the data-area background `data_bg`, like the
 /// legend, so they read on either the light or dark canvas. The readout box is
 /// placed lower-right of the cursor and flips to stay inside `area`, matching
-/// siplot's own crosshair readout; values use siplot's `%.7g` number format so
+/// rsplot's own crosshair readout; values use rsplot's `%.7g` number format so
 /// the readout matches the axis ticks.
 fn draw_cursor_overlay(
     ui: &egui::Ui,
@@ -715,8 +715,8 @@ fn draw_cursor_overlay(
     if readout {
         let label = format!(
             "{}, {}",
-            siplot::format_value(data.0),
-            siplot::format_value(data.1)
+            rsplot::format_value(data.0),
+            rsplot::format_value(data.1)
         );
         let font = egui::FontId::proportional(11.0);
         let galley = painter.layout_no_wrap(label, font, fg);
@@ -747,20 +747,20 @@ fn draw_cursor_overlay(
 
 /// The vertex nearest to `cursor` (screen pixels) across every curve in `curves`,
 /// within `threshold_px`, or `None` if no curve has a vertex that close. Each
-/// curve is hit-tested in pixel space through `transform` (siplot's
-/// [`nearest_point`](siplot::nearest_point)), so "nearest" is visual, not skewed
+/// curve is hit-tested in pixel space through `transform` (rsplot's
+/// [`nearest_point`](rsplot::nearest_point)), so "nearest" is visual, not skewed
 /// by the two axes' differing data scales; the global minimum across curves wins
 /// (ties break to the earliest curve). Factored out of [`show`] so the
 /// multi-curve reduction is unit-testable without an egui frame.
 fn nearest_pick(
     curves: &[PickCurve],
-    transform: &siplot::Transform,
+    transform: &rsplot::Transform,
     cursor: egui::Pos2,
     threshold_px: f32,
 ) -> Option<Pick> {
     let mut best: Option<(f32, Pick)> = None;
     for c in curves {
-        if let Some(p) = siplot::nearest_point(&c.points, transform, cursor, threshold_px)
+        if let Some(p) = rsplot::nearest_point(&c.points, transform, cursor, threshold_px)
             && best.as_ref().is_none_or(|(d, _)| p.dist_px < *d)
         {
             best = Some((
@@ -793,8 +793,8 @@ fn draw_pick_readout(ui: &egui::Ui, area: egui::Rect, pick: &Pick, data_bg: egui
     let text = format!(
         "{}   x = {}, y = {}",
         pick.label,
-        siplot::format_value(pick.x),
-        siplot::format_value(pick.y)
+        rsplot::format_value(pick.x),
+        rsplot::format_value(pick.y)
     );
     let font = egui::FontId::proportional(11.0);
     let galley = painter.layout_no_wrap(text, font, fg);
@@ -829,12 +829,12 @@ fn draw_pick_readout(ui: &egui::Ui, area: egui::Rect, pick: &Pick, data_bg: egui
 }
 
 /// A toolbar toggle button for the crosshair guide lines drawn by
-/// [`draw_cursor_overlay`]. siplot's built-in cursor button (a
+/// [`draw_cursor_overlay`]. rsplot's built-in cursor button (a
 /// crosshair-with-circle icon) is repurposed as the coordinate-*readout* toggle,
-/// so this separate button owns the *lines*. It is styled to match siplot's own
+/// so this separate button owns the *lines*. It is styled to match rsplot's own
 /// icon buttons (same 28×24 footprint, hover/selected fill + stroke, 1.6px icon
 /// stroke inset by 5px) and draws a plain crosshair — no circle — to read
-/// distinctly from siplot's cursor icon. `on` is [`Plot::crosshair`].
+/// distinctly from rsplot's cursor icon. `on` is [`Plot::crosshair`].
 fn crosshair_button(on: &mut bool, ui: &mut egui::Ui) {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 24.0), egui::Sense::click());
     let response = response.on_hover_text("Toggle crosshair");
@@ -874,7 +874,7 @@ fn crosshair_button(on: &mut bool, ui: &mut egui::Ui) {
 }
 
 /// A "Symbol" menu that toggles data-point markers (shape + size) on every curve
-/// of `plot`, mirroring siplot's `Plot2D::symbol_tool_button` for the curve
+/// of `plot`, mirroring rsplot's `Plot2D::symbol_tool_button` for the curve
 /// widget. The chosen size is remembered in egui temp memory, keyed by plot id.
 fn symbol_menu(plot: &mut Plot1D, ui: &mut egui::Ui) {
     let size_id = egui::Id::new(plot.backend().plot().id).with("symbol_menu_size");
@@ -912,8 +912,8 @@ mod tests {
 
     /// Data `[0,10] × [0,10]` mapped onto a 100×100 px area, so `data_to_pixel`
     /// gives round pixel coordinates for the fixtures below.
-    fn transform_10x10() -> siplot::Transform {
-        siplot::Transform::new(
+    fn transform_10x10() -> rsplot::Transform {
+        rsplot::Transform::new(
             0.0,
             10.0,
             0.0,

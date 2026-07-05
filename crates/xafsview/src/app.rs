@@ -1,5 +1,5 @@
 //! The application shell: window layout, the tab bar, the menu bar, and the
-//! shared `siplot` plot. Individual tabs fill in their panels in later phases;
+//! shared `rsplot` plot. Individual tabs fill in their panels in later phases;
 //! Phase 0 wires the skeleton and makes the **Folders** tab functional.
 
 use eframe::egui;
@@ -71,7 +71,7 @@ impl Tab {
 }
 
 /// The eframe application: the data [`Session`], the active tab, and the shared
-/// plot (one `siplot::Plot1D` reused across the plot-bearing tabs).
+/// plot (one `rsplot::Plot1D` reused across the plot-bearing tabs).
 pub struct XafsViewApp {
     session: Session,
     tab: Tab,
@@ -164,7 +164,7 @@ pub struct XafsViewApp {
     atoms_tab: AtomsTab,
     /// The Feff tab state (edit feff.inp / run FEFF).
     feff_tab: FeffTab,
-    /// The 3D Plot Sites cluster viewer (its own `siplot` scene).
+    /// The 3D Plot Sites cluster viewer (its own `rsplot` scene).
     plot_sites: PlotSitesWindow,
     /// The shared `feff.inp` text, written by Atoms and edited/run by Feff.
     feff_inp: String,
@@ -190,7 +190,7 @@ impl XafsViewApp {
     /// Build the app. Requires the wgpu render state (see [`main`](crate::main)).
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Install the glyph-fallback font before anything draws, so both the egui
-        // UI and siplot axis labels can render the superscript/subscript math
+        // UI and rsplot axis labels can render the superscript/subscript math
         // glyphs the default font lacks (Å⁻¹, kʷ, χ²ᵣ).
         crate::fonts::install_fallback(&cc.egui_ctx);
 
@@ -206,7 +206,7 @@ impl XafsViewApp {
         let mut plot = crate::plot::Plot::new(render_state, 0);
         plot.set_graph_title("XAFSView");
         plot.set_graph_x_label("Energy (eV)");
-        plot.set_graph_y_label("μ(E)", siplot::YAxis::Left);
+        plot.set_graph_y_label("μ(E)", rsplot::YAxis::Left);
 
         // A placeholder curve so the GPU plot path is exercised before any data
         // is loaded; replaced by the active group's spectrum from Phase 1 on.
@@ -1175,7 +1175,7 @@ impl XafsViewApp {
         match graph {
             GraphType::MuBkg => {
                 self.plot.set_graph_x_label("Energy (eV)");
-                self.plot.set_graph_y_label("μ(E)", siplot::YAxis::Left);
+                self.plot.set_graph_y_label("μ(E)", rsplot::YAxis::Left);
                 if !g.energy.is_empty() {
                     // Legend the μ(E) trace with the data's own name (the y-axis
                     // already says it is μ(E)), so the AUTOBK view identifies which
@@ -1190,7 +1190,7 @@ impl XafsViewApp {
             }
             GraphType::KChi => {
                 self.plot.set_graph_x_label("k (Å⁻¹)");
-                self.plot.set_graph_y_label("kʷ·χ(k)", siplot::YAxis::Left);
+                self.plot.set_graph_y_label("kʷ·χ(k)", rsplot::YAxis::Left);
                 if let (Some(k), Some(chi)) = (&g.k, &g.chi) {
                     let y: Vec<f64> = k
                         .iter()
@@ -1202,7 +1202,7 @@ impl XafsViewApp {
             }
             GraphType::ChiR => {
                 self.plot.set_graph_x_label("R (Å)");
-                self.plot.set_graph_y_label("|χ(R)|", siplot::YAxis::Left);
+                self.plot.set_graph_y_label("|χ(R)|", rsplot::YAxis::Left);
                 if let (Some(r), Some(mag)) = (&g.r, &g.chir_mag) {
                     self.plot.add_curve_with_legend(r, mag, BLUE, &g.label);
                 }
@@ -1213,7 +1213,7 @@ impl XafsViewApp {
                 // kʷ·χ(k), so the R-window's effect reads directly against the
                 // unfiltered signal on the shared k≈q axis.
                 self.plot.set_graph_x_label("q (Å⁻¹)");
-                self.plot.set_graph_y_label("kʷ·χ(q)", siplot::YAxis::Left);
+                self.plot.set_graph_y_label("kʷ·χ(q)", rsplot::YAxis::Left);
                 if let (Some(k), Some(chi)) = (&g.k, &g.chi) {
                     let y: Vec<f64> = k
                         .iter()
@@ -1232,7 +1232,7 @@ impl XafsViewApp {
                 // Works on just-loaded data — no AUTOBK needed.
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot
-                    .set_graph_y_label("dμ/dE  ·  d²μ/dE²", siplot::YAxis::Left);
+                    .set_graph_y_label("dμ/dE  ·  d²μ/dE²", rsplot::YAxis::Left);
                 if !g.energy.is_empty() && !g.mu.is_empty() {
                     let d1 = deriv(&g.mu, &g.energy);
                     let d2 = deriv(&d1, &g.energy);
@@ -1246,7 +1246,7 @@ impl XafsViewApp {
                 // BKG(E)': first derivative of the background μ0(E).
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot
-                    .set_graph_y_label("d(BKG)/dE", siplot::YAxis::Left);
+                    .set_graph_y_label("d(BKG)/dE", rsplot::YAxis::Left);
                 if let Some(bkg) = &g.bkg {
                     let d1 = deriv(bkg, &g.energy);
                     self.plot
@@ -1259,7 +1259,7 @@ impl XafsViewApp {
                 // file's quantity).
                 self.plot.set_graph_x_label("k (Å⁻¹)");
                 self.plot
-                    .set_graph_y_label("d(BKG)/dk", siplot::YAxis::Left);
+                    .set_graph_y_label("d(BKG)/dk", rsplot::YAxis::Left);
                 if let (Some(k), Some(chi), Some(step)) = (&g.k, &g.chi, g.edge_step) {
                     let bkg_k: Vec<f64> = chi.iter().map(|&c| -step * c).collect();
                     let d1 = deriv(&bkg_k, k);
@@ -1271,7 +1271,7 @@ impl XafsViewApp {
                 // overlaid (compare where the spline tracks the edge).
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot
-                    .set_graph_y_label("dμ/dE  ·  d(BKG)/dE", siplot::YAxis::Left);
+                    .set_graph_y_label("dμ/dE  ·  d(BKG)/dE", rsplot::YAxis::Left);
                 if !g.energy.is_empty() && !g.mu.is_empty() {
                     let dmu = deriv(&g.mu, &g.energy);
                     self.plot
@@ -1287,7 +1287,7 @@ impl XafsViewApp {
                 // BKG(E)'': second derivative of the background μ0(E).
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot
-                    .set_graph_y_label("d²(BKG)/dE²", siplot::YAxis::Left);
+                    .set_graph_y_label("d²(BKG)/dE²", rsplot::YAxis::Left);
                 if let Some(bkg) = &g.bkg {
                     let d1 = deriv(bkg, &g.energy);
                     let d2 = deriv(&d1, &g.energy);
@@ -1298,7 +1298,7 @@ impl XafsViewApp {
             GraphType::Norm => {
                 self.plot.set_graph_x_label("Energy (eV)");
                 self.plot
-                    .set_graph_y_label("normalized μ(E)", siplot::YAxis::Left);
+                    .set_graph_y_label("normalized μ(E)", rsplot::YAxis::Left);
                 // Athena/XAFSView convention: the "normalized" view shows the
                 // *flattened* μ (post-edge curvature removed, lifted to ~1),
                 // not the plain edge-step normalization (which keeps the
@@ -1753,7 +1753,7 @@ impl XafsViewApp {
             let ((kx, kd, km), (qx, qd, qm)) = p.kq_series(part);
             self.plot.set_graph_x_label("k, q (Å⁻¹)");
             self.plot
-                .set_graph_y_label("kʷ·χ(k), χ(q)", siplot::YAxis::Left);
+                .set_graph_y_label("kʷ·χ(k), χ(q)", rsplot::YAxis::Left);
             // Legend each focused curve with the group name (like the overlaid
             // fits), keeping the k/q + data/fit qualifier to tell the four apart.
             let (dk, mk, dq, mq) = match self.feffit_fit_group.as_deref() {
@@ -1787,7 +1787,7 @@ impl XafsViewApp {
 
         let (x, data_y, model_y, xlabel, ylabel) = p.series(space, part);
         self.plot.set_graph_x_label(xlabel);
-        self.plot.set_graph_y_label(ylabel, siplot::YAxis::Left);
+        self.plot.set_graph_y_label(ylabel, rsplot::YAxis::Left);
         // Legend the focused fit with its group name (like the overlaid fits), so
         // every trace is identified by file name — not a bare "data"/"model".
         let (data_legend, model_legend) = match self.feffit_fit_group.as_deref() {

@@ -11,7 +11,7 @@
 //! Autobk / Feffit tabs keep their own full-width graph). It owns its own
 //! [`crate::plot::Plot`] and rebuilds it via [`rebuild`](PlotDataWindow::rebuild)
 //! whenever the loaded files or a control change. Save / zoom / legend come from
-//! the siplot toolbar; the data work (averaging, peak finding) is the headless
+//! the rsplot toolbar; the data work (averaging, peak finding) is the headless
 //! [`xasdata`] code. A Feffit fit can also be sent here for a quick
 //! data-vs-model look ([`set_fit_overlay`]).
 
@@ -1049,7 +1049,7 @@ impl PlotDataWindow {
         crate::plot::set_theme(&mut self.plot, !dark);
         self.plot.set_graph_x_label(xlabel.as_str());
         self.plot
-            .set_graph_y_label(ylabel.as_str(), siplot::YAxis::Left);
+            .set_graph_y_label(ylabel.as_str(), rsplot::YAxis::Left);
 
         // A sent Feffit fit, drawn under the files (disjoint-field borrow: reads
         // `self.overlay`, writes `self.plot`).

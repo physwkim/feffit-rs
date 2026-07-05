@@ -14,7 +14,7 @@ use egui::Color32;
 use feffit::xasdata::{
     PcaModel, XasGroup, groups2matrix, interp_cubic, lincombo_fit, pca_fit, pca_train,
 };
-use siplot::YAxis;
+use rsplot::YAxis;
 
 use crate::plot::{BLUE, CYAN, GREEN, ORANGE, PURPLE, RED};
 

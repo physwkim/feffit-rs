@@ -7,7 +7,7 @@
 //! [`feffrun`] (the external FEFF8.5L pipeline by default — its `feff8l_*`
 //! binaries ship bundled under `assets/feff8l/<platform>/`; the in-process FEFF10
 //! backend is kept but disabled in the UI, being broken on Linux/Windows
-//! upstream); the 3D scene is `siplot`'s [`SceneWidget`].
+//! upstream); the 3D scene is `rsplot`'s [`SceneWidget`].
 //!
 //! **Scope note.** The Atoms tab does *not* apply space-group symmetry — enter
 //! the full unit cell (every atom), not the asymmetric unit. See [`feffinp`]'s
@@ -20,7 +20,7 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use feffit::feffdat::FeffDatFile;
 use feffit::feffinp::{Crystal, Edge, FeffInp, Lattice, Site};
-use siplot::{Colormap, ColormapName, PointMarker, Scatter3D, Scene3dGeometry, SceneWidget, Vec3};
+use rsplot::{Colormap, ColormapName, PointMarker, Scatter3D, Scene3dGeometry, SceneWidget, Vec3};
 
 use crate::plot::{GREEN, RED};
 
@@ -765,7 +765,7 @@ impl PlotSitesWindow {
                     if ui.button("Reset view").clicked() {
                         self.scene.reset_camera();
                     }
-                    siplot::viewpoint_menu(ui, &mut self.scene);
+                    rsplot::viewpoint_menu(ui, &mut self.scene);
                     ui.separator();
                     if let Some(e) = &self.error {
                         ui.colored_label(RED, e);

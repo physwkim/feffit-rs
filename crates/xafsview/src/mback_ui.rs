@@ -11,7 +11,7 @@
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use feffit::xasdata::{Edge, MbackNorm, MbackNormParams, XasGroup, mback_norm};
-use siplot::YAxis;
+use rsplot::YAxis;
 use xraydb::XrayDb;
 
 use crate::plot::{BLUE, ORANGE, RED};

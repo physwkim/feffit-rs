@@ -9,7 +9,7 @@
 //!   chemical formula ([`XrayDb::material_mu`]).
 //!
 //! These windows are pure read-outs (no plot, no session mutation), so they take
-//! no [`siplot`] handle.
+//! no [`rsplot`] handle.
 
 use eframe::egui;
 use xraydb::{CrossSectionKind, XrayDb};
