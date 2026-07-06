@@ -59,6 +59,15 @@ impl TimeResolvedWindow {
 
     /// The window contents: pick/clear controls, the time table, and save/exit.
     fn body(&mut self, ui: &mut egui::Ui) {
+        // Honest notice while [`extract_measured_time`] is a stub: without the
+        // header parser every row's times show "—", which otherwise reads as a
+        // silent failure.
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            "⚠ Timestamp parsing is not implemented yet (the beamline header \
+             format is unconfirmed) — times below show \"—\".",
+        );
+        ui.separator();
         ui.horizontal(|ui| {
             if ui
                 .button("Pick files…")
