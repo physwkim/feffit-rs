@@ -5,6 +5,33 @@ here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/
 the release version tracks the `xafsview` binary. The `feffit` library crate is
 versioned independently.
 
+## [0.1.5] - 2026-07-06
+
+### Changed
+
+- Plotting migrated from `siplot` to **`rsplot` 0.5.0** (the renamed successor;
+  identical API and pins).
+- **Batch operations run on a background job** with a spinner + `done/total`
+  progress in the status strip — Multiple AUTOBK, batch μ(E) (Open data →
+  Autobk Start), Feffit Run, and the Feffit batch "Run all" no longer freeze
+  the UI. One job at a time; results apply on the main thread when done, and
+  the Feffit editor stays usable while a fit runs.
+- **Session log**: the status strip keeps only the latest line, but every
+  message now also lands in a cumulative Log window (button on the strip, with
+  an error-count badge). Batch failures log each file's reason instead of a
+  bare counter.
+- Feffit paths are a selectable list (enable box, label, reff per row) instead
+  of the one-at-a-time "Path index" spinner.
+- Feffit results show a **stale badge** when any fit input (paths, variables,
+  transform, functions, mode) changed since the shown fit.
+- Clearer action labels: Atoms "Execute" → **Build feff.inp**, Feff "Execute" →
+  **Run FEFF**, Feffit "Graph type" → **Component**, batch "Show all fits on
+  the graph" → **Show all fits**.
+- Every detached window carries the standard inner margin (content no longer
+  hugs the OS-window edges).
+- The Extract-XAS-measured-time window states up front that timestamp parsing
+  is not implemented yet (times show "—").
+
 ## [0.1.4] - 2026-07-03
 
 ### Changed
@@ -103,6 +130,7 @@ Earlier releases predate this changelog; see the GitHub release notes.
 
 See the GitHub release notes.
 
+[0.1.5]: https://github.com/physwkim/feffit-rs/compare/0.1.4...0.1.5
 [0.1.4]: https://github.com/physwkim/feffit-rs/compare/0.1.3...0.1.4
 [0.1.3]: https://github.com/physwkim/feffit-rs/compare/0.1.2...0.1.3
 [0.1.2]: https://github.com/physwkim/feffit-rs/compare/0.1.1...0.1.2
