@@ -1551,9 +1551,12 @@ impl FeffitUi {
             });
         });
 
-        // --- Paths (a "Path index" selector + the chosen path's specs) ----
-        // The original shows one path's parameter block at a time, indexed by a
-        // "Path index" spinner; `selected_path` drives that selection.
+        // --- Paths (path list + the selected path's specs) -----------------
+        // The original navigates paths with a "Path index" spinner showing one
+        // block at a time; a list replaces it so every loaded path — its enable
+        // state, label, and reff — is visible at once, and a click selects the
+        // path whose parameter block shows below. `selected_path` still drives
+        // the selection (and the auto-named `<base><index>` locals).
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.strong("Paths");
@@ -1569,17 +1572,37 @@ impl FeffitUi {
                     self.selected_path = n - 1;
                 }
                 let mut remove_path = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("feffit_path_list")
+                    .max_height(132.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for i in 0..n {
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut self.paths[i].enabled, "")
+                                    .on_hover_text("include this path in the fit");
+                                let selected = i == self.selected_path;
+                                let text = format!(
+                                    "{}  (reff={:.3})",
+                                    self.paths[i].label, self.paths[i].reff
+                                );
+                                if ui.selectable_label(selected, text).clicked() {
+                                    self.selected_path = i;
+                                }
+                            });
+                        }
+                    });
                 ui.horizontal(|ui| {
-                    ui.label("Path index");
-                    ui.add(egui::DragValue::new(&mut self.selected_path).range(0..=n - 1));
                     let idx = self.selected_path;
-                    ui.checkbox(&mut self.paths[idx].enabled, "enable");
-                    if crate::widgets::delete_box(ui).clicked() {
+                    if crate::widgets::delete_box(ui)
+                        .on_hover_text("remove the selected path")
+                        .clicked()
+                    {
                         remove_path = Some(idx);
                     }
                     if ui
                         .button("Init")
-                        .on_hover_text("reset this path's parameters to their defaults")
+                        .on_hover_text("reset the selected path's parameters to their defaults")
                         .clicked()
                     {
                         self.paths[idx].reset_specs();
