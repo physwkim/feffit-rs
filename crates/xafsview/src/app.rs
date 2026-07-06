@@ -172,8 +172,9 @@ pub struct XafsViewApp {
     clean_undo: Vec<XasGroup>,
     /// The tab shown on the previous frame, to detect tab switches for replot.
     last_tab: Tab,
-    /// Status line shown at the bottom of the window.
-    status: String,
+    /// The status strip's line plus the cumulative session message log — every
+    /// user-visible outcome funnels through it (see [`crate::status_log`]).
+    status: crate::status_log::StatusLog,
     /// Working value for the Settings "Font size" slider (the egui zoom factor).
     /// The slider edits this freely; the live zoom is applied only when the drag
     /// ends, so the UI doesn't reflow under the cursor on every drag tick.
@@ -267,7 +268,7 @@ impl XafsViewApp {
             feff_inp: String::new(),
             clean_undo: Vec::new(),
             last_tab: Tab::Folders,
-            status: "Ready.".to_owned(),
+            status: Default::default(),
             ui_scale: DEFAULT_UI_SCALE,
         }
     }
@@ -356,7 +357,7 @@ impl XafsViewApp {
             match rep {
                 Some(path) => match ColumnFile::from_path(&path) {
                     Ok(cf) => self.import = Some(ImportState::new(cf)),
-                    Err(e) => self.status = format!("Open failed: {e}"),
+                    Err(e) => self.status.error(format!("Open failed: {e}")),
                 },
                 None => self.import = None,
             }
@@ -406,9 +407,10 @@ impl XafsViewApp {
             Ok((k, chi)) => {
                 let n = k.len();
                 self.reduction.theory = Some(TheoryStd { path, k, chi });
-                self.status = format!("Loaded theory χ(k) standard: {n} points");
+                self.status
+                    .info(format!("Loaded theory χ(k) standard: {n} points"));
             }
-            Err(e) => self.status = format!("Theory open failed: {e}"),
+            Err(e) => self.status.error(format!("Theory open failed: {e}")),
         }
     }
 
@@ -453,7 +455,7 @@ impl XafsViewApp {
                 g.filename = input_path;
                 g.source_header = source_header;
                 self.session.add_group(g);
-                self.status = format!("Built μ(E): {n} points{xmu}");
+                self.status.info(format!("Built μ(E): {n} points{xmu}"));
                 self.reduction.graph = GraphType::MuBkg;
                 // New spectrum: drop stale undo history and re-seed the editor.
                 self.clean_undo.clear();
@@ -461,7 +463,7 @@ impl XafsViewApp {
                 self.plot_data.mark_dirty();
                 self.replot_graph();
             }
-            Err(e) => self.status = format!("Calc XMU failed: {e}"),
+            Err(e) => self.status.error(format!("Calc XMU failed: {e}")),
         }
     }
 
@@ -544,7 +546,7 @@ impl XafsViewApp {
     fn run_reduction(&mut self) {
         let targets = self.session.run_targets();
         if targets.is_empty() {
-            self.status = "No data to reduce.".to_owned();
+            self.status.error("No data to reduce.");
             return;
         }
         let pre = self.reduction.pre_params();
@@ -573,7 +575,8 @@ impl XafsViewApp {
             }
         }
         if reduced == 0 {
-            self.status = "No μ(E) in the selected group(s) — Calc XMU first.".to_owned();
+            self.status
+                .error("No μ(E) in the selected group(s) — Calc XMU first.");
             return;
         }
         // Persist χ(k)/χ(R) (+ background) per group. Original single-Autobk
@@ -606,7 +609,13 @@ impl XafsViewApp {
                         single_paths = Some(paths);
                     }
                 }
-                Err(_) => write_failed += 1,
+                Err(e) => {
+                    write_failed += 1;
+                    // Per-file reason into the log; the summary line below only
+                    // carries the count.
+                    self.status
+                        .detail_error(format!("{stem}: χ write failed: {e}"));
+                }
             }
         }
         let fail = if write_failed > 0 {
@@ -614,7 +623,7 @@ impl XafsViewApp {
         } else {
             String::new()
         };
-        self.status = match (single, current_info, single_paths) {
+        let msg = match (single, current_info, single_paths) {
             (true, Some((e0, npts)), Some((kp, rp))) => format!(
                 "AUTOBK done: E₀ = {e0:.2} eV, {npts} k-points · saved {} + {}",
                 file_name_of(&kp),
@@ -625,6 +634,11 @@ impl XafsViewApp {
             }
             _ => format!("AUTOBK: reduced {reduced} group(s); saved {saved} χ pair(s){fail}"),
         };
+        if write_failed > 0 {
+            self.status.error(msg);
+        } else {
+            self.status.info(msg);
+        }
         // Show the whole batch at once when several were reduced.
         if targets.len() > 1 {
             self.show_all_groups = true;
@@ -764,7 +778,12 @@ impl XafsViewApp {
         for (name, content) in &files {
             match write_file(&dir.join(name), content) {
                 Ok(()) => written += 1,
-                Err(_) => failed += 1,
+                Err(e) => {
+                    failed += 1;
+                    // Per-file reason into the log; the summary line below only
+                    // carries the count.
+                    self.status.detail_error(format!("{name}: {e}"));
+                }
             }
         }
         let extra = if failed > 0 {
@@ -772,17 +791,22 @@ impl XafsViewApp {
         } else {
             String::new()
         };
-        self.status = format!(
+        let msg = format!(
             "Saved {written} χ data+fit file(s) to {}{extra}.",
             dir.display()
         );
+        if failed > 0 {
+            self.status.error(msg);
+        } else {
+            self.status.info(msg);
+        }
     }
 
     /// Run normalize → AUTOBK → FT on every loaded group with one shared set of
     /// parameters (the Autobk tab's current settings), then refresh the plots.
     fn run_multi_autobk(&mut self) {
         if self.session.groups.is_empty() {
-            self.status = "No groups loaded.".to_owned();
+            self.status.error("No groups loaded.");
             return;
         }
         let pre = self.reduction.pre_params();
@@ -798,7 +822,13 @@ impl XafsViewApp {
             if g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some() {
                 match self.write_chi_files(g, &g.label) {
                     Ok(_) => saved += 1,
-                    Err(_) => write_failed += 1,
+                    Err(e) => {
+                        write_failed += 1;
+                        // Per-group reason into the log; the summary line below
+                        // only carries the count.
+                        self.status
+                            .detail_error(format!("{}: χ write failed: {e}", g.label));
+                    }
                 }
             }
         }
@@ -807,8 +837,12 @@ impl XafsViewApp {
         } else {
             String::new()
         };
-        self.status =
-            format!("Multiple AUTOBK: reduced {n} group(s); saved {saved} χ pair(s){fail}.");
+        let msg = format!("Multiple AUTOBK: reduced {n} group(s); saved {saved} χ pair(s){fail}.");
+        if write_failed > 0 {
+            self.status.error(msg);
+        } else {
+            self.status.info(msg);
+        }
         // Show the whole batch at once, not just the current group.
         self.show_all_groups = true;
         self.plot_data.mark_dirty();
@@ -820,8 +854,8 @@ impl XafsViewApp {
     /// The staging picker's OK routes here.
     fn build_xmu_from_paths(&mut self, paths: Vec<std::path::PathBuf>) {
         let Some(spec) = self.import.as_ref().map(|i| i.to_spec()) else {
-            self.status =
-                "Open one file and choose its columns first, then batch the rest.".to_owned();
+            self.status
+                .error("Open one file and choose its columns first, then batch the rest.");
             return;
         };
         // Apply the chooser's header-skip override to every batch file (None =
@@ -833,7 +867,13 @@ impl XafsViewApp {
         for path in paths {
             match feffit::xasdata::ColumnFile::from_path_skip(&path, skip) {
                 Ok(cf) => files.push(cf),
-                Err(_) => read_errors += 1,
+                Err(e) => {
+                    read_errors += 1;
+                    // Per-file reason into the log; the batch summary below only
+                    // carries the counts.
+                    self.status
+                        .detail_error(format!("{}: unreadable: {e}", path.display()));
+                }
             }
         }
 
@@ -866,12 +906,25 @@ impl XafsViewApp {
                         index,
                     ) {
                         Ok(_) => written += 1,
-                        Err(_) => write_failed += 1,
+                        Err(e) => {
+                            write_failed += 1;
+                            self.status
+                                .detail_error(format!("{}: .xmu not written: {e}", group.label));
+                        }
                     }
                     self.session.add_group(group);
                     built += 1;
                 }
-                Err(_) => build_errors += 1,
+                Err(e) => {
+                    build_errors += 1;
+                    let name = files
+                        .get(i)
+                        .and_then(|f| f.path.as_deref())
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| format!("file {}", i + 1));
+                    self.status
+                        .detail_error(format!("{name}: μ(E) build failed: {e}"));
+                }
             }
         }
 
@@ -896,11 +949,16 @@ impl XafsViewApp {
             self.plot_data.mark_dirty();
             self.replot_graph();
         }
-        self.status = format!(
+        let msg = format!(
             "Batch μ(E): built {built}, wrote {written} .xmu \
              ({write_failed} not written), build errors {build_errors}, \
              unreadable {read_errors}, AUTOBK reduced {reduced}."
         );
+        if write_failed + build_errors + read_errors > 0 {
+            self.status.error(msg);
+        } else {
+            self.status.info(msg);
+        }
     }
 
     /// Open the Edit-μ(E) window, seeding its energy widgets from the current
@@ -940,21 +998,23 @@ impl XafsViewApp {
                     kstep
                 );
                 self.wavelet.set_result(Some(wt), info);
-                self.status = "Wavelet transform computed.".to_owned();
+                self.status.info("Wavelet transform computed.");
             }
             Some((None, _)) => {
                 self.wavelet.set_result(
                     None,
                     "Transform failed — check R range vs k-step (Nyquist).".to_owned(),
                 );
-                self.status = "Wavelet transform failed (R range exceeds Nyquist?).".to_owned();
+                self.status
+                    .error("Wavelet transform failed (R range exceeds Nyquist?).");
             }
             None => {
                 self.wavelet.set_result(
                     None,
                     "No χ(k) — run AUTOBK on the current group first.".to_owned(),
                 );
-                self.status = "No χ(k) for the wavelet transform — run AUTOBK first.".to_owned();
+                self.status
+                    .error("No χ(k) for the wavelet transform — run AUTOBK first.");
             }
         }
     }
@@ -964,7 +1024,8 @@ impl XafsViewApp {
     /// computed yet or the user cancels the dialog.
     fn export_wavelet_csv(&mut self) {
         let Some(csv) = self.wavelet.result_csv() else {
-            self.status = "No wavelet result to export — Compute first.".to_owned();
+            self.status
+                .error("No wavelet result to export — Compute first.");
             return;
         };
         let mut dlg = rfd::FileDialog::new()
@@ -983,8 +1044,10 @@ impl XafsViewApp {
             return;
         };
         match std::fs::write(&path, csv) {
-            Ok(()) => self.status = format!("Wavelet CSV saved to {}.", path.display()),
-            Err(e) => self.status = format!("Wavelet CSV save failed: {e}"),
+            Ok(()) => self
+                .status
+                .info(format!("Wavelet CSV saved to {}.", path.display())),
+            Err(e) => self.status.error(format!("Wavelet CSV save failed: {e}")),
         }
     }
 
@@ -997,7 +1060,7 @@ impl XafsViewApp {
             match (self.clean_undo.pop(), self.session.current) {
                 (Some(prev), Some(idx)) if idx < self.session.groups.len() => {
                     self.session.groups[idx] = prev;
-                    self.status = "Undid last edit.".to_owned();
+                    self.status.info("Undid last edit.");
                     self.plot_data.mark_dirty();
                     self.replot_graph();
                 }
@@ -1038,7 +1101,13 @@ impl XafsViewApp {
             CleanAction::Undo => unreachable!("handled above"),
         };
 
-        self.status = msg;
+        // `changed = false` means the edit did not apply (e.g. grid too short) —
+        // that reads as a failure, so it logs as one.
+        if changed {
+            self.status.info(msg);
+        } else {
+            self.status.error(msg);
+        }
         if changed {
             self.clean_undo.push(snapshot);
             if self.clean_undo.len() > UNDO_CAP {
@@ -1492,11 +1561,11 @@ impl XafsViewApp {
                     self.feffit.add_path(label, fp);
                     added += 1;
                 }
-                Err(e) => self.status = format!("Path load failed: {e}"),
+                Err(e) => self.status.error(format!("Path load failed: {e}")),
             }
         }
         if added > 0 {
-            self.status = format!("Added {added} Feff path(s).");
+            self.status.info(format!("Added {added} Feff path(s)."));
         }
     }
 
@@ -1510,7 +1579,8 @@ impl XafsViewApp {
             .clone()
             .or_else(|| self.session.folders.data_dir.clone())
         else {
-            self.status = "Set a Results folder (Folders tab) before saving items.".to_owned();
+            self.status
+                .error("Set a Results folder (Folders tab) before saving items.");
             return;
         };
         let mut written = 0usize;
@@ -1518,7 +1588,12 @@ impl XafsViewApp {
         for (name, content) in &files {
             match write_file(&dir.join(name), content) {
                 Ok(()) => written += 1,
-                Err(_) => failed += 1,
+                Err(e) => {
+                    failed += 1;
+                    // Per-file reason into the log; the summary line below only
+                    // carries the count.
+                    self.status.detail_error(format!("{name}: {e}"));
+                }
             }
         }
         let extra = if failed > 0 {
@@ -1526,7 +1601,12 @@ impl XafsViewApp {
         } else {
             String::new()
         };
-        self.status = format!("Saved {written} item file(s) to {}{extra}.", dir.display());
+        let msg = format!("Saved {written} item file(s) to {}{extra}.", dir.display());
+        if failed > 0 {
+            self.status.error(msg);
+        } else {
+            self.status.info(msg);
+        }
     }
 
     /// Run the FEFFIT fit on the current group's `chi(k)` and redraw.
@@ -1539,7 +1619,8 @@ impl XafsViewApp {
     fn run_feffit(&mut self) {
         let targets = self.session.run_targets();
         if targets.is_empty() {
-            self.status = "No group to fit — load data and run AUTOBK first.".to_owned();
+            self.status
+                .error("No group to fit — load data and run AUTOBK first.");
             return;
         }
         let focused = match self.session.current {
@@ -1585,13 +1666,21 @@ impl XafsViewApp {
                                     saved += 1;
                                     format!(" · saved {n} .dat/.fit files")
                                 }
-                                Err(e) => format!(" · .dat/.fit not written: {e}"),
+                                Err(e) => {
+                                    // The fit succeeded but its files did not
+                                    // land — classify the run as failed.
+                                    let m = format!(".dat/.fit not written: {e}");
+                                    self.status.detail_error(format!("{label}: {m}"));
+                                    first_err.get_or_insert(m.clone());
+                                    format!(" · {m}")
+                                }
                             };
                             self.feffit_run_overlays.push((label.clone(), plot));
                         }
                     }
                     Err(e) => {
                         focused_msg = e.clone();
+                        self.status.detail_error(format!("{label}: {e}"));
                         first_err.get_or_insert(e);
                     }
                 }
@@ -1603,19 +1692,30 @@ impl XafsViewApp {
                     Ok(_) => {
                         fit_ok += 1;
                         if let Some(plot) = cfg.plot() {
-                            if self.write_feffit_outputs(plot, &label, idx).is_ok() {
-                                saved += 1;
+                            match self.write_feffit_outputs(plot, &label, idx) {
+                                Ok(_) => saved += 1,
+                                Err(e) => {
+                                    // Previously dropped silently — the log keeps
+                                    // the per-group reason now.
+                                    let m = format!(".dat/.fit not written: {e}");
+                                    self.status.detail_error(format!("{label}: {m}"));
+                                    first_err.get_or_insert(m);
+                                }
                             }
                             self.feffit_run_overlays.push((label.clone(), plot.clone()));
                         }
                     }
                     Err(e) => {
+                        // Per-group reason into the log; the summary line below
+                        // only carries the first error.
+                        self.status.detail_error(format!("{label}: {e}"));
                         first_err.get_or_insert(e);
                     }
                 }
             }
         }
-        self.status = if targets.len() == 1 {
+        let failed = first_err.is_some() || (targets.len() > 1 && no_chi > 0);
+        let msg = if targets.len() == 1 {
             if fit_ok == 1 {
                 format!("{focused_msg}{focused_note}")
             } else {
@@ -1636,6 +1736,13 @@ impl XafsViewApp {
             }
             m
         };
+        // The single-target no-χ(k) case reaches here with first_err = None but
+        // fit_ok = 0 — that is a failure too.
+        if failed || fit_ok == 0 {
+            self.status.error(msg);
+        } else {
+            self.status.info(msg);
+        }
         // Show the whole batch at once when several were fit (AUTOBK parity).
         if targets.len() > 1 {
             self.feffit_show_all_fits = true;
@@ -1809,7 +1916,8 @@ impl XafsViewApp {
         };
         let (space, part) = self.feffit.plot_selection();
         let Some(p) = self.feffit.plot() else {
-            self.status = "Run Feffit first, then send it to Plot Data.".to_owned();
+            self.status
+                .error("Run Feffit first, then send it to Plot Data.");
             return;
         };
         let has_model = p.has_model;
@@ -1821,14 +1929,16 @@ impl XafsViewApp {
         self.plot_data.set_fit_overlay(label, x, data_y, model_y);
         // Pop the Plot Data window so the sent fit is visible right away.
         self.plot_data.open();
-        self.status = "Sent the Feffit fit (data + model) to Plot Data.".to_owned();
+        self.status
+            .info("Sent the Feffit fit (data + model) to Plot Data.");
     }
 
     /// Save the current fit report to a text file (the original's "Save result").
     fn save_feffit_result(&mut self) {
         let text = self.feffit.report_text();
         if text.is_empty() {
-            self.status = "Run a fit first — there is no result to save.".to_owned();
+            self.status
+                .error("Run a fit first — there is no result to save.");
             return;
         }
         let stem = self.feffit_fit_group.as_deref().unwrap_or("feffit");
@@ -1845,12 +1955,14 @@ impl XafsViewApp {
             dlg = dlg.set_directory(dir);
         }
         let Some(path) = dlg.save_file() else {
-            self.status = "Save result cancelled.".to_owned();
+            self.status.info("Save result cancelled.");
             return;
         };
         match std::fs::write(&path, text) {
-            Ok(()) => self.status = format!("Saved fit result to {}", path.display()),
-            Err(e) => self.status = format!("Could not save result: {e}"),
+            Ok(()) => self
+                .status
+                .info(format!("Saved fit result to {}", path.display())),
+            Err(e) => self.status.error(format!("Could not save result: {e}")),
         }
     }
 
@@ -1868,7 +1980,7 @@ impl XafsViewApp {
             dlg = dlg.set_directory(dir);
         }
         let Some(path) = dlg.pick_file() else {
-            self.status = "Load result cancelled.".to_owned();
+            self.status.info("Load result cancelled.");
             return;
         };
         match feffit::textio::read_to_string_lenient(&path) {
@@ -1878,9 +1990,10 @@ impl XafsViewApp {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "result".to_owned());
                 self.feffit.show_text(format!("Loaded: {name}"), content);
-                self.status = format!("Loaded result from {}", path.display());
+                self.status
+                    .info(format!("Loaded result from {}", path.display()));
             }
-            Err(e) => self.status = format!("Could not load result: {e}"),
+            Err(e) => self.status.error(format!("Could not load result: {e}")),
         }
     }
 
@@ -1900,13 +2013,13 @@ impl XafsViewApp {
             dlg = dlg.set_directory(dir);
         }
         let Some(path) = dlg.pick_file() else {
-            self.status = "Load inp cancelled.".to_owned();
+            self.status.info("Load inp cancelled.");
             return;
         };
         let content = match feffit::textio::read_to_string_lenient(&path) {
             Ok(c) => c,
             Err(e) => {
-                self.status = format!("Could not read inp: {e}");
+                self.status.error(format!("Could not read inp: {e}"));
                 return;
             }
         };
@@ -1952,17 +2065,25 @@ impl XafsViewApp {
                     self.feffit.add_inp_path(label, fp, ip);
                     loaded += 1;
                 }
-                None => missing += 1,
+                None => {
+                    missing += 1;
+                    // Per-path reason into the log; the summary line below only
+                    // carries the count.
+                    self.status
+                        .detail_error(format!("{}: feff path file not found", ip.file));
+                }
             }
         }
 
-        self.status = if missing == 0 {
-            format!("Loaded inp: {nvars} variable(s), {loaded}/{npaths} path(s).")
+        if missing == 0 {
+            self.status.info(format!(
+                "Loaded inp: {nvars} variable(s), {loaded}/{npaths} path(s)."
+            ));
         } else {
-            format!(
+            self.status.error(format!(
                 "Loaded inp: {nvars} variable(s), {loaded}/{npaths} path(s) ({missing} file(s) not found)."
-            )
-        };
+            ));
+        }
     }
 
     /// The compact current-group selector in the Autobk sidebar: a combo to
@@ -2600,18 +2721,18 @@ impl XafsViewApp {
     fn apply_sub_base(&mut self, root: std::path::PathBuf) {
         let errors = set_project_folders(&mut self.session.folders, &root);
         let made = 5 - errors.len();
-        self.status = if errors.is_empty() {
-            format!(
+        if errors.is_empty() {
+            self.status.info(format!(
                 "Sub base set to {} — {made} working folders ready.",
                 root.display()
-            )
+            ));
         } else {
-            format!(
+            self.status.error(format!(
                 "Sub base {} — {made} folder(s) ready, errors: {}",
                 root.display(),
                 errors.join("; ")
-            )
-        };
+            ));
+        }
     }
 
     /// The Folders tab: pick a project Sub base folder to create and fill the five
@@ -2780,8 +2901,24 @@ impl eframe::App for XafsViewApp {
         // matching XAFSView's shared text line shown on every tab.
         egui::Panel::top("status").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(&self.status);
+                ui.label(self.status.line());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // The strip shows only the latest line; the Log window keeps
+                    // the whole session's messages (its error count stays on the
+                    // button so overwritten failures remain discoverable).
+                    let errors = self.status.error_count();
+                    let label = if errors > 0 {
+                        format!("Log ({errors} ⚠)")
+                    } else {
+                        "Log".to_owned()
+                    };
+                    if ui
+                        .button(label)
+                        .on_hover_text("open the session message log")
+                        .clicked()
+                    {
+                        self.status.open = true;
+                    }
                     ui.weak(format!("{} group(s) loaded", self.session.groups.len()));
                 });
             });
@@ -2845,7 +2982,11 @@ impl eframe::App for XafsViewApp {
         // original XAFSView) and its file-selection sub-window — both render here,
         // independent of the active tab, and only when opened.
         self.plot_data.show_window(ui.ctx());
-        self.plot_data.file_picker(ui.ctx());
+        self.plot_data.file_picker(ui.ctx(), &mut self.status);
+
+        // The detached Log window: the session's cumulative status/error
+        // messages behind the strip's "Log" button.
+        self.status.show_window(ui.ctx());
 
         // The detached "Data" window: the loaded-group manager (list + Add +
         // Clear all) moved out of the Autobk sidebar. A select/remove/clear

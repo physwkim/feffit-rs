@@ -588,8 +588,10 @@ impl PlotDataWindow {
     /// right "Selected Data" pane holds the staged picks. `=>` / `<=` move the
     /// highlighted rows between panes (multi-select by clicking), `OK` loads the
     /// selection. Shown as its own OS viewport (via [`crate::window::detached`])
-    /// so it can be dragged outside the Plot Data window.
-    pub fn file_picker(&mut self, ctx: &egui::Context) {
+    /// so it can be dragged outside the Plot Data window. `log` receives the
+    /// per-file reasons when staged files fail to load (the in-window
+    /// `pick_status` line only carries the count).
+    pub fn file_picker(&mut self, ctx: &egui::Context, log: &mut crate::status_log::StatusLog) {
         if !self.picker_open {
             return;
         }
@@ -783,7 +785,7 @@ impl PlotDataWindow {
                     self.refresh_available();
                 }
                 if do_ok {
-                    self.load_staged();
+                    self.load_staged(log);
                     self.avail_hi.clear();
                     self.sel_hi.clear();
                     self.picker_open = false;
@@ -831,8 +833,9 @@ impl PlotDataWindow {
     /// Reconcile the loaded set to the staged selection (`pick_add`): reuse the
     /// traces still selected (no re-read, so their original graph item is kept),
     /// load the newly-staged files as the current graph item, and drop the ones
-    /// removed in the picker. Display order follows the staged list.
-    fn load_staged(&mut self) {
+    /// removed in the picker. Display order follows the staged list. Per-file
+    /// load failures go to `log`; `pick_status` only carries the count.
+    fn load_staged(&mut self, log: &mut crate::status_log::StatusLog) {
         let (item, kw) = (self.graph_item, self.kweight);
         let staged = std::mem::take(&mut self.pick_add);
         // Move the current traces aside; still-selected files are reused from
@@ -845,14 +848,20 @@ impl PlotDataWindow {
                 // reuse-by-path shortcut does not apply — always (re)expand it.
                 match load_result(&path) {
                     Ok(traces) => self.loaded.extend(traces),
-                    Err(_) => failed += 1,
+                    Err(e) => {
+                        failed += 1;
+                        log.detail_error(format!("{}: {e}", path.display()));
+                    }
                 }
             } else if let Some(pos) = prev.iter().position(|t| t.path == path) {
                 self.loaded.push(prev.remove(pos));
             } else {
                 match load_trace(&path, item, kw) {
                     Ok(t) => self.loaded.push(t),
-                    Err(_) => failed += 1,
+                    Err(e) => {
+                        failed += 1;
+                        log.detail_error(format!("{}: {e}", path.display()));
+                    }
                 }
             }
         }

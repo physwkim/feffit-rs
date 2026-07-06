@@ -21,6 +21,7 @@ mod plot;
 mod plot_data;
 mod plot_files;
 mod reduce_ui;
+mod status_log;
 mod timeres_ui;
 mod wavelet;
 mod widgets;
