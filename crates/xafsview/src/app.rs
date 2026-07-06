@@ -138,9 +138,9 @@ pub struct XafsViewApp {
     edit_xmu: EditXmuState,
     /// The Morlet wavelet-transform window (|W(k,R)| heatmap of χ(k)).
     wavelet: WaveletWindow,
-    /// The Plot Data panel: its controls sit in a strip below the graph on each
-    /// tab and overlay loaded files onto the single shared tab graph (it owns no
-    /// plot).
+    /// The Plot Data window: a detached OS window with its own graph and a
+    /// right-hand control column, overlaying processed files loaded from disk
+    /// (opened from the top bar or Feffit's "Send to Plot Data").
     plot_data: PlotDataWindow,
     /// The linear-combination-fitting window (its own plot).
     lcf: LcfWindow,

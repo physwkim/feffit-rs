@@ -9,9 +9,10 @@
 //! backend is kept but disabled in the UI, being broken on Linux/Windows
 //! upstream); the 3D scene is `rsplot`'s [`SceneWidget`].
 //!
-//! **Scope note.** The Atoms tab does *not* apply space-group symmetry — enter
-//! the full unit cell (every atom), not the asymmetric unit. See [`feffinp`]'s
-//! crate docs for the deferred space-group expansion.
+//! **Scope note.** The Atoms tab *does* apply space-group symmetry: enter the
+//! asymmetric unit plus the space-group number, and [`AtomsUi::build`] expands
+//! it to the full cell (`feffinp`'s `expand`, via the `spacegroup` feature)
+//! before building the cluster.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};

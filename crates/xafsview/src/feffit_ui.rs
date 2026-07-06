@@ -817,7 +817,7 @@ pub struct FeffitUi {
     /// parsed into the fit's parameters before each run.
     user_funcs: String,
     /// The original's "Fit" dropdown: fit / no fit / only FT. Defaults to
-    /// `NoFit` (forward model preview without optimising).
+    /// `OnlyFt` (transform the data without evaluating any model).
     fit_mode: FitMode,
     /// Which "View …" result report pop-up is open (transient UI state).
     report_view: Option<ReportKind>,
