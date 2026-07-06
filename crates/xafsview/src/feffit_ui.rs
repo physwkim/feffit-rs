@@ -1724,10 +1724,13 @@ impl FeffitUi {
                     }
                 }
             });
-            // The part selector drives R/Q (and the q half of K+Q); pure k ignores it.
+            // The part selector drives R/Q (and the q half of K+Q); pure k
+            // ignores it. The original labels this "Graph type", which collides
+            // with the Autobk tab's curve-kind selector of the same name;
+            // "Component" says what Re/Im/Am/Ph are — components of complex χ.
             if self.space != PlotSpace::K {
                 ui.horizontal(|ui| {
-                    ui.label("Graph type");
+                    ui.label("Component");
                     for (p, lbl) in [
                         (PlotPart::Re, "Re"),
                         (PlotPart::Im, "Im"),

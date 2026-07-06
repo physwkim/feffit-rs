@@ -231,13 +231,14 @@ impl AtomsTab {
                     );
                 });
 
-                // Execute row + build status, directly below the cell inputs
-                // (그림 1-2-4) — no pinned-bottom gap. Reload (re-read atoms.inp
-                // from disk) has no file source for the structured builder, so it
-                // is omitted per the functional-only field rule.
+                // Build row + build status, directly below the cell inputs
+                // (그림 1-2-4) — no pinned-bottom gap. The original labels this
+                // "Execute"; renamed to say what it does. Reload (re-read
+                // atoms.inp from disk) has no file source for the structured
+                // builder, so it is omitted per the functional-only field rule.
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::widgets::primary(ui, "Execute", crate::widgets::ROW_BTN, true)
+                    if crate::widgets::primary(ui, "Build feff.inp", crate::widgets::ROW_BTN, true)
                         .on_hover_text("Build feff.inp from the cell")
                         .clicked()
                     {
@@ -533,8 +534,8 @@ impl FeffTab {
         }
 
         // Bottom action row (그림 1-2-5: Select Feff Version / View Structure /
-        // Execute), uniform width, with "Execute" (= Run FEFF) as the amber
-        // primary action.
+        // Execute), uniform width, with the run button as the amber primary
+        // action. The original labels it "Execute"; renamed to say what it does.
         ui.separator();
         ui.horizontal(|ui| {
             let has_inp = !feff_inp.trim().is_empty();
@@ -549,7 +550,7 @@ impl FeffTab {
                 action = Some(FeffAction::ViewStructure);
             }
             let can_run = !self.running && has_inp;
-            if crate::widgets::primary(ui, "Execute", crate::widgets::ROW_BTN, can_run)
+            if crate::widgets::primary(ui, "Run FEFF", crate::widgets::ROW_BTN, can_run)
                 .on_hover_text("Run FEFF → feffNNNN.dat")
                 .clicked()
             {

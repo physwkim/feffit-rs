@@ -168,8 +168,10 @@ impl FeffitBatch {
             }
         });
         // Overlay every fitted group's data + model on the Feffit tab's graph.
+        // Same label as the Feffit tab's own overlay toggle — one name for the
+        // one concept.
         if ui
-            .checkbox(&mut self.show_on_graph, "Show all fits on the graph")
+            .checkbox(&mut self.show_on_graph, "Show all fits")
             .on_hover_text("Overlay every fitted group's data + model on the Feffit tab's graph")
             .changed()
         {
