@@ -48,7 +48,7 @@ enum ParamKind {
 }
 
 /// One global fit variable / constraint row.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct ParamRow {
     name: String,
     kind: ParamKind,
@@ -87,7 +87,7 @@ const LOC_FOURTH: usize = 3;
 /// (`Fixed` = "set") value, an `Expr` override (an expression over other
 /// variables, used by `.inp` import), and an enable flag. When disabled the path
 /// parameter is the constant `value` (so a disabled `N` gives amplitude `amp·1`).
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct PathLocal {
     kind: ParamKind,
     value: f64,
@@ -462,7 +462,7 @@ pub fn parse_feffit_inp(text: &str) -> FeffitInp {
 }
 
 /// Fit-transform (k/R window) settings for the FEFFIT fit.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct FtSettings {
     kmin: f64,
     kmax: f64,
@@ -802,6 +802,35 @@ fn path_number(label: &str) -> Option<usize> {
     digits.parse().ok()
 }
 
+/// The fit-relevant slice of one path — its wiring and locals, identified by
+/// label (the `.dat` contents never change under the UI). Part of [`FitInputs`].
+#[derive(Clone, PartialEq)]
+struct PathInputs {
+    label: String,
+    enabled: bool,
+    degen: String,
+    e0: String,
+    ei: String,
+    deltar: String,
+    s02_override: Option<String>,
+    locals: [PathLocal; 4],
+}
+
+/// A comparable snapshot of everything that feeds [`FeffitUi::run`]: the paths'
+/// wiring, the global variables, the transform, the user functions, and the fit
+/// mode — but not the plot selection (changing the view does not invalidate a
+/// fit). Captured when a run completes; staleness of the shown result is
+/// *computed* by comparing the snapshot against the current inputs
+/// ([`FeffitUi::result_is_stale`]), so no edit path can forget to flag it.
+#[derive(Clone, PartialEq)]
+struct FitInputs {
+    paths: Vec<PathInputs>,
+    params: Vec<ParamRow>,
+    ft: FtSettings,
+    user_funcs: String,
+    fit_mode: FitMode,
+}
+
 /// FEFFIT tab state: the path list, the variables, the transform, the plot
 /// selection, and the last fit result.
 pub struct FeffitUi {
@@ -827,6 +856,9 @@ pub struct FeffitUi {
     /// the adopt can be reverted with "Undo".
     param_undo: Option<Vec<ParamRow>>,
     result: Option<FeffitResult>,
+    /// The inputs snapshot taken when `result` was produced; `None` while no
+    /// fit has run. Compared against the live inputs to show the stale badge.
+    fitted_inputs: Option<FitInputs>,
     plot: Option<FeffitPlot>,
     /// When set, draw a draggable FT-window band on the graph so the current
     /// graph's range — kmin/kmax on the k / q / K+Q graphs, rmin/rmax on the R
@@ -857,6 +889,7 @@ impl Default for FeffitUi {
             text_view: None,
             param_undo: None,
             result: None,
+            fitted_inputs: None,
             plot: None,
             show_range: false,
         }
@@ -882,9 +915,45 @@ impl FeffitUi {
             text_view: None,
             param_undo: None,
             result: None,
+            fitted_inputs: None,
             plot: None,
             show_range: false,
         }
+    }
+
+    /// Snapshot the current fit inputs for the staleness comparison.
+    fn fit_inputs(&self) -> FitInputs {
+        FitInputs {
+            paths: self
+                .paths
+                .iter()
+                .map(|p| PathInputs {
+                    label: p.label.clone(),
+                    enabled: p.enabled,
+                    degen: p.degen.clone(),
+                    e0: p.e0.clone(),
+                    ei: p.ei.clone(),
+                    deltar: p.deltar.clone(),
+                    s02_override: p.s02_override.clone(),
+                    locals: p.locals.clone(),
+                })
+                .collect(),
+            params: self.params.clone(),
+            ft: self.ft.clone(),
+            user_funcs: self.user_funcs.clone(),
+            fit_mode: self.fit_mode,
+        }
+    }
+
+    /// Whether the shown result no longer matches the current fit inputs (a
+    /// parameter, path, transform, or mode was edited since the fit ran). The
+    /// Results box shows a warning badge while this holds.
+    pub fn result_is_stale(&self) -> bool {
+        self.result.is_some()
+            && self
+                .fitted_inputs
+                .as_ref()
+                .is_some_and(|snap| *snap != self.fit_inputs())
     }
 
     /// The FT-window bounds `(min, max)` to draw as a draggable band for the
@@ -1163,6 +1232,7 @@ impl FeffitUi {
         self.paths.clear();
         self.selected_path = 0;
         self.result = None;
+        self.fitted_inputs = None;
         self.plot = None;
     }
 
@@ -1283,6 +1353,7 @@ impl FeffitUi {
                 has_model: false,
             });
             self.result = None;
+            self.fitted_inputs = None;
             return Ok("Only FT: transformed data χ(k) → χ(R)/χ(q).".to_owned());
         }
 
@@ -1356,6 +1427,7 @@ impl FeffitUi {
                 has_model: true,
             });
             self.result = None;
+            self.fitted_inputs = None;
             return Ok("No fit: forward model at the current guess values.".to_owned());
         }
 
@@ -1380,6 +1452,8 @@ impl FeffitUi {
             res.chi2_reduced, res.rfactor, res.n_idp, res.nvarys, res.info
         );
         self.result = Some(res);
+        // Freshness snapshot: the badge compares the live inputs against this.
+        self.fitted_inputs = Some(self.fit_inputs());
         Ok(summary)
     }
 
@@ -1769,6 +1843,15 @@ impl FeffitUi {
         // --- Results (fit statistics + report pop-ups) --------------------
         ui.group(|ui| {
             ui.strong("Results");
+            // Freshness: the numbers below describe the *last* fit; warn when
+            // the inputs were edited since, so stale statistics are not read as
+            // the current parameters' outcome.
+            if self.result_is_stale() {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "⚠ Parameters changed since this fit — Run to refresh.",
+                );
+            }
             if let Some(res) = &self.result {
                 ui.strong("Feffit out data");
                 egui::Grid::new("feffit_stats")
@@ -2147,6 +2230,44 @@ mod tests {
             a.rfactor,
             b.rfactor
         );
+    }
+
+    #[test]
+    fn stale_badge_tracks_input_edits_since_the_fit() {
+        let (k, chi) = cu_kchi();
+        let mut ui = feffit_ui_with_paths();
+        assert!(!ui.result_is_stale(), "no result yet — nothing to be stale");
+        ui.run(&k, &chi).expect("fit");
+        assert!(ui.result().is_some());
+        assert!(!ui.result_is_stale(), "a fresh fit is not stale");
+
+        // A variable edit marks the shown result stale; reverting clears it.
+        let old = ui.params[0].value;
+        ui.params[0].value = old + 0.1;
+        assert!(
+            ui.result_is_stale(),
+            "param edit must mark the result stale"
+        );
+        ui.params[0].value = old;
+        assert!(
+            !ui.result_is_stale(),
+            "reverting the edit restores freshness"
+        );
+
+        // A transform edit counts, and a re-run clears the badge.
+        ui.ft.kmin += 0.5;
+        assert!(ui.result_is_stale(), "transform edit must mark it stale");
+        ui.run(&k, &chi).expect("refit");
+        assert!(!ui.result_is_stale(), "re-running clears the badge");
+
+        // Plot-view selection changes do NOT invalidate the fit.
+        ui.space = PlotSpace::Q;
+        ui.part = PlotPart::Re;
+        assert!(!ui.result_is_stale(), "view changes are not fit inputs");
+
+        // Path edits count: disabling the path invalidates the shown result.
+        ui.paths[0].enabled = false;
+        assert!(ui.result_is_stale(), "path edit must mark the result stale");
     }
 
     #[test]
