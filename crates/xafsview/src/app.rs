@@ -324,30 +324,25 @@ impl XafsViewApp {
             &mut keep_open,
             [640.0, 720.0],
             |ui| {
-                // Wrap in a CentralPanel like every other detached window so the
-                // content gets the standard frame margin instead of hugging the
-                // window edges.
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    self.open_data.ui(ui);
-                    ui.separator();
-                    match self.import.as_mut() {
-                        Some(import) => import.ui(ui),
-                        None => {
-                            ui.weak("Stage a raw scan file above to set its columns.");
-                        }
+                self.open_data.ui(ui);
+                ui.separator();
+                match self.import.as_mut() {
+                    Some(import) => import.ui(ui),
+                    None => {
+                        ui.weak("Stage a raw scan file above to set its columns.");
                     }
-                    ui.separator();
-                    let start = crate::widgets::primary(
-                        ui,
-                        "Autobk Start",
-                        crate::widgets::CHUNKY_BTN,
-                        self.open_data.has_staged(),
-                    )
-                    .on_hover_text("Build μ(E) from every staged file, then run AUTOBK");
-                    if start.clicked() {
-                        do_start = true;
-                    }
-                });
+                }
+                ui.separator();
+                let start = crate::widgets::primary(
+                    ui,
+                    "Autobk Start",
+                    crate::widgets::CHUNKY_BTN,
+                    self.open_data.has_staged(),
+                )
+                .on_hover_text("Build μ(E) from every staged file, then run AUTOBK");
+                if start.clicked() {
+                    do_start = true;
+                }
             },
         );
         self.open_data.open = self.open_data.open && keep_open;

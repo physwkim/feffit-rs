@@ -99,7 +99,7 @@ impl MbackWindow {
             return;
         }
         let mut open = self.open;
-        crate::window::detached(
+        crate::window::detached_panels(
             ctx,
             "mback",
             "MBACK / NEXAFS normalization",

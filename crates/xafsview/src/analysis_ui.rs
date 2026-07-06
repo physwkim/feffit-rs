@@ -121,7 +121,7 @@ impl LcfWindow {
             return;
         }
         let mut open = self.open;
-        crate::window::detached(
+        crate::window::detached_panels(
             ctx,
             "lcf",
             "LCF — linear combination",
@@ -398,7 +398,7 @@ impl PcaWindow {
             return;
         }
         let mut open = self.open;
-        crate::window::detached(
+        crate::window::detached_panels(
             ctx,
             "pca",
             "PCA — principal components",

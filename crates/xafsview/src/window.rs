@@ -4,9 +4,11 @@
 //! outside the main application window. To make every pop-up (periodic table,
 //! LCF/PCA, XANES, MBACK, the calculators, Plot Data, wavelet, the 3D site
 //! viewer, …) a real OS window that can move anywhere on screen, each is shown
-//! through [`detached`], which opens an egui *immediate viewport*. Routing them
-//! all through one helper keeps the viewport-id and open/close discipline in a
-//! single place — a pop-up cannot accidentally stay clamped to the main window.
+//! through [`detached`] (or [`detached_panels`] for bodies that build their own
+//! panel layout), which opens an egui *immediate viewport*. Routing them all
+//! through one place keeps the viewport-id, open/close, and margin discipline
+//! together — a pop-up cannot accidentally stay clamped to the main window or
+//! render its content flush against the window edges.
 
 use eframe::egui;
 
@@ -22,6 +24,12 @@ use eframe::egui;
 /// If the backend cannot open separate OS windows, egui falls back to an
 /// embedded window inside the main viewport, so the pop-up still works.
 ///
+/// The body is wrapped in a default [`egui::CentralPanel`], whose frame carries
+/// the standard inner margin — content never hugs the viewport edges. A window
+/// that lays out its own `SidePanel`/`CentralPanel` split must use
+/// [`detached_panels`] instead (panels are added to the viewport root, and their
+/// own frames supply the margins).
+///
 /// Reopen discipline: an immediate viewport closed via its window button cannot
 /// be reliably recreated under the *same* [`egui::ViewportId`] — eframe/winit
 /// races the old OS window's teardown against the recreate, so the reopened
@@ -31,6 +39,23 @@ use eframe::egui;
 /// The generation is stable *while* the window stays open, so it does not
 /// recreate (flicker) each frame.
 pub fn detached(
+    ctx: &egui::Context,
+    id_source: &str,
+    title: &str,
+    open: &mut bool,
+    default_size: [f32; 2],
+    mut add_contents: impl FnMut(&mut egui::Ui),
+) {
+    detached_panels(ctx, id_source, title, open, default_size, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| add_contents(ui));
+    });
+}
+
+/// [`detached`] without the [`egui::CentralPanel`] wrap, for windows whose body
+/// builds its own `SidePanel`/`CentralPanel` layout on the viewport root (the
+/// panels' frames then supply the margins). Every other window goes through
+/// [`detached`] so it cannot forget the standard margin.
+pub fn detached_panels(
     ctx: &egui::Context,
     id_source: &str,
     title: &str,
