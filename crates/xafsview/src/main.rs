@@ -15,6 +15,7 @@ mod feffit_batch;
 mod feffit_ui;
 mod fonts;
 mod import;
+mod jobs;
 mod mback_ui;
 mod open_data;
 mod plot;

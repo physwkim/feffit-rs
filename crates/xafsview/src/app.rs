@@ -175,6 +175,9 @@ pub struct XafsViewApp {
     /// The status strip's line plus the cumulative session message log — every
     /// user-visible outcome funnels through it (see [`crate::status_log`]).
     status: crate::status_log::StatusLog,
+    /// The single background-job slot for the batch operations (Multiple
+    /// AUTOBK, batch μ(E), Feffit runs) — see [`crate::jobs`].
+    jobs: crate::jobs::JobRunner<Self>,
     /// Working value for the Settings "Font size" slider (the egui zoom factor).
     /// The slider edits this freely; the live zoom is applied only when the drag
     /// ends, so the UI doesn't reflow under the cursor on every drag tick.
@@ -186,6 +189,14 @@ pub struct XafsViewApp {
 /// from the Settings menu. egui's `Context` holds the live value, so it persists
 /// across frames within a session without any extra app state.
 const DEFAULT_UI_SCALE: f32 = 1.2;
+
+/// Refusal message when a batch trigger fires while the single job slot is
+/// taken ([`crate::jobs::JobRunner::start`] returned `false`).
+const JOB_BUSY: &str = "A background job is already running — wait for it to finish.";
+
+/// One Feffit-job target's outcome, from worker to apply: the group's index and
+/// label, with `Ok((run summary, the fitted config clone))` or `Err(message)`.
+type FeffitJobFit = (usize, String, Result<(String, FeffitUi), String>);
 
 impl XafsViewApp {
     /// Build the app. Requires the wgpu render state (see [`main`](crate::main)).
@@ -269,6 +280,7 @@ impl XafsViewApp {
             clean_undo: Vec::new(),
             last_tab: Tab::Folders,
             status: Default::default(),
+            jobs: Default::default(),
             ui_scale: DEFAULT_UI_SCALE,
         }
     }
@@ -803,7 +815,12 @@ impl XafsViewApp {
     }
 
     /// Run normalize → AUTOBK → FT on every loaded group with one shared set of
-    /// parameters (the Autobk tab's current settings), then refresh the plots.
+    /// parameters (the Autobk tab's current settings) on a background job, then
+    /// refresh the plots. The reduction runs on cloned groups off-thread (per
+    /// group, in parallel, with progress ticks); [`finish_multi_autobk`] applies
+    /// them back on the main thread.
+    ///
+    /// [`finish_multi_autobk`]: Self::finish_multi_autobk
     fn run_multi_autobk(&mut self) {
         if self.session.groups.is_empty() {
             self.status.error("No groups loaded.");
@@ -812,7 +829,46 @@ impl XafsViewApp {
         let pre = self.reduction.pre_params();
         let bk = self.reduction.autobk_params();
         let ft = self.reduction.ft_params();
-        let n = feffit::xasdata::reduce_all(&mut self.session.groups, &pre, &bk, &ft, 1.0);
+        let mut groups = self.session.groups.clone();
+        let total = groups.len();
+        let started = self.jobs.start("Multiple AUTOBK", total, move |job| {
+            use rayon::prelude::*;
+            // `reduce_all` on one-group slices: each group reduces independently
+            // (the function's own contract), so the per-group calls keep the
+            // core fan-out while giving a progress tick per finished group.
+            let reduced = std::sync::atomic::AtomicUsize::new(0);
+            let done = std::sync::atomic::AtomicUsize::new(0);
+            groups.par_iter_mut().for_each(|g| {
+                let n = feffit::xasdata::reduce_all(std::slice::from_mut(g), &pre, &bk, &ft, 1.0);
+                reduced.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                job.progress(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
+            });
+            let n = reduced.into_inner();
+            Box::new(move |app: &mut Self| app.finish_multi_autobk(groups, n))
+        });
+        if !started {
+            self.status.error(JOB_BUSY);
+        }
+    }
+
+    /// Apply a finished Multiple-AUTOBK job: put the reduced groups back into
+    /// the session (matched by label — the session may have changed while the
+    /// job ran; vanished groups are dropped with a log entry), write each
+    /// group's χ outputs, and refresh the plots.
+    fn finish_multi_autobk(&mut self, reduced_groups: Vec<XasGroup>, n: usize) {
+        let mut dropped = 0usize;
+        for g in reduced_groups {
+            match self.session.groups.iter_mut().find(|s| s.label == g.label) {
+                Some(slot) => *slot = g,
+                None => {
+                    dropped += 1;
+                    self.status.detail_error(format!(
+                        "{}: group removed while Multiple AUTOBK ran — its result was dropped",
+                        g.label
+                    ));
+                }
+            }
+        }
         // Per-group χ outputs, the original Multiple-autobk behaviour: each group
         // writes its own <label>k.chi / <label>r.chi (its label, not the shared
         // "Output file", so batch outputs stay distinct).
@@ -837,8 +893,15 @@ impl XafsViewApp {
         } else {
             String::new()
         };
-        let msg = format!("Multiple AUTOBK: reduced {n} group(s); saved {saved} χ pair(s){fail}.");
-        if write_failed > 0 {
+        let drop_note = if dropped > 0 {
+            format!(", {dropped} dropped (group list changed)")
+        } else {
+            String::new()
+        };
+        let msg = format!(
+            "Multiple AUTOBK: reduced {n} group(s); saved {saved} χ pair(s){fail}{drop_note}."
+        );
+        if write_failed + dropped > 0 {
             self.status.error(msg);
         } else {
             self.status.info(msg);
@@ -861,85 +924,107 @@ impl XafsViewApp {
         // Apply the chooser's header-skip override to every batch file (None =
         // each file auto-detects its own header).
         let skip = self.import.as_ref().and_then(|i| i.header_skip);
-
-        let mut files = Vec::with_capacity(paths.len());
-        let mut read_errors = 0usize;
-        for path in paths {
-            match feffit::xasdata::ColumnFile::from_path_skip(&path, skip) {
-                Ok(cf) => files.push(cf),
-                Err(e) => {
-                    read_errors += 1;
-                    // Per-file reason into the log; the batch summary below only
-                    // carries the counts.
-                    self.status
-                        .detail_error(format!("{}: unreadable: {e}", path.display()));
-                }
-            }
-        }
-
         // "Output file numbering": append a sequence number to each .xmu so the
         // batch outputs stay distinct (the original toggles this in the dialog).
         let number = self.import.as_ref().is_some_and(|i| i.number_outputs);
-        // The groups built here are appended to `session.groups`, so remember
-        // where they start — the auto-reduce below only touches the new ones.
-        let start = self.session.groups.len();
-        let mut built = 0usize;
-        let mut build_errors = 0usize;
-        let mut written = 0usize;
-        let mut write_failed = 0usize;
-        for (i, result) in feffit::xasdata::make_xmu_batch(&files, &spec)
-            .into_iter()
-            .enumerate()
-        {
-            match result {
-                Ok(mut group) => {
-                    let index = number.then_some(i + 1);
-                    let input = files.get(i).and_then(|f| f.path.as_deref());
-                    // Record the source path (as the single-file paths do) so each
-                    // group's later χ-file write falls back to its own folder.
-                    group.filename = input.map(std::path::Path::to_path_buf);
-                    match self.write_xmu_output(
-                        input,
-                        &group.label,
-                        &group.energy,
-                        &group.mu,
-                        index,
-                    ) {
-                        Ok(_) => written += 1,
-                        Err(e) => {
-                            write_failed += 1;
-                            self.status
-                                .detail_error(format!("{}: .xmu not written: {e}", group.label));
-                        }
-                    }
-                    self.session.add_group(group);
-                    built += 1;
-                }
-                Err(e) => {
-                    build_errors += 1;
-                    let name = files
-                        .get(i)
-                        .and_then(|f| f.path.as_deref())
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| format!("file {}", i + 1));
-                    self.status
-                        .detail_error(format!("{name}: μ(E) build failed: {e}"));
+        let pre = self.reduction.pre_params();
+        let bk = self.reduction.autobk_params();
+        let ft = self.reduction.ft_params();
+        let total = paths.len();
+        let started = self.jobs.start("Batch μ(E)", total, move |job| {
+            // Read + build + auto-reduce on the worker; the built groups are
+            // owned here (nothing shared), so the main-thread apply only writes
+            // the .xmu files and appends them to the session. Failures carry
+            // their per-file reason back for the log.
+            let mut files = Vec::with_capacity(paths.len());
+            let mut read_fail: Vec<String> = Vec::new();
+            for path in paths {
+                match feffit::xasdata::ColumnFile::from_path_skip(&path, skip) {
+                    Ok(cf) => files.push(cf),
+                    Err(e) => read_fail.push(format!("{}: unreadable: {e}", path.display())),
                 }
             }
+            let mut built: Vec<(XasGroup, Option<usize>)> = Vec::new();
+            let mut build_fail: Vec<String> = Vec::new();
+            for (i, result) in feffit::xasdata::make_xmu_batch(&files, &spec)
+                .into_iter()
+                .enumerate()
+            {
+                match result {
+                    Ok(mut group) => {
+                        // Record the source path (as the single-file paths do) so
+                        // each group's later χ-file write falls back to its own
+                        // folder; the .xmu write reads it back in the apply.
+                        group.filename = files.get(i).and_then(|f| f.path.clone());
+                        built.push((group, number.then_some(i + 1)));
+                    }
+                    Err(e) => {
+                        let name = files
+                            .get(i)
+                            .and_then(|f| f.path.as_deref())
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| format!("file {}", i + 1));
+                        build_fail.push(format!("{name}: μ(E) build failed: {e}"));
+                    }
+                }
+            }
+            // Auto-reduce the just-built groups: normalize → AUTOBK → forward-FT
+            // so background/EXAFS graphs show them immediately (not just μ(E)).
+            // The reduce dominates the job's time, so it carries the progress.
+            use rayon::prelude::*;
+            let reduced = std::sync::atomic::AtomicUsize::new(0);
+            let done = std::sync::atomic::AtomicUsize::new(0);
+            built.par_iter_mut().for_each(|(g, _)| {
+                let n = feffit::xasdata::reduce_all(std::slice::from_mut(g), &pre, &bk, &ft, 1.0);
+                reduced.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                job.progress(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
+            });
+            let reduced = reduced.into_inner();
+            Box::new(move |app: &mut Self| {
+                app.finish_build_xmu(built, read_fail, build_fail, reduced)
+            })
+        });
+        if !started {
+            self.status.error(JOB_BUSY);
         }
+    }
 
-        // Auto-reduce the just-built groups: normalize → AUTOBK → forward-FT on the
-        // new groups only, so background/EXAFS graphs show them immediately (not
-        // just μ(E)). The .xmu were already written above; χ(k)/χ(R) files are not
-        // — that stays the explicit "Multiple AUTOBK" action.
-        let reduced = if built > 0 {
-            let pre = self.reduction.pre_params();
-            let bk = self.reduction.autobk_params();
-            let ft = self.reduction.ft_params();
-            feffit::xasdata::reduce_all(&mut self.session.groups[start..], &pre, &bk, &ft, 1.0)
-        } else {
-            0
-        };
+    /// Apply a finished batch-μ(E) job: log the per-file failures, write each
+    /// built group's `.xmu` (the χ(k)/χ(R) files are not written — that stays
+    /// the explicit "Multiple AUTOBK" action), append the groups to the
+    /// session, and refresh the plots.
+    fn finish_build_xmu(
+        &mut self,
+        groups: Vec<(XasGroup, Option<usize>)>,
+        read_fail: Vec<String>,
+        build_fail: Vec<String>,
+        reduced: usize,
+    ) {
+        let (read_errors, build_errors) = (read_fail.len(), build_fail.len());
+        for m in read_fail.into_iter().chain(build_fail) {
+            self.status.detail_error(m);
+        }
+        let built = groups.len();
+        let mut written = 0usize;
+        let mut write_failed = 0usize;
+        for (group, index) in groups {
+            let input = group.filename.clone();
+            match self.write_xmu_output(
+                input.as_deref(),
+                &group.label,
+                &group.energy,
+                &group.mu,
+                index,
+            ) {
+                Ok(_) => written += 1,
+                Err(e) => {
+                    write_failed += 1;
+                    self.status
+                        .detail_error(format!("{}: .xmu not written: {e}", group.label));
+                }
+            }
+            self.session.add_group(group);
+        }
         if built > 0 {
             self.reduction.graph = GraphType::MuBkg;
             self.clean_undo.clear();
@@ -1612,10 +1697,13 @@ impl XafsViewApp {
     /// Run the FEFFIT fit on the current group's `chi(k)` and redraw.
     /// Fit the Feffit tab's current config against every group in the run set
     /// ([`Session::run_targets`]: the checked groups, or the current group when
-    /// nothing is checked), writing each group's `.dat`/`.fit` transforms. The
-    /// focused fit — the current group when it is in the set, else the first
-    /// target — lives in `self.feffit` so the tab graph shows it in detail; the
-    /// others are fitted with independent clones of the config.
+    /// nothing is checked), writing each group's `.dat`/`.fit` transforms. Every
+    /// fit runs on an independent config clone on a background job (the editor
+    /// stays usable meanwhile); [`finish_feffit`] then adopts the focused fit —
+    /// the current group when it is in the set, else the first target — into
+    /// `self.feffit` so the tab graph shows it in detail.
+    ///
+    /// [`finish_feffit`]: Self::finish_feffit
     fn run_feffit(&mut self) {
         let targets = self.session.run_targets();
         if targets.is_empty() {
@@ -1627,95 +1715,134 @@ impl XafsViewApp {
             Some(c) if targets.contains(&c) => c,
             _ => targets[0],
         };
+        // Snapshot each target's χ(k) for the worker; the ones without stay
+        // behind as a count for the summary.
+        let mut items: Vec<(usize, String, Vec<f64>, Vec<f64>)> = Vec::new();
+        let mut no_chi = 0usize;
+        for &idx in &targets {
+            match self
+                .session
+                .groups
+                .get(idx)
+                .and_then(|g| match (&g.k, &g.chi) {
+                    (Some(k), Some(chi)) => Some((g.label.clone(), k.clone(), chi.clone())),
+                    _ => None,
+                }) {
+                Some((label, k, chi)) => items.push((idx, label, k, chi)),
+                None => no_chi += 1,
+            }
+        }
+        if items.is_empty() {
+            self.status.error(if targets.len() == 1 {
+                "No χ(k) for the group — run AUTOBK first.".to_owned()
+            } else {
+                format!(
+                    "Feffit: fit 0/{} group(s); {no_chi} without χ(k)",
+                    targets.len()
+                )
+            });
+            return;
+        }
+        let template = self.feffit.config_clone();
+        let targets_len = targets.len();
+        let total = items.len();
+        let started = self.jobs.start("Feffit", total, move |job| {
+            // Each target fits an independent clone of the config (same
+            // guarantee the batch panel relies on) — including the focused one,
+            // whose fitted clone the apply adopts into the editor.
+            let mut fits: Vec<FeffitJobFit> = Vec::with_capacity(items.len());
+            for (done, (idx, label, k, chi)) in items.into_iter().enumerate() {
+                let mut cfg = template.config_clone();
+                let outcome = cfg.run(&k, &chi).map(|msg| (msg, cfg));
+                fits.push((idx, label, outcome));
+                job.progress(done + 1);
+            }
+            Box::new(move |app: &mut Self| app.finish_feffit(focused, targets_len, no_chi, fits))
+        });
+        if !started {
+            self.status.error(JOB_BUSY);
+        }
+    }
+
+    /// Apply a finished Feffit job: adopt the focused fit into the editor,
+    /// write each fitted group's `.dat`/`.fit` transforms, rebuild the overlay
+    /// list, and report the summary.
+    fn finish_feffit(
+        &mut self,
+        focused: usize,
+        targets_len: usize,
+        no_chi: usize,
+        fits: Vec<FeffitJobFit>,
+    ) {
         // Collect every fitted group's plot so a multi-group run can overlay all
         // fits (the AUTOBK "Show all groups" twin). Rebuilt each run.
         self.feffit_run_overlays.clear();
         let mut fit_ok = 0usize;
         let mut saved = 0usize;
-        let mut no_chi = 0usize;
         let mut first_err: Option<String> = None;
         // For a single-target run, keep the original detailed status (fit summary
         // plus the write outcome); a multi-target run summarises counts.
         let mut focused_msg = String::new();
         let mut focused_note = String::new();
-        for &idx in &targets {
-            let Some((label, k, chi)) =
-                self.session
-                    .groups
-                    .get(idx)
-                    .and_then(|g| match (&g.k, &g.chi) {
-                        (Some(k), Some(chi)) => Some((g.label.clone(), k.clone(), chi.clone())),
-                        _ => None,
-                    })
-            else {
-                no_chi += 1;
-                continue;
-            };
-            if idx == focused {
-                match self.feffit.run(&k, &chi) {
-                    Ok(msg) => {
-                        fit_ok += 1;
+        for (idx, label, outcome) in fits {
+            // The provenance header reads the group by index — re-resolve by
+            // label in case the group list changed while the job ran.
+            let idx_now = self
+                .session
+                .groups
+                .iter()
+                .position(|g| g.label == label)
+                .unwrap_or(idx);
+            match outcome {
+                Ok((msg, cfg)) => {
+                    fit_ok += 1;
+                    // The data .dat files always write; "Only FT" has no model,
+                    // so output_pairs omits the .fit files. Keep a plot snapshot
+                    // for the overlay (owned, so the write + push don't clash).
+                    let plot = cfg.plot().cloned();
+                    if idx == focused {
                         focused_msg = msg;
                         self.feffit_fit_group = Some(label.clone());
-                        // The data .dat files always write; "Only FT" has no model,
-                        // so output_pairs omits the .fit files. Keep a plot snapshot
-                        // for the overlay (owned, so the write + push don't clash).
-                        if let Some(plot) = self.feffit.plot().cloned() {
-                            focused_note = match self.write_feffit_outputs(&plot, &label, idx) {
-                                Ok(n) => {
-                                    saved += 1;
-                                    format!(" · saved {n} .dat/.fit files")
-                                }
-                                Err(e) => {
-                                    // The fit succeeded but its files did not
-                                    // land — classify the run as failed.
-                                    let m = format!(".dat/.fit not written: {e}");
-                                    self.status.detail_error(format!("{label}: {m}"));
-                                    first_err.get_or_insert(m.clone());
-                                    format!(" · {m}")
-                                }
-                            };
-                            self.feffit_run_overlays.push((label.clone(), plot));
-                        }
+                        // The fit ran on a clone; adopt its result (and its
+                        // freshness snapshot — the stale badge stays correct
+                        // even if the config was edited while the fit ran).
+                        self.feffit.adopt_run(cfg);
                     }
-                    Err(e) => {
-                        focused_msg = e.clone();
-                        self.status.detail_error(format!("{label}: {e}"));
-                        first_err.get_or_insert(e);
-                    }
-                }
-            } else {
-                // Independent config clone so each group's fit is isolated (same
-                // guarantee the batch panel relies on).
-                let mut cfg = self.feffit.config_clone();
-                match cfg.run(&k, &chi) {
-                    Ok(_) => {
-                        fit_ok += 1;
-                        if let Some(plot) = cfg.plot() {
-                            match self.write_feffit_outputs(plot, &label, idx) {
-                                Ok(_) => saved += 1,
-                                Err(e) => {
-                                    // Previously dropped silently — the log keeps
-                                    // the per-group reason now.
-                                    let m = format!(".dat/.fit not written: {e}");
-                                    self.status.detail_error(format!("{label}: {m}"));
-                                    first_err.get_or_insert(m);
+                    if let Some(plot) = plot {
+                        match self.write_feffit_outputs(&plot, &label, idx_now) {
+                            Ok(n) => {
+                                saved += 1;
+                                if idx == focused {
+                                    focused_note = format!(" · saved {n} .dat/.fit files");
                                 }
                             }
-                            self.feffit_run_overlays.push((label.clone(), plot.clone()));
+                            Err(e) => {
+                                // The fit succeeded but its files did not land —
+                                // classify the run as failed.
+                                let m = format!(".dat/.fit not written: {e}");
+                                self.status.detail_error(format!("{label}: {m}"));
+                                if idx == focused {
+                                    focused_note = format!(" · {m}");
+                                }
+                                first_err.get_or_insert(m);
+                            }
                         }
+                        self.feffit_run_overlays.push((label.clone(), plot));
                     }
-                    Err(e) => {
-                        // Per-group reason into the log; the summary line below
-                        // only carries the first error.
-                        self.status.detail_error(format!("{label}: {e}"));
-                        first_err.get_or_insert(e);
+                }
+                Err(e) => {
+                    if idx == focused {
+                        focused_msg = e.clone();
                     }
+                    // Per-group reason into the log; the summary line below
+                    // only carries the first error.
+                    self.status.detail_error(format!("{label}: {e}"));
+                    first_err.get_or_insert(e);
                 }
             }
         }
-        let failed = first_err.is_some() || (targets.len() > 1 && no_chi > 0);
-        let msg = if targets.len() == 1 {
+        let failed = first_err.is_some() || (targets_len > 1 && no_chi > 0);
+        let msg = if targets_len == 1 {
             if fit_ok == 1 {
                 format!("{focused_msg}{focused_note}")
             } else {
@@ -1725,8 +1852,7 @@ impl XafsViewApp {
             }
         } else {
             let mut m = format!(
-                "Feffit: fit {fit_ok}/{} group(s); saved {saved} .dat/.fit set(s)",
-                targets.len()
+                "Feffit: fit {fit_ok}/{targets_len} group(s); saved {saved} .dat/.fit set(s)"
             );
             if no_chi > 0 {
                 m.push_str(&format!("; {no_chi} without χ(k)"));
@@ -1736,18 +1862,49 @@ impl XafsViewApp {
             }
             m
         };
-        // The single-target no-χ(k) case reaches here with first_err = None but
-        // fit_ok = 0 — that is a failure too.
         if failed || fit_ok == 0 {
             self.status.error(msg);
         } else {
             self.status.info(msg);
         }
         // Show the whole batch at once when several were fit (AUTOBK parity).
-        if targets.len() > 1 {
+        if targets_len > 1 {
             self.feffit_show_all_fits = true;
         }
         self.replot_feffit();
+    }
+
+    /// The batch panel's "Run all" on the background-job slot: fit each checked
+    /// group with the Feffit tab's current config on the worker
+    /// ([`feffit_batch::compute_runs`]), then adopt the runs on the main thread
+    /// (`set_runs` marks the graph overlay dirty; the app replots it).
+    ///
+    /// [`feffit_batch::compute_runs`]: crate::feffit_batch::compute_runs
+    fn start_feffit_batch(&mut self) {
+        let idxs = self.feffit_batch.member_idxs();
+        if idxs.is_empty() {
+            return;
+        }
+        let groups = self.session.groups.clone();
+        let template = self.feffit.config_clone();
+        let total = idxs.len();
+        let started = self.jobs.start("Feffit batch", total, move |job| {
+            let runs = crate::feffit_batch::compute_runs(idxs, &groups, &template, &|done| {
+                job.progress(done)
+            });
+            Box::new(move |app: &mut Self| {
+                let (total, errors) = app.feffit_batch.set_runs(runs);
+                let msg = format!("Feffit batch: fit {}/{total} group(s).", total - errors);
+                if errors > 0 {
+                    app.status.error(msg);
+                } else {
+                    app.status.info(msg);
+                }
+            })
+        });
+        if !started {
+            self.status.error(JOB_BUSY);
+        }
     }
 
     /// Redraw the shared plot with the last fit's data vs model in the selected
@@ -2859,6 +3016,23 @@ impl XafsViewApp {
 
 impl eframe::App for XafsViewApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Apply a finished background job's results first, so this frame draws
+        // the post-job state (the Apply closure runs on this thread — the only
+        // place shared state is mutated).
+        match self.jobs.poll() {
+            Some(crate::jobs::Polled::Apply(apply)) => apply(self),
+            Some(crate::jobs::Polled::Failed(label)) => self.status.error(format!(
+                "{label}: the background job died unexpectedly — results lost."
+            )),
+            None => {}
+        }
+        // While a job runs, keep repainting so its progress ticks show without
+        // waiting for user input.
+        if self.jobs.busy() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
         egui::Panel::top("menubar").show_inside(ui, |ui| {
             self.menu_bar(ui);
         });
@@ -2901,6 +3075,13 @@ impl eframe::App for XafsViewApp {
         // matching XAFSView's shared text line shown on every tab.
         egui::Panel::top("status").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
+                // A running background job shows its spinner + progress ahead
+                // of the status line.
+                if let Some((label, done, total)) = self.jobs.status() {
+                    ui.spinner();
+                    ui.label(format!("{label}: {done}/{total}"));
+                    ui.separator();
+                }
                 ui.label(self.status.line());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // The strip shows only the latest line; the Log window keeps
@@ -3004,6 +3185,7 @@ impl eframe::App for XafsViewApp {
         // The detached "Feffit — Batch" window: the batch panel moved out of the
         // Feffit tab's right side. Its disk-write actions are app-owned.
         match self.feffit_batch_window(&ctx) {
+            Some(BatchAction::RunAll) => self.start_feffit_batch(),
             Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
             Some(BatchAction::SaveFeffitOutputs(files)) => self.write_feffit_output_files(files),
             None => {}

@@ -36,7 +36,7 @@ const SAVE_ITEMS: [(&str, &str); 8] = [
 
 /// One group's batch run: a clone of the Feffit tab's config (the shared
 /// template) carrying that group's fit result/plot, plus the run status.
-struct GroupRun {
+pub(crate) struct GroupRun {
     /// Index of the group in the session's group list.
     group_idx: usize,
     label: String,
@@ -58,14 +58,48 @@ fn run_one(run: &mut GroupRun, groups: &[XasGroup]) {
     };
 }
 
-/// What the panel asks the app to do this frame (disk writes the app owns).
+/// What the panel asks the app to do this frame (disk writes and the batch
+/// run, which the app owns).
 pub enum BatchAction {
+    /// Fit every checked group with the current template on the app's
+    /// background-job slot ([`compute_runs`] on a worker, [`FeffitBatch::set_runs`]
+    /// on completion).
+    RunAll,
     /// Write these `(filename, content)` pairs (one per selected Save-Items
     /// item); the app picks the destination folder and reports the outcome.
     SaveItems(Vec<(String, String)>),
     /// Write these `(filename, content)` pairs — the per-group FEFFIT k/r/q
     /// `.dat`/`.fit` transforms; the app writes them and reports the outcome.
     SaveFeffitOutputs(Vec<(String, String)>),
+}
+
+/// Fit `template` against each of `idxs`' groups, one independent config clone
+/// per group, fanned across cores. `tick` is called with the completed count
+/// after each fit (the background job's progress display). The worker half of
+/// "Run all" — the app applies the returned runs with [`FeffitBatch::set_runs`].
+pub(crate) fn compute_runs(
+    idxs: Vec<usize>,
+    groups: &[XasGroup],
+    template: &FeffitUi,
+    tick: &(dyn Fn(usize) + Sync),
+) -> Vec<GroupRun> {
+    let mut runs: Vec<GroupRun> = idxs
+        .into_iter()
+        .filter_map(|idx| {
+            groups.get(idx).map(|g| GroupRun {
+                group_idx: idx,
+                label: g.label.clone(),
+                ui: template.config_clone(),
+                status: Ok(String::new()),
+            })
+        })
+        .collect();
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    runs.par_iter_mut().for_each(|run| {
+        run_one(run, groups);
+        tick(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
+    });
+    runs
 }
 
 /// The Feffit batch panel: a group-membership checklist, "Run all", a results
@@ -156,8 +190,10 @@ impl FeffitBatch {
                 .on_hover_text("Fit each checked group with the Feffit tab's current config")
                 .clicked()
             {
-                // run_all marks the graph dirty; the app replots the overlay.
-                self.run_all(groups, template);
+                // The app owns the run: it fits on its background-job slot
+                // (compute_runs) and hands the results back via set_runs,
+                // which marks the graph dirty for the overlay replot.
+                bubble = Some(BatchAction::RunAll);
             }
             if ui
                 .add_enabled(!self.runs.is_empty(), egui::Button::new("Clear results"))
@@ -261,30 +297,24 @@ impl FeffitBatch {
             .filter_map(|r| r.ui.plot().map(|p| (r.label.as_str(), p)))
     }
 
-    /// Rebuild the run list from the current members + template and fit each
-    /// group. Members are run in ascending group order; the fits are independent
-    /// (own config, own FFT planner, reading only the shared `groups`) so they
-    /// fan across cores.
-    fn run_all(&mut self, groups: &[XasGroup], template: &FeffitUi) {
+    /// The checked members in ascending group order — the work list a "Run all"
+    /// job fits ([`compute_runs`]).
+    pub(crate) fn member_idxs(&self) -> Vec<usize> {
         let mut idxs: Vec<usize> = self.members.iter().copied().collect();
         idxs.sort_unstable();
-        self.runs = idxs
-            .into_iter()
-            .filter_map(|idx| {
-                groups.get(idx).map(|g| GroupRun {
-                    group_idx: idx,
-                    label: g.label.clone(),
-                    ui: template.config_clone(),
-                    status: Ok(String::new()),
-                })
-            })
-            .collect();
-        self.runs
-            .par_iter_mut()
-            .for_each(|run| run_one(run, groups));
+        idxs
+    }
+
+    /// Adopt a finished "Run all" job's runs. Returns `(total, errors)` for the
+    /// app's summary line.
+    pub(crate) fn set_runs(&mut self, runs: Vec<GroupRun>) -> (usize, usize) {
+        let errors = runs.iter().filter(|r| r.status.is_err()).count();
+        let total = runs.len();
+        self.runs = runs;
         // The run list changed, so the shared Feffit graph's batch overlay is
         // stale — the app replots when it next reads `take_graph_dirty`.
         self.graph_dirty = true;
+        (total, errors)
     }
 
     /// Collect the FEFFIT k/r/q `.dat`/`.fit` files for every run that has a
@@ -460,7 +490,15 @@ mod tests {
         let mut b = FeffitBatch::default();
         b.members.insert(0);
         b.members.insert(1);
-        b.run_all(&groups, &FeffitUi::default());
+        // The app's "Run all" flow: worker half (compute_runs, with a progress
+        // tick per fit) then the apply half (set_runs).
+        let ticks = std::sync::atomic::AtomicUsize::new(0);
+        let runs = compute_runs(b.member_idxs(), &groups, &FeffitUi::default(), &|_| {
+            ticks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+        assert_eq!(ticks.into_inner(), 2, "one progress tick per fitted group");
+        let (total, errors) = b.set_runs(runs);
+        assert_eq!((total, errors), (2, 0));
 
         assert_eq!(b.runs.len(), 2, "one run per checked group");
         assert!(

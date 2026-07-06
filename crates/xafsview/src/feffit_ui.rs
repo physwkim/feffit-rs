@@ -921,6 +921,20 @@ impl FeffitUi {
         }
     }
 
+    /// Adopt a background run's outcome into this editor: the fitted clone's
+    /// result, plot, and freshness snapshot. The fit ran on a [`config_clone`]
+    /// so the user could keep editing meanwhile; the snapshot came from the
+    /// clone's inputs, so [`result_is_stale`] stays correct — edits made while
+    /// the fit ran show the stale badge, unedited state does not.
+    ///
+    /// [`config_clone`]: Self::config_clone
+    /// [`result_is_stale`]: Self::result_is_stale
+    pub fn adopt_run(&mut self, fitted: FeffitUi) {
+        self.result = fitted.result;
+        self.fitted_inputs = fitted.fitted_inputs;
+        self.plot = fitted.plot;
+    }
+
     /// Snapshot the current fit inputs for the staleness comparison.
     fn fit_inputs(&self) -> FitInputs {
         FitInputs {
@@ -2291,6 +2305,26 @@ mod tests {
         // Path edits count: disabling the path invalidates the shown result.
         ui.paths[0].enabled = false;
         assert!(ui.result_is_stale(), "path edit must mark the result stale");
+    }
+
+    #[test]
+    fn adopt_run_carries_result_and_freshness_from_the_fitted_clone() {
+        let (k, chi) = cu_kchi();
+        let mut editor = feffit_ui_with_paths();
+        // The background-job flow: the fit runs on a config clone, the editor
+        // adopts the outcome. Unedited editor → the adopted result is fresh.
+        let mut worker = editor.config_clone();
+        worker.run(&k, &chi).expect("fit");
+        editor.adopt_run(worker);
+        assert!(editor.result().is_some(), "adopt carries the result");
+        assert!(!editor.result_is_stale(), "same config → fresh");
+
+        // An edit made *while* the job ran: the adopted result shows stale.
+        let mut worker = editor.config_clone();
+        worker.run(&k, &chi).expect("fit");
+        editor.params[0].value += 0.1;
+        editor.adopt_run(worker);
+        assert!(editor.result_is_stale(), "edited during the fit → stale");
     }
 
     #[test]
