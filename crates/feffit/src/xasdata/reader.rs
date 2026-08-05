@@ -168,16 +168,27 @@ impl ColumnFile {
             .position(|l| l.eq_ignore_ascii_case(name))
     }
 
+    /// Index of the first column whose label names one of `keys`, comparing
+    /// against the label's match forms — the label itself, the text inside its
+    /// parentheses, and the text before them (see the module notes on
+    /// `Ch2 (IT)` vs `itrans`). `keys` must be lowercase.
+    ///
+    /// This is the same lookup [`Self::guess_roles`] runs, exposed so a caller
+    /// asking for a channel the fixed [`RoleGuess`] roles don't cover — a
+    /// fourth monitor, a multi-element detector's per-element column — resolves
+    /// it under one matching rule rather than a second, divergent one.
+    pub fn role_index(&self, keys: &[&str]) -> Option<usize> {
+        self.labels
+            .iter()
+            .position(|l| match_forms(l).iter().any(|f| keys.contains(&f.as_str())))
+    }
+
     /// Best-guess role → column index assignments from the labels, for seeding
     /// the GUI's column chooser. Looks for energy, I0, transmission (It),
     /// fluorescence, reference, and a precomputed mu column. Absent roles are
     /// left as `None`.
     pub fn guess_roles(&self) -> RoleGuess {
-        let find = |keys: &[&str]| -> Option<usize> {
-            self.labels
-                .iter()
-                .position(|l| match_forms(l).iter().any(|f| keys.contains(&f.as_str())))
-        };
+        let find = |keys: &[&str]| self.role_index(keys);
         let find_contains = |keys: &[&str]| -> Option<usize> {
             self.labels.iter().position(|l| {
                 let l = l.to_ascii_lowercase();

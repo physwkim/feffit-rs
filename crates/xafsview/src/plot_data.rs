@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
-use feffit::xasdata::{average_curves, peak_in_range, x_at_y};
+use feffit::xasdata::{MonitorPolicy, average_curves, peak_in_range, x_at_y};
 
 use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_result, load_trace};
 use crate::widgets::{file_name_of, select_list};
@@ -111,6 +111,10 @@ pub struct PlotDataWindow {
     file_type: FileType,
     /// The *Graph item* under `file_type` (its file-name suffix + plot recipe).
     graph_item: GraphItem,
+    /// Raw-scan intensity ratios only: floor non-positive monitor counts at 1 so
+    /// a dropped point does not take the whole scan out of the autoscale. Off by
+    /// default — it edits the recorded data.
+    clamp_monitors: bool,
     /// Files loaded for display.
     loaded: Vec<LoadedTrace>,
     /// Whether the "Add / remove data files" picker is open.
@@ -170,6 +174,7 @@ impl PlotDataWindow {
             highlighted: None,
             file_type: FileType::Chi,
             graph_item: FileType::Chi.default_item(),
+            clamp_monitors: false,
             loaded: Vec::new(),
             picker_open: false,
             pick_dir: None,
@@ -530,6 +535,21 @@ impl PlotDataWindow {
                     }
                 });
         });
+        // Only the raw-scan ratios read monitor counts; for every other item the
+        // toggle would do nothing, so it is not offered.
+        if self.file_type == FileType::Raw
+            && ui
+                .checkbox(&mut self.clamp_monitors, "Clamp non-positive counts to 1")
+                .on_hover_text(
+                    "A monitor reading ≤ 0 makes the ratio non-finite and takes the scan out \
+                     of the autoscale. Flooring those counts at 1 keeps the rest visible — it \
+                     edits the recorded data, and never applies to a bare channel.",
+                )
+                .changed()
+        {
+            self.reload_loaded();
+            self.dirty = true;
+        }
 
         if self.loaded.is_empty() {
             ui.weak("No files loaded — ADD Data Files to plot.");
@@ -836,7 +856,7 @@ impl PlotDataWindow {
     /// removed in the picker. Display order follows the staged list. Per-file
     /// load failures go to `log`; `pick_status` only carries the count.
     fn load_staged(&mut self, log: &mut crate::status_log::StatusLog) {
-        let (item, kw) = (self.graph_item, self.kweight);
+        let (item, kw, mon) = (self.graph_item, self.kweight, self.monitor_policy());
         let staged = std::mem::take(&mut self.pick_add);
         // Move the current traces aside; still-selected files are reused from
         // here, anything left over is dropped (un-plotted).
@@ -856,7 +876,7 @@ impl PlotDataWindow {
             } else if let Some(pos) = prev.iter().position(|t| t.path == path) {
                 self.loaded.push(prev.remove(pos));
             } else {
-                match load_trace(&path, item, kw) {
+                match load_trace(&path, item, kw, mon) {
                     Ok(t) => self.loaded.push(t),
                     Err(e) => {
                         failed += 1;
@@ -875,17 +895,27 @@ impl PlotDataWindow {
         self.dirty = true;
     }
 
+    /// The monitor-reading policy the raw-scan ratios are built under.
+    fn monitor_policy(&self) -> MonitorPolicy {
+        if self.clamp_monitors {
+            MonitorPolicy::ClampNonPositive
+        } else {
+            MonitorPolicy::AsRecorded
+        }
+    }
+
     /// Re-read every loaded file (e.g. after a k-weight change, since k-space
-    /// files store unweighted χ).
+    /// files store unweighted χ, or a monitor-policy change).
     fn reload_loaded(&mut self) {
         let kw = self.kweight;
+        let mon = self.monitor_policy();
         for t in &mut self.loaded {
             // `*.result` curves carry final saved values (k-weight already baked
             // in), and one path maps to many curves, so they are not re-read.
             if t.item == GraphItem::Result {
                 continue;
             }
-            if let Ok(nt) = load_trace(&t.path, t.item, kw) {
+            if let Ok(nt) = load_trace(&t.path, t.item, kw, mon) {
                 *t = nt;
             }
         }

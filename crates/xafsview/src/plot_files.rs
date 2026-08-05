@@ -13,13 +13,14 @@
 
 use std::path::{Path, PathBuf};
 
-use feffit::xasdata::ColumnFile;
+use feffit::xasdata::{ColumnFile, MonitorPolicy};
 use feffit::xasproc::{PreEdgeParams, pre_edge};
+
+use crate::open_data::is_output_file;
 
 /// The file-overlay types of the original's *File type* selector. (The remaining
 /// analysis-mode / beamline-specific types — `Normalize`, `res. all`,
-/// `*_Dearctan.dat`, `raw data`, the intensity ratios, `*.XRF`, `XRD`, `UV-VIS`,
-/// … — are deferred.)
+/// `*_Dearctan.dat`, `*.XRF`, `XRD`, `UV-VIS`, … — are deferred.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     /// `μ(E)` files: `energy`, `μ`.
@@ -35,17 +36,22 @@ pub enum FileType {
     /// A saved Plot Data composite (`*.result`): the multi-curve file written by
     /// "Save in single file", read back as one curve per saved trace.
     Result,
+    /// Un-reduced beamline scans: the monitor channels and the intensity ratios
+    /// built from them, plotted against energy without building μ(E) or running
+    /// AUTOBK. The scan-quality view — is I₀ flat, did a channel drop out.
+    Raw,
 }
 
 impl FileType {
     /// All file types, in selector order.
-    pub const ALL: [FileType; 6] = [
+    pub const ALL: [FileType; 7] = [
         FileType::Xmu,
         FileType::Chi,
         FileType::Dat,
         FileType::Fit,
         FileType::Bkg,
         FileType::Result,
+        FileType::Raw,
     ];
 
     /// The selector label (the original's glob form).
@@ -57,6 +63,7 @@ impl FileType {
             FileType::Fit => "*.fit",
             FileType::Bkg => "*.bkg",
             FileType::Result => "*.result",
+            FileType::Raw => "raw data",
         }
     }
 
@@ -74,12 +81,189 @@ impl FileType {
             FileType::Fit => &[GraphItem::FitK, GraphItem::FitR, GraphItem::FitQ],
             FileType::Bkg => &[GraphItem::BkgE, GraphItem::BkgK],
             FileType::Result => &[GraphItem::Result],
+            FileType::Raw => RAW_ITEMS,
         }
     }
 
     /// The first graph item of this file type (the default when the type changes).
     pub fn default_item(self) -> GraphItem {
         self.items()[0]
+    }
+}
+
+/// A channel or intensity ratio read straight from a raw beamline scan, under
+/// [`FileType::Raw`].
+///
+/// The columns are found by *label*, through
+/// [`ColumnFile::role_index`](feffit::xasdata::ColumnFile::role_index), so the
+/// same lookup that seeds the Autobk column chooser serves here — a scan whose
+/// channels the importer resolves is a scan this plots, with no second naming
+/// convention to keep in sync.
+///
+/// The per-element entries cover a 4-element detector (the ME-4 the beamline
+/// runs). A wider array's extra elements are not selectable here; its summed
+/// channel is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawChannel {
+    /// `ln(I₀ / Iₜ)` — transmission μ, unnormalized.
+    Transmission,
+    /// `I_f / I₀` — fluorescence yield from the single fluorescence channel.
+    Fluorescence,
+    /// `ln(Iₜ / I_ref)` — the reference foil, for energy alignment.
+    Reference,
+    /// `Σ(elements) / I₀` — fluorescence yield from the multi-element detector.
+    FluorescenceSdd,
+    /// A single monitor channel, plotted as recorded counts.
+    Monitor(Monitor),
+    /// The multi-element detector's summed channel, as counts.
+    SddSum,
+    /// One element of the multi-element detector (1-based), as counts.
+    SddElement(u8),
+}
+
+/// A single monitor channel of a raw scan, plotted as recorded counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Monitor {
+    /// Incident beam.
+    I0,
+    /// Transmitted beam.
+    It,
+    /// Fluorescence.
+    If,
+    /// Reference foil.
+    Ir,
+    /// A fourth monitor some beamlines record after the reference.
+    Im,
+}
+
+impl Monitor {
+    /// The label keys this monitor's column may carry.
+    fn keys(self) -> &'static [&'static str] {
+        match self {
+            Monitor::I0 => &["i0", "io"],
+            Monitor::It => &["it", "itrans", "i1", "trans"],
+            Monitor::If => &["if", "iflu", "ifluor"],
+            Monitor::Ir => &["iref", "ir", "i2"],
+            Monitor::Im => &["im", "i3"],
+        }
+    }
+
+    /// The selector / axis label.
+    fn label(self) -> &'static str {
+        match self {
+            Monitor::I0 => "I₀",
+            Monitor::It => "Iₜ",
+            Monitor::If => "I_f",
+            Monitor::Ir => "I_ref",
+            Monitor::Im => "I_m",
+        }
+    }
+}
+
+/// The label keys a multi-element detector's summed column may carry.
+const SDD_SUM_KEYS: &[&str] = &["all ch", "allch", "me-4", "all channels"];
+
+/// The raw-scan items, in selector order — the original's intensity-ratio and
+/// per-channel list.
+const RAW_ITEMS: &[GraphItem] = &[
+    GraphItem::Raw(RawChannel::Transmission),
+    GraphItem::Raw(RawChannel::Fluorescence),
+    GraphItem::Raw(RawChannel::Reference),
+    GraphItem::Raw(RawChannel::Monitor(Monitor::I0)),
+    GraphItem::Raw(RawChannel::Monitor(Monitor::It)),
+    GraphItem::Raw(RawChannel::Monitor(Monitor::If)),
+    GraphItem::Raw(RawChannel::Monitor(Monitor::Ir)),
+    GraphItem::Raw(RawChannel::Monitor(Monitor::Im)),
+    GraphItem::Raw(RawChannel::FluorescenceSdd),
+    GraphItem::Raw(RawChannel::SddSum),
+    GraphItem::Raw(RawChannel::SddElement(1)),
+    GraphItem::Raw(RawChannel::SddElement(2)),
+    GraphItem::Raw(RawChannel::SddElement(3)),
+    GraphItem::Raw(RawChannel::SddElement(4)),
+];
+
+impl RawChannel {
+    /// The selector label.
+    fn label(self) -> String {
+        match self {
+            RawChannel::Transmission => "Transmission".into(),
+            RawChannel::Fluorescence => "Fluorescence".into(),
+            RawChannel::Reference => "Reference".into(),
+            RawChannel::FluorescenceSdd => "Fluorescence (SDD)".into(),
+            RawChannel::Monitor(m) => m.label().into(),
+            RawChannel::SddSum => "SDD all ch".into(),
+            RawChannel::SddElement(n) => format!("SDD ch{n:02}"),
+        }
+    }
+
+    /// The y-axis label.
+    fn y_label(self) -> String {
+        match self {
+            RawChannel::Transmission => "ln(I₀/Iₜ)".into(),
+            RawChannel::Fluorescence => "I_f/I₀".into(),
+            RawChannel::Reference => "ln(Iₜ/I_ref)".into(),
+            RawChannel::FluorescenceSdd => "ΣSDD/I₀".into(),
+            _ => format!("{} (counts)", self.label()),
+        }
+    }
+
+    /// This channel's column in `cf`, by label. `None` when the scan does not
+    /// carry it — a transmission-only scan has no SDD columns.
+    fn column(self, cf: &ColumnFile) -> Option<&[f64]> {
+        let idx = match self {
+            RawChannel::Monitor(m) => cf.role_index(m.keys())?,
+            RawChannel::SddSum | RawChannel::FluorescenceSdd => cf.role_index(SDD_SUM_KEYS)?,
+            RawChannel::SddElement(n) => {
+                // `Ch #-01` is what the beamline writes; `mca1` is the XDI
+                // spelling of the same per-element column.
+                let keys = [format!("ch #-{n:02}"), format!("mca{n}")];
+                let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+                cf.role_index(&keys)?
+            }
+            // The ratios read two columns; `column` is for the single-column items.
+            RawChannel::Transmission | RawChannel::Fluorescence | RawChannel::Reference => {
+                return None;
+            }
+        };
+        cf.column(idx)
+    }
+
+    /// Build this channel's curve from `cf`, reading monitors under `monitors`.
+    /// `Err` names the channel the scan is missing.
+    fn values(self, cf: &ColumnFile, monitors: MonitorPolicy) -> Result<Vec<f64>, String> {
+        let need = |ch: RawChannel| -> Result<Vec<f64>, String> {
+            ch.column(cf)
+                .map(|c| monitors.apply(c).into_owned())
+                .ok_or_else(|| format!("no {} column", ch.label()))
+        };
+        match self {
+            RawChannel::Transmission => {
+                let i0 = need(RawChannel::Monitor(Monitor::I0))?;
+                let it = need(RawChannel::Monitor(Monitor::It))?;
+                Ok(feffit::xasdata::transmission_mu(&i0, &it))
+            }
+            RawChannel::Reference => {
+                let it = need(RawChannel::Monitor(Monitor::It))?;
+                let ir = need(RawChannel::Monitor(Monitor::Ir))?;
+                Ok(feffit::xasdata::transmission_mu(&it, &ir))
+            }
+            RawChannel::Fluorescence => {
+                let iff = need(RawChannel::Monitor(Monitor::If))?;
+                let i0 = need(RawChannel::Monitor(Monitor::I0))?;
+                Ok(feffit::xasdata::fluorescence_mu(&iff, &i0))
+            }
+            RawChannel::FluorescenceSdd => {
+                let sdd = need(RawChannel::SddSum)?;
+                let i0 = need(RawChannel::Monitor(Monitor::I0))?;
+                Ok(feffit::xasdata::fluorescence_mu(&sdd, &i0))
+            }
+            // A bare channel is plotted as recorded — the point of the view is to
+            // see what the detector actually wrote, so the clamp stays off it.
+            single => single
+                .column(cf)
+                .map(<[f64]>::to_vec)
+                .ok_or_else(|| format!("no {} column", single.label())),
+        }
     }
 }
 
@@ -119,11 +303,21 @@ pub enum GraphItem {
     /// A curve from a saved `*.result` composite (axis labels come from the
     /// file, not from this item).
     Result,
+    /// A channel or intensity ratio of a raw beamline scan.
+    Raw(RawChannel),
 }
 
 impl GraphItem {
     /// The combo label.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
+        if let GraphItem::Raw(ch) = self {
+            return ch.label();
+        }
+        self.fixed_label().into()
+    }
+
+    /// The combo label of the fixed (non-raw) items.
+    fn fixed_label(self) -> &'static str {
         match self {
             GraphItem::XmuF => "f",
             GraphItem::XmuNorm => "norm",
@@ -140,12 +334,20 @@ impl GraphItem {
             GraphItem::BkgE => "e.bkg",
             GraphItem::BkgK => "k.bkg",
             GraphItem::Result => "result",
+            GraphItem::Raw(_) => "raw",
         }
     }
 
-    /// The file-name suffix this item selects (case-insensitively) in a folder.
-    pub fn suffix(self) -> &'static str {
-        match self {
+    /// The file-name suffix this item selects (case-insensitively) in a folder,
+    /// or `None` when the item is not selected by name at all.
+    ///
+    /// Every item we *write* carries a suffix we chose. A raw scan is named by
+    /// the beamline — `sample.000`, `sample.txt` — so there is no suffix to key
+    /// on and the selection is stated the other way round (see [`Self::matches`]).
+    /// Returning `Option` rather than `""` keeps that from collapsing into
+    /// `ends_with("")`, which is true of every file including our own outputs.
+    pub fn suffix(self) -> Option<&'static str> {
+        Some(match self {
             GraphItem::XmuF | GraphItem::XmuNorm | GraphItem::XmuD1 | GraphItem::XmuD2 => ".xmu",
             GraphItem::ChiK => "k.chi",
             GraphItem::ChiR => "r.chi",
@@ -158,12 +360,18 @@ impl GraphItem {
             GraphItem::BkgE => "e.bkg",
             GraphItem::BkgK => "k.bkg",
             GraphItem::Result => ".result",
-        }
+            GraphItem::Raw(_) => return None,
+        })
     }
 
     /// Whether `name` (a bare file name) is selected by this item.
     pub fn matches(self, name: &str) -> bool {
-        name.to_ascii_lowercase().ends_with(self.suffix())
+        match self.suffix() {
+            Some(sfx) => name.to_ascii_lowercase().ends_with(sfx),
+            // Raw scans select by exclusion: everything in the folder that is
+            // not one of our own outputs.
+            None => !is_output_file(name),
+        }
     }
 
     /// The x-axis label for this item's space.
@@ -179,11 +387,20 @@ impl GraphItem {
             GraphItem::BkgK => "k (Å⁻¹)",
             // Restored from the saved file by `load_result`; this is the fallback.
             GraphItem::Result => "x",
+            GraphItem::Raw(_) => "Energy (eV)",
         }
     }
 
     /// The y-axis label for this item.
-    pub fn y_label(self) -> &'static str {
+    pub fn y_label(self) -> String {
+        if let GraphItem::Raw(ch) = self {
+            return ch.y_label();
+        }
+        self.fixed_y_label().into()
+    }
+
+    /// The y-axis label of the fixed (non-raw) items.
+    fn fixed_y_label(self) -> &'static str {
         match self {
             GraphItem::XmuF => "μ(E)",
             GraphItem::XmuNorm => "norm μ(E)",
@@ -195,6 +412,7 @@ impl GraphItem {
             GraphItem::BkgE => "μ₀(E)",
             GraphItem::BkgK => "μ₀−μ",
             GraphItem::Result => "y",
+            GraphItem::Raw(_) => "y",
         }
     }
 
@@ -246,13 +464,40 @@ pub struct LoadedTrace {
     pub y: Vec<f64>,
 }
 
-/// Read `path` as `item`, applying `kweight` to k-space items. The x grid is
-/// column 0 and the value is [`GraphItem::value_col`] (column 1 for most files,
-/// column 3 — `ampl` — for the R/q-space complex files); `*.xmu` `f'`/`f''`
-/// differentiate the value against the energy grid.
-pub fn load_trace(path: &Path, item: GraphItem, kweight: i32) -> Result<LoadedTrace, String> {
+/// Read `path` as `item`, applying `kweight` to k-space items and reading raw
+/// scans' monitors under `monitors`. The x grid is column 0 and the value is
+/// [`GraphItem::value_col`] (column 1 for most files, column 3 — `ampl` — for
+/// the R/q-space complex files); `*.xmu` `f'`/`f''` differentiate the value
+/// against the energy grid. A [`GraphItem::Raw`] item instead resolves its
+/// columns by label — see [`RawChannel`].
+pub fn load_trace(
+    path: &Path,
+    item: GraphItem,
+    kweight: i32,
+    monitors: MonitorPolicy,
+) -> Result<LoadedTrace, String> {
     let name = file_name(path);
     let cf = ColumnFile::from_path(path).map_err(|e| format!("{name}: {e}"))?;
+    if let GraphItem::Raw(ch) = item {
+        // A raw scan's energy column is found by label like every other channel;
+        // column 0 is the fallback for a scan whose labels don't name it.
+        let ex = cf.guess_roles().energy.unwrap_or(0);
+        let x = cf
+            .column(ex)
+            .ok_or_else(|| format!("{name}: no data columns"))?
+            .to_vec();
+        let y = ch
+            .values(&cf, monitors)
+            .map_err(|e| format!("{name}: {e}"))?;
+        return Ok(LoadedTrace {
+            path: path.to_path_buf(),
+            label: name,
+            item,
+            axis: None,
+            x,
+            y,
+        });
+    }
     let x = cf
         .column(0)
         .ok_or_else(|| format!("{name}: no data columns"))?
@@ -400,6 +645,157 @@ mod tests {
         assert!(GraphItem::XmuF.matches("SAMPLE.XMU"));
     }
 
+    /// A PLS-II transmission scan with an SDD array: tab-separated labels whose
+    /// channel names carry spaces, and a dropped I₀ point on the last row.
+    fn pls2_scan() -> String {
+        "PLS-II 7D XAFS\n\
+         Read-Energy(eV)\tCh1 (I0)\tCh2 (It)\tCh3 (If)\tCh4 (Ir)\tCh5 (Im)\t\
+         All Ch (ME-4)\tCh #-01\tCh #-02\tCh #-03\tCh #-04\n\
+         8900.0\t100000\t50000\t1200\t48000\t900\t4800\t1000\t1200\t1300\t1300\n\
+         8901.0\t100100\t50100\t1210\t48100\t910\t4840\t1010\t1210\t1310\t1310\n\
+         8902.0\t0\t50200\t1220\t48200\t920\t4880\t1020\t1220\t1320\t1320\n"
+            .to_string()
+    }
+
+    #[test]
+    fn raw_items_select_scans_and_exclude_our_own_outputs() {
+        let raw = GraphItem::Raw(RawChannel::Transmission);
+        assert!(raw.matches("PGT_Mn_S2_NCM50_W_Insitu.000"));
+        assert!(raw.matches("scan.001"));
+        assert!(raw.matches("data.txt"));
+        // Not our outputs — otherwise a raw overlay would list every .xmu the
+        // app has written into the same folder.
+        assert!(!raw.matches("sample.xmu"));
+        assert!(!raw.matches("samplek.chi"));
+        assert!(!raw.matches("samplee.bkg"));
+        assert!(!raw.matches("fit.FIT"));
+        // And the suffix-keyed items still do not claim a raw scan.
+        assert!(!GraphItem::XmuF.matches("scan.001"));
+    }
+
+    #[test]
+    fn raw_ratios_resolve_pls2_channels_by_label() {
+        let p = tmp("scan.000");
+        std::fs::write(&p, pls2_scan()).expect("write scan");
+
+        let trans = load_trace(
+            &p,
+            GraphItem::Raw(RawChannel::Transmission),
+            0,
+            MonitorPolicy::AsRecorded,
+        )
+        .expect("transmission");
+        assert_eq!(trans.x, [8900.0, 8901.0, 8902.0], "energy by label");
+        assert!((trans.y[0] - (100000.0f64 / 50000.0).ln()).abs() < 1e-12);
+
+        let refr = load_trace(
+            &p,
+            GraphItem::Raw(RawChannel::Reference),
+            0,
+            MonitorPolicy::AsRecorded,
+        )
+        .expect("reference");
+        assert!((refr.y[0] - (50000.0f64 / 48000.0).ln()).abs() < 1e-12);
+
+        let flu = load_trace(
+            &p,
+            GraphItem::Raw(RawChannel::Fluorescence),
+            0,
+            MonitorPolicy::AsRecorded,
+        )
+        .expect("fluorescence");
+        assert!((flu.y[0] - 1200.0 / 100000.0).abs() < 1e-12);
+
+        let sdd = load_trace(
+            &p,
+            GraphItem::Raw(RawChannel::FluorescenceSdd),
+            0,
+            MonitorPolicy::AsRecorded,
+        )
+        .expect("sdd fluorescence");
+        assert!((sdd.y[0] - 4800.0 / 100000.0).abs() < 1e-12);
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn raw_bare_channels_are_the_recorded_counts() {
+        let p = tmp("scan.001");
+        std::fs::write(&p, pls2_scan()).expect("write scan");
+
+        for (ch, want) in [
+            (RawChannel::Monitor(Monitor::I0), 100000.0),
+            (RawChannel::Monitor(Monitor::It), 50000.0),
+            (RawChannel::Monitor(Monitor::If), 1200.0),
+            (RawChannel::Monitor(Monitor::Ir), 48000.0),
+            (RawChannel::Monitor(Monitor::Im), 900.0),
+            (RawChannel::SddSum, 4800.0),
+            (RawChannel::SddElement(1), 1000.0),
+            (RawChannel::SddElement(4), 1300.0),
+        ] {
+            let t = load_trace(&p, GraphItem::Raw(ch), 0, MonitorPolicy::AsRecorded)
+                .unwrap_or_else(|e| panic!("{}: {e}", ch.label()));
+            assert_eq!(t.y[0], want, "{}", ch.label());
+        }
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn raw_clamp_applies_to_ratios_but_never_to_a_bare_channel() {
+        let p = tmp("scan.002");
+        std::fs::write(&p, pls2_scan()).expect("write scan");
+
+        // Row 2 has I₀ = 0: as recorded, ln(0/50200) is -inf.
+        let recorded = load_trace(
+            &p,
+            GraphItem::Raw(RawChannel::Transmission),
+            0,
+            MonitorPolicy::AsRecorded,
+        )
+        .expect("transmission");
+        assert!(recorded.y[2].is_infinite());
+
+        let clamped = load_trace(
+            &p,
+            GraphItem::Raw(RawChannel::Transmission),
+            0,
+            MonitorPolicy::ClampNonPositive,
+        )
+        .expect("transmission clamped");
+        assert!((clamped.y[2] - (1.0f64 / 50200.0).ln()).abs() < 1e-12);
+        assert!(clamped.y[0].is_finite() && (clamped.y[0] - recorded.y[0]).abs() < 1e-12);
+
+        // The point of a bare-channel view is to see what the detector wrote, so
+        // the dropped point stays a zero.
+        let bare = load_trace(
+            &p,
+            GraphItem::Raw(RawChannel::Monitor(Monitor::I0)),
+            0,
+            MonitorPolicy::ClampNonPositive,
+        )
+        .expect("i0");
+        assert_eq!(bare.y[2], 0.0, "recorded zero is not floored");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn a_missing_channel_names_itself_rather_than_plotting_nothing() {
+        // A plain transmission scan has no SDD columns.
+        let p = tmp("plain.000");
+        std::fs::write(&p, "# energy i0 it\n8900 100 50\n8901 101 51\n").expect("write");
+        let err = load_trace(
+            &p,
+            GraphItem::Raw(RawChannel::SddSum),
+            0,
+            MonitorPolicy::AsRecorded,
+        )
+        .err()
+        .expect("no SDD column");
+        assert!(err.contains("SDD all ch"), "err={err}");
+        let _ = std::fs::remove_file(&p);
+    }
+
     #[test]
     fn load_r_dat_reads_magnitude_column() {
         let p = tmp("r.dat");
@@ -411,7 +807,7 @@ mod tests {
         std::fs::write(&p, complex5_string("# t\r\n", "r", &r, &mag, &re, &im))
             .expect("write r.dat");
 
-        let t = load_trace(&p, GraphItem::DatR, 2).expect("load r.dat");
+        let t = load_trace(&p, GraphItem::DatR, 2, MonitorPolicy::AsRecorded).expect("load r.dat");
         assert_eq!(t.x, r);
         assert_eq!(
             t.y, mag,
@@ -455,7 +851,8 @@ mod tests {
         std::fs::write(&p, complex5_string(&header, "r", &r, &mag, &re, &im))
             .expect("write prov_r.dat");
 
-        let t = load_trace(&p, GraphItem::DatR, 2).expect("load prov_r.dat");
+        let t =
+            load_trace(&p, GraphItem::DatR, 2, MonitorPolicy::AsRecorded).expect("load prov_r.dat");
         assert_eq!(t.x, r, "axis column read past the provenance block");
         assert_eq!(t.y, mag, "ampl column read past the provenance block");
         let _ = std::fs::remove_file(&p);
@@ -468,7 +865,7 @@ mod tests {
         let chi = [1.0, 1.0, 1.0];
         std::fs::write(&p, chik_string("# t\r\n", &k, &chi)).expect("write k.chi");
 
-        let t = load_trace(&p, GraphItem::ChiK, 2).expect("load k.chi");
+        let t = load_trace(&p, GraphItem::ChiK, 2, MonitorPolicy::AsRecorded).expect("load k.chi");
         // k²·χ with χ ≡ 1 ⇒ y = k².
         assert!((t.y[0] - 1.0).abs() < 1e-9);
         assert!((t.y[1] - 4.0).abs() < 1e-9);
@@ -489,7 +886,7 @@ mod tests {
         let k = [1.0, 2.0, 4.0];
         let bkg = [0.5, 0.4, 0.3];
         std::fs::write(&p, chik_string("# t\r\n", &k, &bkg)).expect("write k.bkg");
-        let t = load_trace(&p, GraphItem::BkgK, 3).expect("load k.bkg");
+        let t = load_trace(&p, GraphItem::BkgK, 3, MonitorPolicy::AsRecorded).expect("load k.bkg");
         assert_eq!(t.x, k);
         assert_eq!(t.y, bkg, "k.bkg plots μ₀−μ as written, ignoring G_kweight");
         let _ = std::fs::remove_file(&p);
@@ -508,7 +905,8 @@ mod tests {
             .collect();
         std::fs::write(&p, chik_string("# t\r\n", &e, &mu)).expect("write xmu");
 
-        let t = load_trace(&p, GraphItem::XmuNorm, 0).expect("load xmu norm");
+        let t = load_trace(&p, GraphItem::XmuNorm, 0, MonitorPolicy::AsRecorded)
+            .expect("load xmu norm");
         assert_eq!(t.item, GraphItem::XmuNorm);
         assert_eq!(t.x.len(), e.len());
         assert!(t.y[0] < 0.2, "pre-edge norm ≈0, got {}", t.y[0]);
@@ -525,7 +923,8 @@ mod tests {
         let mu = [0.0, 3.0, 6.0, 9.0];
         std::fs::write(&p, chik_string("# t\r\n", &e, &mu)).expect("write xmu");
 
-        let t = load_trace(&p, GraphItem::XmuD1, 0).expect("load xmu f'");
+        let t =
+            load_trace(&p, GraphItem::XmuD1, 0, MonitorPolicy::AsRecorded).expect("load xmu f'");
         for d in &t.y {
             assert!((d - 3.0).abs() < 1e-9, "slope 3, got {d}");
         }
