@@ -283,9 +283,24 @@ fn guess_labels(header: &[String], ncols: usize) -> Vec<String> {
         return tagged.into_iter().map(|t| t.unwrap()).collect();
     }
 
-    // 2. Last non-empty header line, split on whitespace, if it has ncols tokens.
+    // 2. Last non-empty header line, split into `ncols` labels. The delimiter is
+    //    whichever of tab / comma / whitespace first yields exactly `ncols`
+    //    tokens. Whitespace cannot be tried first: a beamline label line is
+    //    tab-separated and its labels contain spaces of their own (`Ch1 (I0)`),
+    //    so splitting on whitespace shreds them into the wrong count and the
+    //    whole line is discarded for the `col1..colN` fallback.
     if let Some(last) = header.iter().rev().find(|l| !strip_comment(l).is_empty()) {
-        let toks: Vec<&str> = strip_comment(last).split_whitespace().collect();
+        let body = strip_comment(last);
+        for delim in ['\t', ','] {
+            if !body.contains(delim) {
+                continue;
+            }
+            let toks: Vec<&str> = body.split(delim).map(str::trim).collect();
+            if toks.len() == ncols {
+                return toks.into_iter().map(|s| s.to_string()).collect();
+            }
+        }
+        let toks: Vec<&str> = body.split_whitespace().collect();
         if toks.len() == ncols {
             return toks.into_iter().map(|s| s.to_string()).collect();
         }
@@ -366,6 +381,47 @@ mod tests {
         let roles = cf.guess_roles();
         assert_eq!(roles.energy, Some(0));
         assert_eq!(roles.i0, Some(1));
+    }
+
+    #[test]
+    fn tab_delimited_labels_keep_their_internal_spaces() {
+        // A PLS-II beamline scan: the label line is tab-separated and every
+        // channel label carries a space, so a whitespace split yields 9 tokens
+        // for 6 columns and the line would be discarded.
+        let text = "PLS-II 7D XAFS\nScan start: 2024-01-01\n\
+                    Energy(eV)\tCh1 (I0)\tCh2 (IT)\tCh3 (IF)\tCh4 (IR)\tCh5 (IM)\n\
+                    8900.0\t100000\t50000\t1200\t48000\t900\n\
+                    8901.0\t100100\t50100\t1210\t48100\t910\n";
+        let cf = ColumnFile::from_text(text).unwrap();
+        assert_eq!(cf.ncols(), 6);
+        assert_eq!(
+            cf.labels,
+            vec![
+                "Energy(eV)",
+                "Ch1 (I0)",
+                "Ch2 (IT)",
+                "Ch3 (IF)",
+                "Ch4 (IR)",
+                "Ch5 (IM)"
+            ]
+        );
+    }
+
+    #[test]
+    fn comma_delimited_labels_keep_their_internal_spaces() {
+        let text = "# energy (eV), i0 counts, it counts\n1.0,2.0,3.0\n4.0,5.0,6.0\n";
+        let cf = ColumnFile::from_text(text).unwrap();
+        assert_eq!(cf.labels, vec!["energy (eV)", "i0 counts", "it counts"]);
+    }
+
+    #[test]
+    fn single_column_header_line_is_not_swallowed_whole() {
+        // One column and a tab-free header line: the tab branch must not claim
+        // it (split yields 1 token == ncols), or "scan 1" becomes the label.
+        let text = "; scan 1\n1.0\n2.0\n";
+        let cf = ColumnFile::from_text(text).unwrap();
+        assert_eq!(cf.ncols(), 1);
+        assert_eq!(cf.labels, vec!["col1"]);
     }
 
     #[test]
