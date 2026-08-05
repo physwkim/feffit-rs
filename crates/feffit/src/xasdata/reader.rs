@@ -174,10 +174,9 @@ impl ColumnFile {
     /// left as `None`.
     pub fn guess_roles(&self) -> RoleGuess {
         let find = |keys: &[&str]| -> Option<usize> {
-            self.labels.iter().position(|l| {
-                let l = l.to_ascii_lowercase();
-                keys.iter().any(|k| l == *k)
-            })
+            self.labels
+                .iter()
+                .position(|l| match_forms(l).iter().any(|f| keys.contains(&f.as_str())))
         };
         let find_contains = |keys: &[&str]| -> Option<usize> {
             self.labels.iter().position(|l| {
@@ -192,7 +191,7 @@ impl ColumnFile {
                 .or_else(|| find_contains(&["itrans", "trans"])),
             iflu: find(&["if", "iflu", "ifluor"])
                 .or_else(|| find_contains(&["fluor", "fluo", "iff"])),
-            iref: find(&["iref", "i2", "iref2"]).or_else(|| find_contains(&["iref"])),
+            iref: find(&["iref", "ir", "i2", "iref2"]).or_else(|| find_contains(&["iref"])),
             mu: find(&["mu", "xmu", "mutrans", "norm"])
                 .or_else(|| find_contains(&["mutrans", "xmu"])),
         }
@@ -226,6 +225,30 @@ pub struct RoleGuess {
     pub iref: Option<usize>,
     /// A precomputed mu column, if the file already carries one.
     pub mu: Option<usize>,
+}
+
+/// The lowercased forms of a column label that role matching may key on: the
+/// label itself, the text inside its parentheses, and the text before them.
+///
+/// Beamlines name a channel by position and put the role in parentheses —
+/// `Ch2 (IT)` — while XDI names it outright — `itrans`. Reducing every label to
+/// this small set of forms lets one exact-match key list serve both, instead of
+/// a per-beamline branch or a substring test loose enough to match by accident.
+/// `Energy(eV)` is why the *before* form is kept as well as the *inside* one:
+/// there the parenthesised text is the unit, not the role.
+fn match_forms(label: &str) -> Vec<String> {
+    let full = label.trim().to_ascii_lowercase();
+    let mut forms = vec![full.clone()];
+    if let Some((before, rest)) = full.split_once('(')
+        && let Some((inside, _)) = rest.split_once(')')
+    {
+        for part in [inside.trim(), before.trim()] {
+            if !part.is_empty() {
+                forms.push(part.to_string());
+            }
+        }
+    }
+    forms
 }
 
 /// Split a line into floats. Returns `None` if the line is empty, begins with a
@@ -405,6 +428,44 @@ mod tests {
                 "Ch5 (IM)"
             ]
         );
+    }
+
+    #[test]
+    fn roles_come_from_parenthesised_channel_names() {
+        let text = "Energy(eV)\tCh1 (I0)\tCh2 (IT)\tCh3 (IF)\tCh4 (IR)\tCh5 (IM)\n\
+                    8900.0\t100000\t50000\t1200\t48000\t900\n\
+                    8901.0\t100100\t50100\t1210\t48100\t910\n";
+        let roles = ColumnFile::from_text(text).unwrap().guess_roles();
+        assert_eq!(roles.energy, Some(0));
+        assert_eq!(roles.i0, Some(1));
+        assert_eq!(roles.it, Some(2));
+        assert_eq!(roles.iflu, Some(3));
+        assert_eq!(roles.iref, Some(4));
+    }
+
+    #[test]
+    fn lowercase_channel_names_and_a_read_energy_label_resolve() {
+        // The other spelling the same beamline emits: `Read-Energy(eV)` (no
+        // exact `energy` form — the contains-fallback catches it) and mixed-case
+        // channel names.
+        let text = "Read-Energy(eV)\tCh1 (I0)\tCh2 (It)\tCh3 (If)\tCh4 (Ir)\n\
+                    8900.0\t100000\t50000\t1200\t48000\n\
+                    8901.0\t100100\t50100\t1210\t48100\n";
+        let roles = ColumnFile::from_text(text).unwrap().guess_roles();
+        assert_eq!(roles.energy, Some(0));
+        assert_eq!(roles.i0, Some(1));
+        assert_eq!(roles.it, Some(2));
+        assert_eq!(roles.iflu, Some(3));
+        assert_eq!(roles.iref, Some(4));
+    }
+
+    #[test]
+    fn match_forms_keeps_unit_suffixed_labels_and_drops_nothing_else() {
+        // `Energy(eV)` must resolve through the *before* form: its parenthesised
+        // text is a unit. `Ch2 (IT)` resolves through the *inside* form.
+        assert_eq!(match_forms("Energy(eV)"), ["energy(ev)", "ev", "energy"]);
+        assert_eq!(match_forms("Ch2 (IT)"), ["ch2 (it)", "it", "ch2"]);
+        assert_eq!(match_forms("itrans"), ["itrans"]);
     }
 
     #[test]
