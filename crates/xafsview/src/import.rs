@@ -9,7 +9,7 @@
 //! [`MuSpec`] for [`feffit::xasdata::build_mu`].
 
 use eframe::egui;
-use feffit::xasdata::{ColumnFile, MuSpec};
+use feffit::xasdata::{ColumnFile, MonitorPolicy, MuSpec};
 
 /// The measurement geometry the user selects.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,11 @@ pub struct ImportState {
     /// "Output file numbering": when batching several files into μ(E), append a
     /// sequential number to each written `.xmu` so the outputs stay distinct.
     pub number_outputs: bool,
+    /// "Clamp non-positive counts": floor every monitor channel at 1 before the
+    /// ratio or log. Off by default — it edits the recorded data — but a scan
+    /// with a dropped or negative ion-chamber point is otherwise all `NaN`/`inf`
+    /// at that point and drops out of the plot's autoscale.
+    pub clamp_monitors: bool,
     /// Forced header-line count, overriding the reader's auto-detection.
     /// `None` = auto-detect (per file, so a batch with varying header counts is
     /// handled); `Some(n)` = treat the first `n` lines as header for this file
@@ -81,6 +86,7 @@ impl ImportState {
             mu_col: roles.mu.unwrap_or(0),
             channels,
             number_outputs: false,
+            clamp_monitors: false,
             header_skip: None,
             file,
         }
@@ -102,6 +108,15 @@ impl ImportState {
             self.iref = self.iref.min(last);
             self.mu_col = self.mu_col.min(last);
             self.channels.resize(self.file.ncols().max(1), false);
+        }
+    }
+
+    /// The monitor-reading policy the current selection asks for.
+    pub fn monitor_policy(&self) -> MonitorPolicy {
+        if self.clamp_monitors {
+            MonitorPolicy::ClampNonPositive
+        } else {
+            MonitorPolicy::AsRecorded
         }
     }
 
@@ -253,6 +268,20 @@ impl ImportState {
             ImportMode::Raw => {
                 column_combo(ui, "imp_mu", "μ column", &mut self.mu_col, &labels);
             }
+        }
+
+        // Raw μ reads a precomputed column and never divides by a monitor, so the
+        // policy has nothing to act on there — don't offer a control that does
+        // nothing.
+        if self.mode != ImportMode::Raw {
+            ui.add_space(4.0);
+            ui.checkbox(&mut self.clamp_monitors, "Clamp non-positive counts to 1")
+                .on_hover_text(
+                    "A monitor reading ≤ 0 (dropped point, over-subtracted baseline) makes the \
+                 ratio non-finite and drops the scan out of the plot's autoscale. Flooring \
+                 those counts at 1 keeps the rest of the scan visible — but it edits the \
+                 recorded data, so leave it off unless the plot needs it.",
+                );
         }
     }
 }

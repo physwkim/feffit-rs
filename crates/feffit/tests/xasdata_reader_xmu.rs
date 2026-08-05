@@ -3,7 +3,7 @@
 //! own precomputed `mutrans` column, so building transmission `mu` from `i0`/
 //! `itrans` is checked directly against it — a self-contained parity test.
 
-use feffit::xasdata::{ColumnFile, MuSpec, build_mu};
+use feffit::xasdata::{ColumnFile, MonitorPolicy, MuSpec, build_mu};
 
 const XDI: &str = include_str!("data/cu_metal_rt.xdi");
 
@@ -41,7 +41,7 @@ fn transmission_mu_reproduces_file_mutrans_column() {
         i0: 1,
         it: 2,
     };
-    let (energy, mu) = build_mu(&cf, &spec).expect("build mu");
+    let (energy, mu) = build_mu(&cf, &spec, MonitorPolicy::AsRecorded).expect("build mu");
 
     let mutrans = cf.column(3).unwrap();
     assert_eq!(energy.len(), mu.len());
@@ -62,6 +62,11 @@ fn transmission_mu_reproduces_file_mutrans_column() {
 #[test]
 fn raw_mode_returns_mutrans_unchanged() {
     let cf = ColumnFile::from_text(XDI).expect("parse XDI");
-    let (_e, mu) = build_mu(&cf, &MuSpec::Raw { energy: 0, mu: 3 }).expect("raw mu");
+    let (_e, mu) = build_mu(
+        &cf,
+        &MuSpec::Raw { energy: 0, mu: 3 },
+        MonitorPolicy::AsRecorded,
+    )
+    .expect("raw mu");
     assert_eq!(mu, cf.column(3).unwrap().to_vec());
 }

@@ -2127,8 +2127,8 @@ mod tests {
 
     use feffit::feffdat::FeffDatFile;
     use feffit::xasdata::{
-        AutobkParams, ColumnFile, MuSpec, PreEdgeParams, XasGroup, autobk_group, build_mu,
-        normalize,
+        AutobkParams, ColumnFile, MonitorPolicy, MuSpec, PreEdgeParams, XasGroup, autobk_group,
+        build_mu, normalize,
     };
 
     // Workspace fixtures: a real Cu mu(E) and the two first-shell Cu Feff paths.
@@ -2139,7 +2139,12 @@ mod tests {
     /// Reduce cu.xmu to (k, chi) the same way the Autobk tab does.
     fn cu_kchi() -> (Vec<f64>, Vec<f64>) {
         let cf = ColumnFile::from_text(CU_XMU).expect("parse cu.xmu");
-        let (energy, mu) = build_mu(&cf, &MuSpec::Raw { energy: 0, mu: 1 }).unwrap();
+        let (energy, mu) = build_mu(
+            &cf,
+            &MuSpec::Raw { energy: 0, mu: 1 },
+            MonitorPolicy::AsRecorded,
+        )
+        .unwrap();
         let mut g = XasGroup::from_mu("cu", energy, mu);
         normalize(&mut g, &PreEdgeParams::default());
         autobk_group(&mut g, &AutobkParams::default(), 0.0);

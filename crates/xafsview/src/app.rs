@@ -435,11 +435,12 @@ impl XafsViewApp {
             return;
         };
         let spec = import.to_spec();
+        let monitors = import.monitor_policy();
         let input_path = import.file.path.clone();
         // Keep the raw source header so the AUTOBK / FEFFIT writers can echo the
         // original beamline metadata into their provenance block.
         let source_header = import.file.header.clone();
-        match feffit::xasdata::build_mu(&import.file, &spec) {
+        match feffit::xasdata::build_mu(&import.file, &spec, monitors) {
             Ok((energy, mu)) => {
                 let label = input_path
                     .as_deref()
@@ -924,6 +925,11 @@ impl XafsViewApp {
         // Apply the chooser's header-skip override to every batch file (None =
         // each file auto-detects its own header).
         let skip = self.import.as_ref().and_then(|i| i.header_skip);
+        // One monitor-reading rule for the whole batch, like the column mapping.
+        let monitors = self
+            .import
+            .as_ref()
+            .map_or_else(Default::default, |i| i.monitor_policy());
         // "Output file numbering": append a sequence number to each .xmu so the
         // batch outputs stay distinct (the original toggles this in the dialog).
         let number = self.import.as_ref().is_some_and(|i| i.number_outputs);
@@ -946,7 +952,7 @@ impl XafsViewApp {
             }
             let mut built: Vec<(XasGroup, Option<usize>)> = Vec::new();
             let mut build_fail: Vec<String> = Vec::new();
-            for (i, result) in feffit::xasdata::make_xmu_batch(&files, &spec)
+            for (i, result) in feffit::xasdata::make_xmu_batch(&files, &spec, monitors)
                 .into_iter()
                 .enumerate()
             {

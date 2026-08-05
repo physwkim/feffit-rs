@@ -28,7 +28,7 @@ pub use clean::{RangeSide, SmoothForm, deglitch_point, deglitch_range, smooth_mu
 pub use group::{Folders, Session, XasGroup};
 pub use reader::{ColumnFile, ReadError, RoleGuess, read_chi_dat};
 pub use reduce::{FtParams, XftrParams, autobk_group, normalize, xftf_group, xftr_group};
-pub use xmu::{MuSpec, XmuError, build_mu};
+pub use xmu::{MONITOR_FLOOR, MonitorPolicy, MuSpec, XmuError, build_mu};
 
 // Re-export the engine parameter/window types so downstream crates (the GUI,
 // batch tools) can drive reduction through `xasdata` alone.

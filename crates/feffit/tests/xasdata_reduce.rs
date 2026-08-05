@@ -5,7 +5,8 @@
 //! guards the field wiring.
 
 use feffit::xasdata::{
-    ColumnFile, FtParams, MuSpec, XasGroup, autobk_group, build_mu, normalize, xftf_group,
+    ColumnFile, FtParams, MonitorPolicy, MuSpec, XasGroup, autobk_group, build_mu, normalize,
+    xftf_group,
 };
 use feffit::xasproc::{AutobkParams, PreEdgeParams};
 
@@ -14,7 +15,12 @@ const CU_XMU: &str = include_str!("data/cu.xmu");
 fn cu_group() -> XasGroup {
     let cf = ColumnFile::from_text(CU_XMU).expect("parse cu.xmu");
     // cu.xmu is a two-column energy/mu file.
-    let (energy, mu) = build_mu(&cf, &MuSpec::Raw { energy: 0, mu: 1 }).unwrap();
+    let (energy, mu) = build_mu(
+        &cf,
+        &MuSpec::Raw { energy: 0, mu: 1 },
+        MonitorPolicy::AsRecorded,
+    )
+    .unwrap();
     XasGroup::from_mu("cu", energy, mu)
 }
 

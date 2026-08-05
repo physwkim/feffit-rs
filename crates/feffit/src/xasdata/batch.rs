@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use crate::xasdata::group::XasGroup;
 use crate::xasdata::reader::ColumnFile;
 use crate::xasdata::reduce::{FtParams, autobk_group, normalize, xftf_group};
-use crate::xasdata::xmu::{MuSpec, XmuError, build_mu};
+use crate::xasdata::xmu::{MonitorPolicy, MuSpec, XmuError, build_mu};
 use crate::xasproc::{AutobkParams, PreEdgeParams};
 
 /// Derive a group's base name from its source file path.
@@ -46,21 +46,26 @@ pub fn group_name_from_path(path: &Path) -> Option<String> {
     }
 }
 
-/// Build one [`XasGroup`] per file using a single shared [`MuSpec`] (one column
-/// mapping applied across files of the same layout — XAFSView's batch make-xmu).
+/// Build one [`XasGroup`] per file using a single shared [`MuSpec`] and
+/// [`MonitorPolicy`] (one column mapping and one monitor-reading rule applied
+/// across files of the same layout — XAFSView's batch make-xmu).
 ///
 /// Returns one result per input file in order; a file whose columns don't match
 /// the spec yields `Err(XmuError)` without aborting the rest. Each built group is
 /// labelled via [`group_name_from_path`] (so `sample.000`/`sample.001` scans stay
 /// distinct) and remembers its source path.
-pub fn make_xmu_batch(files: &[ColumnFile], spec: &MuSpec) -> Vec<Result<XasGroup, XmuError>> {
+pub fn make_xmu_batch(
+    files: &[ColumnFile],
+    spec: &MuSpec,
+    monitors: MonitorPolicy,
+) -> Vec<Result<XasGroup, XmuError>> {
     // Each file is independent; `par_iter().collect()` preserves input order, so
     // the caller's `files[i]` ↔ `result[i]` pairing (used for output numbering)
     // still holds.
     files
         .par_iter()
         .map(|cf| {
-            let (energy, mu) = build_mu(cf, spec)?;
+            let (energy, mu) = build_mu(cf, spec, monitors)?;
             let label = cf
                 .path
                 .as_deref()
@@ -247,7 +252,7 @@ mod tests {
         let b = ColumnFile::from_text("# e mu\n1 0.7\n2 1.1\n").unwrap();
         let one_col = ColumnFile::from_text("# e\n1\n2\n").unwrap();
         let spec = MuSpec::Raw { energy: 0, mu: 1 };
-        let out = make_xmu_batch(&[a, b, one_col], &spec);
+        let out = make_xmu_batch(&[a, b, one_col], &spec, MonitorPolicy::AsRecorded);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].as_ref().unwrap().mu, vec![0.5, 1.5]);
         assert_eq!(out[1].as_ref().unwrap().mu, vec![0.7, 1.1]);
@@ -257,7 +262,12 @@ mod tests {
     #[test]
     fn reduce_all_populates_k_chi_r() {
         let cf = ColumnFile::from_text(include_str!("../../tests/data/cu.xmu")).unwrap();
-        let (energy, mu) = build_mu(&cf, &MuSpec::Raw { energy: 0, mu: 1 }).unwrap();
+        let (energy, mu) = build_mu(
+            &cf,
+            &MuSpec::Raw { energy: 0, mu: 1 },
+            MonitorPolicy::AsRecorded,
+        )
+        .unwrap();
         let mut groups = vec![
             XasGroup::from_mu("a", energy.clone(), mu.clone()),
             XasGroup::from_mu("b", energy, mu),

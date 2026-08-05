@@ -15,7 +15,47 @@
 //! The arithmetic matches the convention used throughout XAFS (and reproduces
 //! the `mutrans` column of an XDI file to round-off — see the crate tests).
 
+use std::borrow::Cow;
+
 use crate::xasdata::reader::ColumnFile;
+
+/// The floor a monitor channel is raised to under
+/// [`MonitorPolicy::ClampNonPositive`].
+pub const MONITOR_FLOOR: f64 = 1.0;
+
+/// How a monitor channel's recorded counts are treated before they enter a
+/// ratio or a logarithm.
+///
+/// An ion chamber reading zero or negative — a dropped point, a baseline
+/// over-subtraction, a detector glitch — makes `ln(I0/It)` non-finite and takes
+/// the whole scan out of the plot's autoscale. Beamline viewers routinely floor
+/// such counts at 1 so the rest of the scan stays visible. That is a deliberate
+/// edit of the recorded data, so it is opt-in and named at every call site
+/// rather than passed as a bare `bool`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MonitorPolicy {
+    /// Use the counts as recorded. Non-positive values propagate as `NaN`/`inf`.
+    #[default]
+    AsRecorded,
+    /// Raise non-positive counts to [`MONITOR_FLOOR`] before any ratio or log.
+    ClampNonPositive,
+}
+
+impl MonitorPolicy {
+    /// The counts to use for `channel` under this policy. Borrows under
+    /// [`Self::AsRecorded`], so the default path does not allocate.
+    pub fn apply(self, channel: &[f64]) -> Cow<'_, [f64]> {
+        match self {
+            MonitorPolicy::AsRecorded => Cow::Borrowed(channel),
+            MonitorPolicy::ClampNonPositive => Cow::Owned(
+                channel
+                    .iter()
+                    .map(|&v| if v <= 0.0 { MONITOR_FLOOR } else { v })
+                    .collect(),
+            ),
+        }
+    }
+}
 
 /// How to turn the monitor columns into `mu(E)`.
 #[derive(Clone, Debug)]
@@ -93,35 +133,46 @@ impl MuSpec {
     }
 }
 
-/// Build `(energy, mu)` from `cf` per `spec`.
+/// Build `(energy, mu)` from `cf` per `spec`, reading the monitor channels under
+/// `monitors`.
 ///
-/// Non-positive inputs to a logarithm or a zero denominator yield non-finite
-/// values (`NaN`/`inf`) for those points rather than an error, matching the
-/// numpy-based reference; clean XAS data is strictly positive.
-pub fn build_mu(cf: &ColumnFile, spec: &MuSpec) -> Result<(Vec<f64>, Vec<f64>), XmuError> {
+/// Under [`MonitorPolicy::AsRecorded`] non-positive inputs to a logarithm or a
+/// zero denominator yield non-finite values (`NaN`/`inf`) for those points
+/// rather than an error, matching the numpy-based reference; clean XAS data is
+/// strictly positive. [`MonitorPolicy::ClampNonPositive`] floors those counts
+/// instead — see [`MonitorPolicy`].
+///
+/// The policy applies to every channel the formula divides by or takes the log
+/// of, including the summed fluorescence signal; [`MuSpec::Raw`] reads a
+/// precomputed `mu` rather than monitor counts and is unaffected.
+pub fn build_mu(
+    cf: &ColumnFile,
+    spec: &MuSpec,
+    monitors: MonitorPolicy,
+) -> Result<(Vec<f64>, Vec<f64>), XmuError> {
     let energy = col(cf, spec.energy_col())?.to_vec();
     let mu = match spec {
         MuSpec::Transmission { i0, it, .. } => {
-            let i0 = col(cf, *i0)?;
-            let it = col(cf, *it)?;
-            transmission_mu(i0, it)
+            let i0 = monitors.apply(col(cf, *i0)?);
+            let it = monitors.apply(col(cf, *it)?);
+            transmission_mu(&i0, &it)
         }
         MuSpec::Fluorescence { i0, channels, .. } => {
             if channels.is_empty() {
                 return Err(XmuError::NoChannels);
             }
-            let i0 = col(cf, *i0)?;
+            let i0 = monitors.apply(col(cf, *i0)?);
             let mut chans: Vec<&[f64]> = Vec::with_capacity(channels.len());
             for &c in channels {
                 chans.push(col(cf, c)?);
             }
-            let signal = sum_channels(&chans);
-            fluorescence_mu(&signal, i0)
+            let signal = monitors.apply(&sum_channels(&chans)).into_owned();
+            fluorescence_mu(&signal, &i0)
         }
         MuSpec::Reference { it, iref, .. } => {
-            let it = col(cf, *it)?;
-            let iref = col(cf, *iref)?;
-            transmission_mu(it, iref)
+            let it = monitors.apply(col(cf, *it)?);
+            let iref = monitors.apply(col(cf, *iref)?);
+            transmission_mu(&it, &iref)
         }
         MuSpec::Raw { mu, .. } => col(cf, *mu)?.to_vec(),
     };
@@ -170,7 +221,7 @@ mod tests {
             i0: 1,
             it: 2,
         };
-        let (e, mu) = build_mu(&cf, &spec).unwrap();
+        let (e, mu) = build_mu(&cf, &spec, MonitorPolicy::AsRecorded).unwrap();
         assert_eq!(e, vec![100.0, 200.0]);
         assert!((mu[0] - (10.0f64 / 5.0).ln()).abs() < 1e-15);
         assert!((mu[1] - (20.0f64 / 8.0).ln()).abs() < 1e-15);
@@ -185,16 +236,78 @@ mod tests {
             i0: 1,
             channels: vec![2, 3],
         };
-        let (_e, mu) = build_mu(&cf, &spec).unwrap();
+        let (_e, mu) = build_mu(&cf, &spec, MonitorPolicy::AsRecorded).unwrap();
         assert!((mu[0] - 7.0 / 100.0).abs() < 1e-15);
         assert!((mu[1] - 14.0 / 200.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn as_recorded_lets_a_non_positive_monitor_go_non_finite() {
+        // energy, i0, it — the second row's It is a dropped point.
+        let cf = ColumnFile::from_text("# energy i0 it\n100 10 5\n200 20 0\n").unwrap();
+        let spec = MuSpec::Transmission {
+            energy: 0,
+            i0: 1,
+            it: 2,
+        };
+        let (_e, mu) = build_mu(&cf, &spec, MonitorPolicy::AsRecorded).unwrap();
+        assert!((mu[0] - (10.0f64 / 5.0).ln()).abs() < 1e-15);
+        assert!(mu[1].is_infinite(), "ln(20/0) is +inf, got {}", mu[1]);
+    }
+
+    #[test]
+    fn clamp_floors_the_monitor_and_leaves_the_good_point_alone() {
+        let cf = ColumnFile::from_text("# energy i0 it\n100 10 5\n200 20 0\n").unwrap();
+        let spec = MuSpec::Transmission {
+            energy: 0,
+            i0: 1,
+            it: 2,
+        };
+        let (_e, mu) = build_mu(&cf, &spec, MonitorPolicy::ClampNonPositive).unwrap();
+        assert!(
+            (mu[0] - (10.0f64 / 5.0).ln()).abs() < 1e-15,
+            "unclamped row"
+        );
+        assert!((mu[1] - (20.0f64 / MONITOR_FLOOR).ln()).abs() < 1e-15);
+    }
+
+    #[test]
+    fn clamp_reaches_a_negative_denominator_and_the_fluorescence_signal() {
+        // A negative I0 (over-subtracted baseline) and a negative signal sum.
+        let cf = ColumnFile::from_text("# e i0 c1 c2\n1 -4 -3 -2\n2 200 6 8\n").unwrap();
+        let spec = MuSpec::Fluorescence {
+            energy: 0,
+            i0: 1,
+            channels: vec![2, 3],
+        };
+        let recorded = build_mu(&cf, &spec, MonitorPolicy::AsRecorded).unwrap().1;
+        assert!((recorded[0] - (-5.0 / -4.0)).abs() < 1e-15);
+        let clamped = build_mu(&cf, &spec, MonitorPolicy::ClampNonPositive)
+            .unwrap()
+            .1;
+        assert!((clamped[0] - (MONITOR_FLOOR / MONITOR_FLOOR)).abs() < 1e-15);
+        assert!(
+            (clamped[1] - 14.0 / 200.0).abs() < 1e-15,
+            "good row untouched"
+        );
+    }
+
+    #[test]
+    fn raw_ignores_the_monitor_policy() {
+        // Raw reads a precomputed mu, which is signed: clamping it would be wrong.
+        let cf = ColumnFile::from_text("# e mu\n1 -0.5\n2 1.5\n").unwrap();
+        let spec = MuSpec::Raw { energy: 0, mu: 1 };
+        let clamped = build_mu(&cf, &spec, MonitorPolicy::ClampNonPositive)
+            .unwrap()
+            .1;
+        assert_eq!(clamped, vec![-0.5, 1.5]);
     }
 
     #[test]
     fn raw_passes_column_through() {
         let cf = ColumnFile::from_text("# e mu\n1 0.5\n2 1.5\n").unwrap();
         let spec = MuSpec::Raw { energy: 0, mu: 1 };
-        let (_e, mu) = build_mu(&cf, &spec).unwrap();
+        let (_e, mu) = build_mu(&cf, &spec, MonitorPolicy::AsRecorded).unwrap();
         assert_eq!(mu, vec![0.5, 1.5]);
     }
 
@@ -206,7 +319,10 @@ mod tests {
             i0: 1,
             it: 9,
         };
-        assert_eq!(build_mu(&cf, &spec), Err(XmuError::BadColumn(9)));
+        assert_eq!(
+            build_mu(&cf, &spec, MonitorPolicy::AsRecorded),
+            Err(XmuError::BadColumn(9))
+        );
     }
 
     #[test]
@@ -217,7 +333,10 @@ mod tests {
             i0: 1,
             channels: vec![],
         };
-        assert_eq!(build_mu(&cf, &spec), Err(XmuError::NoChannels));
+        assert_eq!(
+            build_mu(&cf, &spec, MonitorPolicy::AsRecorded),
+            Err(XmuError::NoChannels)
+        );
     }
 
     #[test]
