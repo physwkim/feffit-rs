@@ -359,6 +359,9 @@ impl XafsViewApp {
             },
         );
         self.open_data.open = self.open_data.open && keep_open;
+        // The browser's delete confirmation is a top-level window so the detached
+        // viewport cannot clip it.
+        self.open_data.confirm_delete(ctx);
 
         // Keep the reading-format chooser pointed at the representative (first
         // staged) file: re-read only when it changes, so the user's column picks

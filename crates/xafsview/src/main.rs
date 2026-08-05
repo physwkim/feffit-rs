@@ -13,6 +13,7 @@ mod chi_io;
 mod clean_ui;
 mod feffit_batch;
 mod feffit_ui;
+mod file_browser;
 mod fonts;
 mod import;
 mod jobs;

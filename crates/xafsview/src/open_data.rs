@@ -1,12 +1,12 @@
 //! The unified "Open data" loader for the Autobk flow.
 //!
 //! One in-app window that replaces both the native OS file dialog and the old
-//! "Make μ(E) from files" picker. It is anchored on the Folders Data folder
-//! (Autobk only loads from there) and offers light Up/sub-folder navigation, a
-//! Plot Data-style two-pane transfer list (stage raw scan files on the right with
-//! `=>`, pull a wrong pick back with `<=`, Sort / Clear all), and — hosted by the
-//! app around this browser — the reading-format chooser
-//! ([`crate::import::ImportState`]) plus an **Autobk Start** button that builds
+//! "Make μ(E) from files" picker. It is anchored on the Folders Data folder and
+//! offers the shared [`FileBrowser`] — Up / sub-folder / Browse navigation, a
+//! two-pane transfer list (stage raw scan files on the right with `=>`, pull a
+//! wrong pick back with `<=`, Sort / Clear all, Delete) — plus, hosted by the app
+//! around this browser, the reading-format chooser
+//! ([`crate::import::ImportState`]) and an **Autobk Start** button that builds
 //! μ(E) for every staged file and reduces them.
 //!
 //! It lists **raw scan files only** (the `.xmu`/`.chi`/… outputs this app writes
@@ -15,35 +15,30 @@
 //! mapping applies to *every* staged file at build time, so the app previews the
 //! [`representative`](OpenDataBrowser::representative) (the first staged file).
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::widgets::{file_name_of, select_list};
+use crate::file_browser::FileBrowser;
 
 /// The Open-data loader's browse + staging state. The reading-format chooser and
 /// the Autobk Start button live on the app (they need
-/// [`crate::import::ImportState`] and the build path); this owns only the folder
-/// navigation and the two-pane selection.
-#[derive(Default)]
+/// [`crate::import::ImportState`] and the build path); this owns only the
+/// browser and the raw-scan filter it is listed under.
 pub struct OpenDataBrowser {
     /// Whether the loader window is shown.
     pub open: bool,
-    /// The folder being browsed.
-    dir: Option<PathBuf>,
-    /// Sub-folders in `dir` (for Up/enter navigation), sorted by name.
-    subdirs: Vec<PathBuf>,
-    /// Raw scan files in `dir` (outputs/dotfiles hidden), minus the staged ones.
-    available: Vec<PathBuf>,
-    /// Files staged in the "Selected Data" pane, built into groups on Autobk Start.
-    staged: Vec<PathBuf>,
-    /// Multi-select highlight in each pane.
-    avail_hi: HashSet<PathBuf>,
-    sel_hi: HashSet<PathBuf>,
-    /// Anchor row for shift-range selection in each pane (stale on list change).
-    avail_anchor: Option<usize>,
-    sel_anchor: Option<usize>,
+    /// Folder navigation + the two-pane selection.
+    browser: FileBrowser,
+}
+
+impl Default for OpenDataBrowser {
+    fn default() -> Self {
+        Self {
+            open: false,
+            browser: FileBrowser::new("od"),
+        }
+    }
 }
 
 impl OpenDataBrowser {
@@ -57,218 +52,62 @@ impl OpenDataBrowser {
     /// an empty dead-end.
     pub fn open_on(&mut self, dir: Option<PathBuf>, loaded: Vec<PathBuf>) {
         self.open = true;
-        if dir.is_some() {
-            self.dir = dir;
-        }
-        if self.dir.is_none() {
-            self.dir = std::env::current_dir().ok();
-        }
-        self.staged = loaded;
-        self.avail_hi.clear();
-        self.sel_hi.clear();
-        self.refresh();
+        self.browser.set_dir(dir);
+        self.browser.ensure_dir();
+        self.browser.set_staged(loaded);
+        self.browser.refresh(raw_scans);
     }
 
     /// The representative file for the reading-format panel: the first staged
     /// file. All staged files share one column mapping at build time, so the app
     /// previews and seeds columns from this one.
     pub fn representative(&self) -> Option<&PathBuf> {
-        self.staged.first()
+        self.browser.staged().first()
     }
 
     /// Whether anything is staged (gates the Autobk Start button).
     pub fn has_staged(&self) -> bool {
-        !self.staged.is_empty()
+        self.browser.has_staged()
     }
 
     /// Take the staged paths, leaving the set empty (called on Autobk Start).
     pub fn take_staged(&mut self) -> Vec<PathBuf> {
-        std::mem::take(&mut self.staged)
-    }
-
-    /// Re-list `dir` into `subdirs` + `available` (raw files minus the staged).
-    fn refresh(&mut self) {
-        self.avail_anchor = None;
-        self.sel_anchor = None;
-        self.subdirs.clear();
-        self.available.clear();
-        let Some(dir) = self.dir.clone() else {
-            return;
-        };
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = file_name_of(&path);
-            if name.starts_with('.') {
-                continue;
-            }
-            if path.is_dir() {
-                self.subdirs.push(path);
-                continue;
-            }
-            if !path.is_file() || is_output_file(&name) {
-                continue;
-            }
-            if self.staged.contains(&path) {
-                continue;
-            }
-            self.available.push(path);
-        }
-        self.subdirs.sort();
-        self.available.sort();
+        self.browser.take_staged()
     }
 
     /// Render the nav bar, sub-folders, and the two-pane staging list. Mutates the
     /// staged set; the caller reads [`representative`](Self::representative) /
     /// [`has_staged`](Self::has_staged) / [`take_staged`](Self::take_staged).
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        // A folder to navigate into (a sub-folder click) or up to (Up); applied
-        // after the render below.
-        let mut nav: Option<PathBuf> = None;
-
-        ui.horizontal(|ui| {
-            let parent = self
-                .dir
-                .as_ref()
-                .and_then(|d| d.parent())
-                .map(PathBuf::from);
-            if ui
-                .add_enabled(parent.is_some(), egui::Button::new("Up"))
-                .on_hover_text("Go to the parent folder")
-                .clicked()
-            {
-                nav = parent;
-            }
-            match &self.dir {
-                Some(d) => {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(d.display().to_string()).weak())
-                            .truncate(),
-                    );
-                }
-                None => {
-                    ui.weak("(no Data folder — set one in the Folders tab)");
-                }
-            }
-        });
-        if !self.subdirs.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                for d in &self.subdirs {
-                    if ui.small_button(format!("📁 {}", file_name_of(d))).clicked() {
-                        nav = Some(d.clone());
-                    }
-                }
-            });
+        if self
+            .browser
+            .nav_bar(ui, "(no Data folder — set one in the Folders tab)")
+        {
+            self.browser.refresh(raw_scans);
         }
         ui.separator();
-
-        let mut do_add = false;
-        let mut do_remove = false;
-        let mut do_sort = false;
-        let mut do_clear = false;
-
-        let pane_w = ((ui.available_width() - 72.0) * 0.5).max(150.0);
-        let list_h = 180.0;
-
         ui.horizontal_top(|ui| {
-            // LEFT — Available Data.
+            let pane_w = ((ui.available_width() - 72.0) * 0.5).max(150.0);
             ui.vertical(|ui| {
                 ui.set_width(pane_w);
                 ui.strong("Available Data");
-                egui::ScrollArea::vertical()
-                    .id_salt("od_avail")
-                    .max_height(list_h)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_min_width(pane_w);
-                        let avail = self.available.clone();
-                        select_list(ui, &avail, &mut self.avail_hi, &mut self.avail_anchor);
-                    });
             });
-
-            // MIDDLE — transfer buttons.
-            ui.vertical(|ui| {
-                ui.add_space(8.0);
-                if ui
-                    .button("=>")
-                    .on_hover_text("Stage highlighted for loading")
-                    .clicked()
-                {
-                    do_add = true;
-                }
-                if ui
-                    .button("<=")
-                    .on_hover_text("Remove highlighted from Selected")
-                    .clicked()
-                {
-                    do_remove = true;
-                }
-            });
-
-            // RIGHT — Selected Data, with Sort / Clear all.
-            ui.vertical(|ui| {
-                ui.set_width(pane_w);
-                ui.horizontal(|ui| {
-                    ui.strong("Selected Data");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Clear all").clicked() {
-                            do_clear = true;
-                        }
-                        if ui.button("Sort").clicked() {
-                            do_sort = true;
-                        }
-                    });
-                });
-                egui::ScrollArea::vertical()
-                    .id_salt("od_sel")
-                    .max_height(list_h)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_min_width(pane_w);
-                        let staged = self.staged.clone();
-                        select_list(ui, &staged, &mut self.sel_hi, &mut self.sel_anchor);
-                    });
-            });
+            ui.add_space(72.0 - ui.spacing().item_spacing.x * 2.0);
+            ui.vertical(|ui| ui.strong("Selected Data"));
         });
-
-        if do_add {
-            let moving: Vec<PathBuf> = self
-                .available
-                .iter()
-                .filter(|p| self.avail_hi.contains(*p))
-                .cloned()
-                .collect();
-            for p in moving {
-                if !self.staged.contains(&p) {
-                    self.staged.push(p);
-                }
-            }
-            self.avail_hi.clear();
-            self.refresh();
-        }
-        if do_remove {
-            self.staged.retain(|p| !self.sel_hi.contains(p));
-            self.sel_hi.clear();
-            self.refresh();
-        }
-        if do_sort {
-            self.staged.sort();
-            self.sel_anchor = None;
-        }
-        if do_clear {
-            self.staged.clear();
-            self.sel_hi.clear();
-            self.refresh();
-        }
-        if let Some(target) = nav {
-            // Keep the staged set across navigation so files can be gathered from
-            // several folders; only the current listing changes.
-            self.dir = Some(target);
-            self.refresh();
-        }
+        let _ = self.browser.panes(ui, 180.0, raw_scans);
     }
+
+    /// Render the browser's delete confirmation. Called from the app's window so
+    /// the modal is not clipped by the loader's panel.
+    pub fn confirm_delete(&mut self, ctx: &egui::Context) {
+        let _ = self.browser.confirm_delete(ctx, raw_scans);
+    }
+}
+
+/// The Open-data listing filter: raw scan files only.
+fn raw_scans(name: &str) -> bool {
+    !is_output_file(name)
 }
 
 /// True for the `.xmu` / `.chi` / `.dat` / `.fit` / `.bkg` files this app writes
