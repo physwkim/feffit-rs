@@ -111,12 +111,20 @@ impl AtomsTab {
 
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Title");
-                    // fill the row, clamped so a maximized window doesn't
-                    // sprawl the field across the whole central panel
-                    let w = ui.available_width().clamp(280.0, 480.0);
-                    ui.add(egui::TextEdit::singleline(&mut self.title).desired_width(w));
+                // Title grows with the window, capped so a maximized window
+                // doesn't sprawl the field across the whole central panel.
+                ui.scope(|ui| {
+                    ui.set_max_width(520.0);
+                    egui_flex::Flex::horizontal()
+                        .w_full()
+                        .id_salt("atoms_title")
+                        .show(ui, |flex| {
+                            crate::widgets::flex_label(flex, 36.0, "Title");
+                            flex.add(
+                                egui_flex::item().grow(1.0).basis(280.0),
+                                egui::TextEdit::singleline(&mut self.title),
+                            );
+                        });
                 });
 
                 ui.add_space(4.0);

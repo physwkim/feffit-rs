@@ -9,6 +9,7 @@
 //! [`FeffitUi::run`], which the app calls with the group's `k`/`chi`.
 
 use eframe::egui;
+use egui_flex::{Flex, item};
 use feffit::feffdat::FeffPath;
 use feffit::params::Parameters;
 use feffit::xasdata::Window;
@@ -1645,68 +1646,96 @@ impl FeffitUi {
                     ui.strong("Per-path parameters");
                     for (li, (base, hint)) in PATH_LOCALS.iter().copied().enumerate() {
                         let loc = &mut p.locals[li];
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut loc.enabled, "")
-                                .on_hover_text("use this parameter in the fit");
-                            ui.add_enabled_ui(loc.enabled, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(format!("{base}{}", idx + 1))
-                                            .monospace(),
-                                    )
-                                    .selectable(false),
-                                )
-                                .on_hover_text(hint);
-                                egui::ComboBox::from_id_salt(("ploc", idx, li))
-                                    .selected_text(kind_name(loc.kind))
-                                    .width(56.0)
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut loc.kind,
-                                            ParamKind::Vary,
-                                            "guess",
-                                        );
-                                        ui.selectable_value(&mut loc.kind, ParamKind::Fixed, "set");
-                                        ui.selectable_value(&mut loc.kind, ParamKind::Expr, "expr");
-                                    });
+                        Flex::horizontal()
+                            .w_full()
+                            .id_salt(egui::Id::new(("ploc_row", idx, li)))
+                            .show(ui, |flex| {
+                                flex.add_ui(item(), |ui| {
+                                    ui.checkbox(&mut loc.enabled, "")
+                                        .on_hover_text("use this parameter in the fit");
+                                });
+                                // name column: fixed basis so the kind combos align
+                                flex.add_ui(
+                                    item()
+                                        .enabled(loc.enabled)
+                                        .basis(56.0)
+                                        .align_self_content(egui::Align2::LEFT_CENTER),
+                                    |ui| {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(format!("{base}{}", idx + 1))
+                                                    .monospace(),
+                                            )
+                                            .selectable(false),
+                                        )
+                                        .on_hover_text(hint);
+                                    },
+                                );
+                                flex.add_ui(item().enabled(loc.enabled), |ui| {
+                                    egui::ComboBox::from_id_salt(("ploc", idx, li))
+                                        .selected_text(kind_name(loc.kind))
+                                        .width(56.0)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut loc.kind,
+                                                ParamKind::Vary,
+                                                "guess",
+                                            );
+                                            ui.selectable_value(
+                                                &mut loc.kind,
+                                                ParamKind::Fixed,
+                                                "set",
+                                            );
+                                            ui.selectable_value(
+                                                &mut loc.kind,
+                                                ParamKind::Expr,
+                                                "expr",
+                                            );
+                                        });
+                                });
                                 match loc.kind {
                                     ParamKind::Expr => {
-                                        // expressions can be long — fill the row
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut loc.expr)
-                                                .desired_width(ui.available_width()),
+                                        // expressions can be long — grow to fill the row
+                                        flex.add(
+                                            item().grow(1.0).basis(110.0).enabled(loc.enabled),
+                                            egui::TextEdit::singleline(&mut loc.expr),
                                         );
                                     }
                                     _ => {
-                                        ui.add(egui::DragValue::new(&mut loc.value).speed(0.001));
+                                        flex.add_ui(item().enabled(loc.enabled), |ui| {
+                                            ui.add(
+                                                egui::DragValue::new(&mut loc.value).speed(0.001),
+                                            );
+                                        });
                                     }
                                 }
                             });
-                        });
                     }
                     // Shared wiring: editable expressions over the global
                     // variables / the .dat file. The amplitude (amp·N) is derived
                     // from the N local unless a `.inp` import overrode it.
                     ui.add_space(2.0);
                     ui.strong("Wiring (shared)");
-                    // Size the expression fields from the box width, not the
-                    // shrink-wrapped grid cell (the Autobk field_w pattern).
-                    let field_w = (ui.available_width() - 70.0).clamp(150.0, 480.0);
-                    egui::Grid::new("feffit_path_wiring")
-                        .num_columns(2)
-                        .spacing([6.0, 4.0])
-                        .show(ui, |ui| {
-                            for (name, field) in [
-                                ("degen", &mut p.degen),
-                                ("e0", &mut p.e0),
-                                ("deltar", &mut p.deltar),
-                                ("ei", &mut p.ei),
-                            ] {
-                                ui.label(name);
-                                ui.add(egui::TextEdit::singleline(field).desired_width(field_w));
-                                ui.end_row();
-                            }
-                        });
+                    for (wi, (name, field)) in [
+                        ("degen", &mut p.degen),
+                        ("e0", &mut p.e0),
+                        ("deltar", &mut p.deltar),
+                        ("ei", &mut p.ei),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        Flex::horizontal()
+                            .w_full()
+                            .id_salt(egui::Id::new(("wiring_row", idx, wi)))
+                            .show(ui, |flex| {
+                                crate::widgets::flex_label(flex, 48.0, name);
+                                flex.add(
+                                    item().grow(1.0).basis(150.0),
+                                    egui::TextEdit::singleline(field),
+                                );
+                            });
+                    }
                     if let Some(s02) = &p.s02_override {
                         ui.weak(format!("s02 = {s02}  (from .inp)"));
                     }
@@ -1776,37 +1805,56 @@ impl FeffitUi {
             }
             let mut remove_param = None;
             for (i, row) in self.params.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut row.name).desired_width(72.0));
-                    egui::ComboBox::from_id_salt(("pkind", i))
-                        .selected_text(kind_name(row.kind))
-                        .width(64.0)
-                        .show_ui(ui, |ui| {
-                            // The original XAFSView's terminology: "guess" = a
-                            // refined free variable (larch `vary`), "set" = held
-                            // fixed (larch `fixed`).
-                            ui.selectable_value(&mut row.kind, ParamKind::Vary, "guess")
-                                .on_hover_text("refined free variable");
-                            ui.selectable_value(&mut row.kind, ParamKind::Fixed, "set")
-                                .on_hover_text("held fixed at its value");
-                            ui.selectable_value(&mut row.kind, ParamKind::Expr, "expr")
-                                .on_hover_text("a constraint expression");
+                // value/expr grows, so every row's delete box sits at the right
+                // edge in one aligned column.
+                Flex::horizontal()
+                    .w_full()
+                    .id_salt(egui::Id::new(("gvar_row", i)))
+                    .show(ui, |flex| {
+                        flex.add(
+                            item().basis(72.0),
+                            egui::TextEdit::singleline(&mut row.name),
+                        );
+                        flex.add_ui(item(), |ui| {
+                            egui::ComboBox::from_id_salt(("pkind", i))
+                                .selected_text(kind_name(row.kind))
+                                .width(64.0)
+                                .show_ui(ui, |ui| {
+                                    // The original XAFSView's terminology: "guess" = a
+                                    // refined free variable (larch `vary`), "set" = held
+                                    // fixed (larch `fixed`).
+                                    ui.selectable_value(&mut row.kind, ParamKind::Vary, "guess")
+                                        .on_hover_text("refined free variable");
+                                    ui.selectable_value(&mut row.kind, ParamKind::Fixed, "set")
+                                        .on_hover_text("held fixed at its value");
+                                    ui.selectable_value(&mut row.kind, ParamKind::Expr, "expr")
+                                        .on_hover_text("a constraint expression");
+                                });
                         });
-                    match row.kind {
-                        ParamKind::Vary | ParamKind::Fixed => {
-                            ui.add(egui::DragValue::new(&mut row.value).speed(0.01));
+                        match row.kind {
+                            ParamKind::Vary | ParamKind::Fixed => {
+                                flex.add_ui(
+                                    item()
+                                        .grow(1.0)
+                                        .align_self_content(egui::Align2::LEFT_CENTER),
+                                    |ui| {
+                                        ui.add(egui::DragValue::new(&mut row.value).speed(0.01));
+                                    },
+                                );
+                            }
+                            ParamKind::Expr => {
+                                flex.add(
+                                    item().grow(1.0).basis(120.0),
+                                    egui::TextEdit::singleline(&mut row.expr),
+                                );
+                            }
                         }
-                        ParamKind::Expr => {
-                            // fill the row, keeping the trailing delete box on it
-                            let w = ui.available_width()
-                                - (crate::widgets::DELETE_BOX_SIDE + ui.spacing().item_spacing.x);
-                            ui.add(egui::TextEdit::singleline(&mut row.expr).desired_width(w));
-                        }
-                    }
-                    if crate::widgets::delete_box(ui).clicked() {
-                        remove_param = Some(i);
-                    }
-                });
+                        flex.add_ui(item(), |ui| {
+                            if crate::widgets::delete_box(ui).clicked() {
+                                remove_param = Some(i);
+                            }
+                        });
+                    });
             }
             if let Some(i) = remove_param {
                 self.params.remove(i);

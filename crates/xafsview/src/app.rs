@@ -3,6 +3,7 @@
 //! Phase 0 wires the skeleton and makes the **Folders** tab functional.
 
 use eframe::egui;
+use egui_flex::{Flex, item};
 use feffit::xasdata::{ColumnFile, Folders, Session, XasGroup};
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
@@ -298,7 +299,7 @@ impl XafsViewApp {
             plot_sites,
             feff_inp: String::new(),
             clean_undo: Vec::new(),
-            last_tab: Tab::Folders,
+            last_tab: Tab::Atoms,
             status: Default::default(),
             jobs: Default::default(),
             ui_scale: DEFAULT_UI_SCALE,
@@ -2505,46 +2506,50 @@ impl XafsViewApp {
                             ui.strong("Data");
                             group_switched = self.current_group_selector(ui);
 
-                            // Size the Title / Output file fields from the box
-                            // width here, not inside a grid cell where the
-                            // available width is the shrink-wrapped column.
-                            // Reserve the label column, clamp so a narrow panel
-                            // keeps a usable field.
-                            let field_w = (ui.available_width() - 110.0).clamp(140.0, 480.0);
-
-                            // info rows: Title (group label) / Data File / Theory
-                            egui::Grid::new("autobk_info")
-                                .num_columns(2)
-                                .spacing([6.0, 4.0])
-                                .show(ui, |ui| {
-                                    ui.label("Title");
+                            // info rows: Title (group label) / Data File / Theory —
+                            // flex rows with a fixed label column (QFormLayout
+                            // look): the field grows with the panel.
+                            const INFO_LABEL_W: f32 = 80.0;
+                            Flex::horizontal()
+                                .w_full()
+                                .id_salt("autobk_title")
+                                .show(ui, |flex| {
+                                    crate::widgets::flex_label(flex, INFO_LABEL_W, "Title");
                                     match self.session.current_group_mut() {
                                         Some(g) => {
-                                            ui.add_sized(
-                                                [field_w, ui.spacing().interact_size.y],
+                                            flex.add(
+                                                item().grow(1.0).basis(140.0),
                                                 egui::TextEdit::singleline(&mut g.label),
                                             );
                                         }
                                         None => {
-                                            ui.weak("— no data —");
+                                            flex.add_ui(item(), |ui| {
+                                                ui.weak("— no data —");
+                                            });
                                         }
                                     }
-                                    ui.end_row();
-
-                                    ui.label("Data File");
-                                    match &data_file {
+                                });
+                            Flex::horizontal()
+                                .w_full()
+                                .id_salt("autobk_file")
+                                .show(ui, |flex| {
+                                    crate::widgets::flex_label(flex, INFO_LABEL_W, "Data File");
+                                    flex.add_ui(item(), |ui| match &data_file {
                                         Some(name) => {
                                             ui.monospace(name.as_str());
                                         }
                                         None => {
                                             ui.weak("—");
                                         }
-                                    }
-                                    ui.end_row();
-
-                                    ui.label("Output file");
-                                    ui.add_sized(
-                                        [field_w, ui.spacing().interact_size.y],
+                                    });
+                                });
+                            Flex::horizontal()
+                                .w_full()
+                                .id_salt("autobk_out")
+                                .show(ui, |flex| {
+                                    crate::widgets::flex_label(flex, INFO_LABEL_W, "Output file");
+                                    flex.add(
+                                        item().grow(1.0).basis(140.0),
                                         egui::TextEdit::singleline(&mut self.reduction.output_file)
                                             .hint_text("(auto)"),
                                     )
@@ -2552,10 +2557,13 @@ impl XafsViewApp {
                                         "AUTOBK Start writes <stem>k.chi (χ(k)) and \
                                      <stem>r.chi (χ(R)) into the Autobk folder",
                                     );
-                                    ui.end_row();
-
-                                    ui.label("Theory");
-                                    ui.horizontal(|ui| {
+                                });
+                            Flex::horizontal()
+                                .w_full()
+                                .id_salt("autobk_theory")
+                                .show(ui, |flex| {
+                                    crate::widgets::flex_label(flex, INFO_LABEL_W, "Theory");
+                                    flex.add_ui(item(), |ui| {
                                         if ui
                                             .button("Load…")
                                             .on_hover_text(
@@ -2578,7 +2586,6 @@ impl XafsViewApp {
                                             }
                                         }
                                     });
-                                    ui.end_row();
                                 });
                         }); // end Data box
                         if group_switched {
@@ -2956,95 +2963,65 @@ impl XafsViewApp {
                     );
                     ui.add_space(8.0);
 
-                    // Size the path field from the *panel* width here (full width,
-                    // since the scroll area's horizontal auto-shrink is off), not
-                    // from inside the grid cell where the available width is tiny.
-                    // Reserve room for the label + Browse columns, clamp so a narrow
-                    // window still shows a usable field and a wide one doesn't sprawl.
-                    let field_w = (ui.available_width() - 300.0).clamp(360.0, 760.0);
+                    // Flex form rows: fixed label column, path field growing
+                    // with the window, trailing Browse. Cap the row width so a
+                    // maximized window doesn't sprawl the fields.
+                    ui.scope(|ui| {
+                        ui.set_max_width(960.0);
 
-                    // Sub base row: a Browse pick — or a committed typed path that
-                    // already exists and differs from the current one — creates the
-                    // five subfolders and fills the rows below. A half-typed path is
-                    // not turned into a tree: only an existing directory is accepted.
-                    egui::Grid::new("subbase_grid")
-                        .num_columns(3)
-                        .spacing([8.0, 8.0])
-                        .show(ui, |ui| {
-                            ui.label("Sub base folder");
-                            let mut text = self
-                                .session
-                                .folders
-                                .sub_base
-                                .as_ref()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default();
-                            let resp = ui.add_sized(
-                                [field_w, ui.spacing().interact_size.y],
-                                egui::TextEdit::singleline(&mut text)
-                                    .hint_text("(pick a project folder)"),
-                            );
-                            if resp.lost_focus() && !text.trim().is_empty() {
-                                let p = std::path::PathBuf::from(text.trim());
-                                let unchanged =
-                                    self.session.folders.sub_base.as_deref() == Some(p.as_path());
-                                if !unchanged && p.is_dir() {
-                                    sub_base_pick = Some(p);
+                        // Sub base row: a Browse pick — or a committed typed path that
+                        // already exists and differs from the current one — creates the
+                        // five subfolders and fills the rows below. A half-typed path is
+                        // not turned into a tree: only an existing directory is accepted.
+                        Flex::horizontal()
+                            .w_full()
+                            .id_salt("sub_base_row")
+                            .show(ui, |flex| {
+                                crate::widgets::flex_label(flex, FOLDER_LABEL_W, "Sub base folder");
+                                let mut text = self
+                                    .session
+                                    .folders
+                                    .sub_base
+                                    .as_ref()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_default();
+                                let resp = flex.add(
+                                    item().grow(1.0).basis(360.0),
+                                    egui::TextEdit::singleline(&mut text)
+                                        .hint_text("(pick a project folder)"),
+                                );
+                                if resp.lost_focus() && !text.trim().is_empty() {
+                                    let p = std::path::PathBuf::from(text.trim());
+                                    let unchanged = self.session.folders.sub_base.as_deref()
+                                        == Some(p.as_path());
+                                    if !unchanged && p.is_dir() {
+                                        sub_base_pick = Some(p);
+                                    }
                                 }
-                            }
-                            if crate::widgets::action(ui, "Browse…", crate::widgets::BROWSE_BTN)
-                                .clicked()
-                                && let Some(picked) = rfd::FileDialog::new().pick_folder()
-                            {
-                                sub_base_pick = Some(picked);
-                            }
-                            ui.end_row();
-                        });
+                                flex.add_ui(item(), |ui| {
+                                    if crate::widgets::action(
+                                        ui,
+                                        "Browse…",
+                                        crate::widgets::BROWSE_BTN,
+                                    )
+                                    .clicked()
+                                        && let Some(picked) = rfd::FileDialog::new().pick_folder()
+                                    {
+                                        sub_base_pick = Some(picked);
+                                    }
+                                });
+                            });
 
-                    ui.add_space(6.0);
-                    ui.weak("Working folders (auto-filled from the sub base; each editable):");
-                    ui.add_space(4.0);
+                        ui.add_space(6.0);
+                        ui.weak("Working folders (auto-filled from the sub base; each editable):");
+                        ui.add_space(4.0);
 
-                    egui::Grid::new("folders_grid")
-                        .num_columns(3)
-                        .spacing([8.0, 8.0])
-                        .show(ui, |ui| {
-                            folder_row(
-                                ui,
-                                "Data folder",
-                                &mut self.session.folders.data_dir,
-                                field_w,
-                            );
-                            ui.end_row();
-                            folder_row(
-                                ui,
-                                "Autobk folder",
-                                &mut self.session.folders.autobk_dir,
-                                field_w,
-                            );
-                            ui.end_row();
-                            folder_row(
-                                ui,
-                                "Feffit folder",
-                                &mut self.session.folders.feffit_dir,
-                                field_w,
-                            );
-                            ui.end_row();
-                            folder_row(
-                                ui,
-                                "Atoms folder",
-                                &mut self.session.folders.atoms_dir,
-                                field_w,
-                            );
-                            ui.end_row();
-                            folder_row(
-                                ui,
-                                "Results folder",
-                                &mut self.session.folders.results_dir,
-                                field_w,
-                            );
-                            ui.end_row();
-                        });
+                        folder_row(ui, "Data folder", &mut self.session.folders.data_dir);
+                        folder_row(ui, "Autobk folder", &mut self.session.folders.autobk_dir);
+                        folder_row(ui, "Feffit folder", &mut self.session.folders.feffit_dir);
+                        folder_row(ui, "Atoms folder", &mut self.session.folders.atoms_dir);
+                        folder_row(ui, "Results folder", &mut self.session.folders.results_dir);
+                    });
                 });
         });
         if let Some(root) = sub_base_pick {
@@ -3295,43 +3272,49 @@ fn set_project_folders(folders: &mut Folders, root: &std::path::Path) -> Vec<Str
     errors
 }
 
-/// One labelled folder row: the current path (or "(not set)") and a Browse
-/// button that opens a native folder picker. `field_w` is the path field's
-/// forced width — see [`folders_panel`] for why it is forced rather than
-/// requested.
-fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBuf>, field_w: f32) {
-    ui.label(label);
-    // Editable path text (mirrors the original's typeable folder field), kept in
-    // sync with the PathBuf; an empty string clears it.
-    let mut text = dir
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    // `add_sized` forces the width: a singleline `TextEdit::desired_width` is only
-    // a *request* that egui clamps to `ui.available_width()` (builder.rs:471-475),
-    // and inside an `egui::Grid` the cell's available width is tiny — which
-    // collapsed the field to a sliver. `add_sized` allocates `field_w` outright.
-    let resp = ui.add_sized(
-        [field_w, ui.spacing().interact_size.y],
-        egui::TextEdit::singleline(&mut text).hint_text("(not set)"),
-    );
-    if resp.changed() {
-        *dir = if text.trim().is_empty() {
-            None
-        } else {
-            Some(std::path::PathBuf::from(text.clone()))
-        };
-    }
-    // A deep path can still outrun the field; show the whole path on hover so it
-    // stays readable.
-    if !text.is_empty() {
-        resp.on_hover_text(text);
-    }
-    if crate::widgets::action(ui, "Browse…", crate::widgets::BROWSE_BTN).clicked()
-        && let Some(picked) = rfd::FileDialog::new().pick_folder()
-    {
-        *dir = Some(picked);
-    }
+/// Label-column width of the Folders form rows ("Sub base folder" is the
+/// widest label).
+const FOLDER_LABEL_W: f32 = 110.0;
+
+/// One labelled folder row — a flex row: fixed label column, a path field
+/// growing with the window, and a trailing Browse button that opens a native
+/// folder picker.
+fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBuf>) {
+    Flex::horizontal()
+        .w_full()
+        .id_salt(egui::Id::new(label))
+        .show(ui, |flex| {
+            crate::widgets::flex_label(flex, FOLDER_LABEL_W, label);
+            // Editable path text (mirrors the original's typeable folder field), kept in
+            // sync with the PathBuf; an empty string clears it.
+            let mut text = dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let resp = flex.add(
+                item().grow(1.0).basis(360.0),
+                egui::TextEdit::singleline(&mut text).hint_text("(not set)"),
+            );
+            if resp.changed() {
+                *dir = if text.trim().is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(text.clone()))
+                };
+            }
+            // A deep path can still outrun the field; show the whole path on hover
+            // so it stays readable.
+            if !text.is_empty() {
+                resp.on_hover_text(text);
+            }
+            flex.add_ui(item(), |ui| {
+                if crate::widgets::action(ui, "Browse…", crate::widgets::BROWSE_BTN).clicked()
+                    && let Some(picked) = rfd::FileDialog::new().pick_folder()
+                {
+                    *dir = Some(picked);
+                }
+            });
+        });
 }
 
 /// Whether two paths point to the same file. Canonicalizes both (so case-folding

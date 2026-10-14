@@ -38,6 +38,20 @@ pub fn primary(ui: &mut egui::Ui, text: &str, size: Vec2, enabled: bool) -> Resp
     )
 }
 
+/// The label column of a Qt-style form row built with [`egui_flex`]: a fixed
+/// `width` cell holding a left-centered label, so stacked flex rows align
+/// their fields like a `QFormLayout` label column.
+pub fn flex_label(flex: &mut egui_flex::FlexInstance, width: f32, text: &str) {
+    flex.add_ui(
+        egui_flex::item()
+            .basis(width)
+            .align_self_content(egui::Align2::LEFT_CENTER),
+        |ui| {
+            ui.label(text);
+        },
+    );
+}
+
 /// A `ui.group` that spans the full available width, like a `QGroupBox`
 /// stacked in a vertical form layout. egui groups shrink-wrap to their
 /// content, which leaves ragged right edges when boxes stack in a side panel.
@@ -139,8 +153,7 @@ pub fn select_index_list<'a>(
 }
 
 /// Maximum side length of a [`delete_box`] (shrinks to the interact height).
-/// Public so a row can reserve its footprint when filling the width before it.
-pub const DELETE_BOX_SIDE: f32 = 18.0;
+const DELETE_BOX_SIDE: f32 = 18.0;
 
 /// A small square "remove" button: a bordered box with an ✕ painted inside.
 /// Painted rather than set from a glyph because the default UI fonts lack ✕
