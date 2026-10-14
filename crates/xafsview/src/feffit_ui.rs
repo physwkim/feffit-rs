@@ -1489,7 +1489,7 @@ impl FeffitUi {
         // --- Head param. (k/R Fourier-transform window) -------------------
         // Original XAFSView "Head param." block: kmin/rmin, kmax/rmax, dk/dr,
         // kweight/fit-space, k-window/R-window — two transform columns per row.
-        ui.group(|ui| {
+        crate::widgets::form_group(ui, |ui| {
             ui.strong("Transform");
             egui::Grid::new("feffit_head")
                 .num_columns(4)
@@ -1571,7 +1571,7 @@ impl FeffitUi {
         // state, label, and reff — is visible at once, and a click selects the
         // path whose parameter block shows below. `selected_path` still drives
         // the selection (and the auto-named `<base><index>` locals).
-        ui.group(|ui| {
+        crate::widgets::form_group(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.strong("Paths");
                 if ui.button("Add feff path…").clicked() {
@@ -1717,7 +1717,7 @@ impl FeffitUi {
         });
 
         // --- Global variables ---------------------------------------------
-        ui.group(|ui| {
+        crate::widgets::form_group(ui, |ui| {
             let mut adopt = false;
             let mut undo = false;
             ui.horizontal(|ui| {
@@ -1820,7 +1820,7 @@ impl FeffitUi {
         });
 
         // --- Graph (item / component / all-fits overlay) ------------------
-        ui.group(|ui| {
+        crate::widgets::form_group(ui, |ui| {
             ui.strong("Graph");
             ui.horizontal(|ui| {
                 ui.label("Graph item");
@@ -1878,7 +1878,7 @@ impl FeffitUi {
         });
 
         // --- Results (fit statistics + report pop-ups) --------------------
-        ui.group(|ui| {
+        crate::widgets::form_group(ui, |ui| {
             ui.strong("Results");
             // Freshness: the numbers below describe the *last* fit; warn when
             // the inputs were edited since, so stale statistics are not read as
