@@ -1671,9 +1671,10 @@ impl FeffitUi {
                                     });
                                 match loc.kind {
                                     ParamKind::Expr => {
+                                        // expressions can be long — fill the row
                                         ui.add(
                                             egui::TextEdit::singleline(&mut loc.expr)
-                                                .desired_width(110.0),
+                                                .desired_width(ui.available_width()),
                                         );
                                     }
                                     _ => {
@@ -1688,6 +1689,9 @@ impl FeffitUi {
                     // from the N local unless a `.inp` import overrode it.
                     ui.add_space(2.0);
                     ui.strong("Wiring (shared)");
+                    // Size the expression fields from the box width, not the
+                    // shrink-wrapped grid cell (the Autobk field_w pattern).
+                    let field_w = (ui.available_width() - 70.0).clamp(150.0, 480.0);
                     egui::Grid::new("feffit_path_wiring")
                         .num_columns(2)
                         .spacing([6.0, 4.0])
@@ -1699,7 +1703,7 @@ impl FeffitUi {
                                 ("ei", &mut p.ei),
                             ] {
                                 ui.label(name);
-                                ui.add(egui::TextEdit::singleline(field).desired_width(150.0));
+                                ui.add(egui::TextEdit::singleline(field).desired_width(field_w));
                                 ui.end_row();
                             }
                         });
@@ -1793,7 +1797,10 @@ impl FeffitUi {
                             ui.add(egui::DragValue::new(&mut row.value).speed(0.01));
                         }
                         ParamKind::Expr => {
-                            ui.add(egui::TextEdit::singleline(&mut row.expr).desired_width(120.0));
+                            // fill the row, keeping the trailing delete box on it
+                            let w = ui.available_width()
+                                - (crate::widgets::DELETE_BOX_SIDE + ui.spacing().item_spacing.x);
+                            ui.add(egui::TextEdit::singleline(&mut row.expr).desired_width(w));
                         }
                     }
                     if crate::widgets::delete_box(ui).clicked() {

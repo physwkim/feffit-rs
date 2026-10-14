@@ -113,7 +113,10 @@ impl AtomsTab {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Title");
-                    ui.add(egui::TextEdit::singleline(&mut self.title).desired_width(280.0));
+                    // fill the row, clamped so a maximized window doesn't
+                    // sprawl the field across the whole central panel
+                    let w = ui.available_width().clamp(280.0, 480.0);
+                    ui.add(egui::TextEdit::singleline(&mut self.title).desired_width(w));
                 });
 
                 ui.add_space(4.0);

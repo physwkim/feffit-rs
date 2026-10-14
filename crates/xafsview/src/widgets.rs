@@ -138,12 +138,16 @@ pub fn select_index_list<'a>(
     }
 }
 
+/// Maximum side length of a [`delete_box`] (shrinks to the interact height).
+/// Public so a row can reserve its footprint when filling the width before it.
+pub const DELETE_BOX_SIDE: f32 = 18.0;
+
 /// A small square "remove" button: a bordered box with an ✕ painted inside.
 /// Painted rather than set from a glyph because the default UI fonts lack ✕
 /// (U+2715) and every box-with-✕ codepoint (☒/⊠/╳), which would render as a
 /// missing-glyph tofu box. Use for any "remove this row" affordance.
 pub fn delete_box(ui: &mut egui::Ui) -> Response {
-    let side = ui.spacing().interact_size.y.min(18.0);
+    let side = ui.spacing().interact_size.y.min(DELETE_BOX_SIDE);
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let stroke = ui.style().interact(&resp).fg_stroke;
