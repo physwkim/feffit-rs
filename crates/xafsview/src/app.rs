@@ -190,6 +190,25 @@ pub struct XafsViewApp {
 /// across frames within a session without any extra app state.
 const DEFAULT_UI_SCALE: f32 = 1.2;
 
+/// Widen egui's stock spacing to desktop-form density (the Qt layout metrics
+/// the original XAFSView forms were designed around): egui's defaults are
+/// tuned for compact dev tooling — 18 px interact rows, 1 px button padding,
+/// 3 px between rows — which reads cramped next to a QFormLayout. Values are
+/// pre-zoom; [`DEFAULT_UI_SCALE`] scales them with the text. Applied to every
+/// theme so the light/dark toggle keeps the same metrics.
+fn apply_form_density(ctx: &egui::Context) {
+    ctx.all_styles_mut(|style| {
+        let s = &mut style.spacing;
+        s.item_spacing = egui::vec2(8.0, 6.0);
+        s.button_padding = egui::vec2(10.0, 4.0);
+        s.interact_size.y = 24.0;
+        s.icon_width = 16.0;
+        s.icon_spacing = 6.0;
+        s.window_margin = egui::Margin::same(8);
+        s.menu_margin = egui::Margin::same(8);
+    });
+}
+
 /// Refusal message when a batch trigger fires while the single job slot is
 /// taken ([`crate::jobs::JobRunner::start`] returned `false`).
 const JOB_BUSY: &str = "A background job is already running — wait for it to finish.";
@@ -209,6 +228,7 @@ impl XafsViewApp {
         // Start a touch larger than egui's default so the whole UI (text and
         // spacing) is more legible out of the box; the Settings menu adjusts it.
         cc.egui_ctx.set_zoom_factor(DEFAULT_UI_SCALE);
+        apply_form_density(&cc.egui_ctx);
 
         let render_state = cc
             .wgpu_render_state
