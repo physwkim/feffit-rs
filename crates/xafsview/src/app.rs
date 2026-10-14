@@ -2501,9 +2501,16 @@ impl XafsViewApp {
                         // plot (deferred to `group_switched` below so the replot is
                         // not called from inside the box closure).
                         let mut group_switched = false;
-                        ui.group(|ui| {
+                        crate::widgets::form_group(ui, |ui| {
                             ui.strong("Data");
                             group_switched = self.current_group_selector(ui);
+
+                            // Size the Title / Output file fields from the box
+                            // width here, not inside a grid cell where the
+                            // available width is the shrink-wrapped column.
+                            // Reserve the label column, clamp so a narrow panel
+                            // keeps a usable field.
+                            let field_w = (ui.available_width() - 110.0).clamp(140.0, 480.0);
 
                             // info rows: Title (group label) / Data File / Theory
                             egui::Grid::new("autobk_info")
@@ -2513,7 +2520,10 @@ impl XafsViewApp {
                                     ui.label("Title");
                                     match self.session.current_group_mut() {
                                         Some(g) => {
-                                            ui.text_edit_singleline(&mut g.label);
+                                            ui.add_sized(
+                                                [field_w, ui.spacing().interact_size.y],
+                                                egui::TextEdit::singleline(&mut g.label),
+                                            );
                                         }
                                         None => {
                                             ui.weak("— no data —");
@@ -2533,9 +2543,9 @@ impl XafsViewApp {
                                     ui.end_row();
 
                                     ui.label("Output file");
-                                    ui.add(
+                                    ui.add_sized(
+                                        [field_w, ui.spacing().interact_size.y],
                                         egui::TextEdit::singleline(&mut self.reduction.output_file)
-                                            .desired_width(180.0)
                                             .hint_text("(auto)"),
                                     )
                                     .on_hover_text(
@@ -2585,7 +2595,7 @@ impl XafsViewApp {
 
                         // --- Graph: graph type + comparison-overlay display options
                         // (Feffit's panel gathers its graph controls the same way).
-                        ui.group(|ui| {
+                        crate::widgets::form_group(ui, |ui| {
                             ui.strong("Graph");
                             let n = self.session.groups.len();
                             ui.horizontal(|ui| {

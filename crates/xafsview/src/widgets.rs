@@ -38,6 +38,19 @@ pub fn primary(ui: &mut egui::Ui, text: &str, size: Vec2, enabled: bool) -> Resp
     )
 }
 
+/// A `ui.group` that spans the full available width, like a `QGroupBox`
+/// stacked in a vertical form layout. egui groups shrink-wrap to their
+/// content, which leaves ragged right edges when boxes stack in a side panel.
+pub fn form_group<R>(
+    ui: &mut egui::Ui,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    ui.group(|ui| {
+        ui.set_width(ui.available_width());
+        add_contents(ui)
+    })
+}
+
 /// The bare file name of `path`, for picker lists and legends.
 pub fn file_name_of(path: &Path) -> String {
     path.file_name()
