@@ -52,7 +52,6 @@ xraydb = { workspace = true }
 
 # Run the per-group Feffit batch fits in parallel (each fit is independent).
 rayon = { workspace = true }
-egui_flex = "0.8"
 
 # Embed assets/icon.ico into the .exe as its Windows Explorer/taskbar file icon
 # (see build.rs). Gated to a Windows host: the resource compile needs the MSVC

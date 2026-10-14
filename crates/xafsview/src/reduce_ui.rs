@@ -247,7 +247,7 @@ impl ReductionUi {
     /// (`replot`, a cheap re-render).
     pub fn controls(&mut self, ui: &mut egui::Ui) -> ControlsChange {
         let mut change = ControlsChange::default();
-        crate::widgets::form_group(ui, |ui| {
+        rsplot::widget::form::group(ui, |ui| {
             ui.strong("Autobk parameters");
             ui.horizontal_top(|ui| {
                 // column 1: edge energy + pre-edge / normalization ranges

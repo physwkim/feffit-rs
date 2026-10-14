@@ -3,8 +3,8 @@
 //! Phase 0 wires the skeleton and makes the **Folders** tab functional.
 
 use eframe::egui;
-use egui_flex::{Flex, item};
 use feffit::xasdata::{ColumnFile, Folders, Session, XasGroup};
+use rsplot::widget::form;
 
 use crate::analysis_ui::{LcfWindow, PcaWindow};
 use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindow};
@@ -2502,7 +2502,7 @@ impl XafsViewApp {
                         // plot (deferred to `group_switched` below so the replot is
                         // not called from inside the box closure).
                         let mut group_switched = false;
-                        crate::widgets::form_group(ui, |ui| {
+                        rsplot::widget::form::group(ui, |ui| {
                             ui.strong("Data");
                             group_switched = self.current_group_selector(ui);
 
@@ -2510,83 +2510,67 @@ impl XafsViewApp {
                             // flex rows with a fixed label column (QFormLayout
                             // look): the field grows with the panel.
                             const INFO_LABEL_W: f32 = 80.0;
-                            Flex::horizontal()
-                                .w_full()
-                                .id_salt("autobk_title")
-                                .show(ui, |flex| {
-                                    crate::widgets::flex_label(flex, INFO_LABEL_W, "Title");
-                                    match self.session.current_group_mut() {
-                                        Some(g) => {
-                                            flex.add(
-                                                item().grow(1.0).basis(140.0),
-                                                egui::TextEdit::singleline(&mut g.label),
-                                            );
-                                        }
-                                        None => {
-                                            flex.add_ui(item(), |ui| {
-                                                ui.weak("— no data —");
-                                            });
+                            ui.horizontal(|ui| {
+                                form::label(ui, INFO_LABEL_W, "Title");
+                                match self.session.current_group_mut() {
+                                    Some(g) => {
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut g.label)
+                                                .desired_width(ui.available_width()),
+                                        );
+                                    }
+                                    None => {
+                                        ui.weak("— no data —");
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                form::label(ui, INFO_LABEL_W, "Data File");
+                                match &data_file {
+                                    Some(name) => {
+                                        ui.monospace(name.as_str());
+                                    }
+                                    None => {
+                                        ui.weak("—");
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                form::label(ui, INFO_LABEL_W, "Output file");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.reduction.output_file)
+                                        .hint_text("(auto)")
+                                        .desired_width(ui.available_width()),
+                                )
+                                .on_hover_text(
+                                    "AUTOBK Start writes <stem>k.chi (χ(k)) and \
+                                     <stem>r.chi (χ(R)) into the Autobk folder",
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                form::label(ui, INFO_LABEL_W, "Theory");
+                                if ui
+                                    .button("Load…")
+                                    .on_hover_text(
+                                        "FEFF chi.dat χ(k) standard that constrains \
+                                         the AUTOBK background (k_std/chi_std)",
+                                    )
+                                    .clicked()
+                                {
+                                    theory_pick = true;
+                                }
+                                match &theory_name {
+                                    Some(name) => {
+                                        ui.monospace(name.as_str());
+                                        if crate::widgets::delete_box(ui).clicked() {
+                                            theory_clear = true;
                                         }
                                     }
-                                });
-                            Flex::horizontal()
-                                .w_full()
-                                .id_salt("autobk_file")
-                                .show(ui, |flex| {
-                                    crate::widgets::flex_label(flex, INFO_LABEL_W, "Data File");
-                                    flex.add_ui(item(), |ui| match &data_file {
-                                        Some(name) => {
-                                            ui.monospace(name.as_str());
-                                        }
-                                        None => {
-                                            ui.weak("—");
-                                        }
-                                    });
-                                });
-                            Flex::horizontal()
-                                .w_full()
-                                .id_salt("autobk_out")
-                                .show(ui, |flex| {
-                                    crate::widgets::flex_label(flex, INFO_LABEL_W, "Output file");
-                                    flex.add(
-                                        item().grow(1.0).basis(140.0),
-                                        egui::TextEdit::singleline(&mut self.reduction.output_file)
-                                            .hint_text("(auto)"),
-                                    )
-                                    .on_hover_text(
-                                        "AUTOBK Start writes <stem>k.chi (χ(k)) and \
-                                     <stem>r.chi (χ(R)) into the Autobk folder",
-                                    );
-                                });
-                            Flex::horizontal()
-                                .w_full()
-                                .id_salt("autobk_theory")
-                                .show(ui, |flex| {
-                                    crate::widgets::flex_label(flex, INFO_LABEL_W, "Theory");
-                                    flex.add_ui(item(), |ui| {
-                                        if ui
-                                            .button("Load…")
-                                            .on_hover_text(
-                                                "FEFF chi.dat χ(k) standard that constrains \
-                                                 the AUTOBK background (k_std/chi_std)",
-                                            )
-                                            .clicked()
-                                        {
-                                            theory_pick = true;
-                                        }
-                                        match &theory_name {
-                                            Some(name) => {
-                                                ui.monospace(name.as_str());
-                                                if crate::widgets::delete_box(ui).clicked() {
-                                                    theory_clear = true;
-                                                }
-                                            }
-                                            None => {
-                                                ui.weak("(none)");
-                                            }
-                                        }
-                                    });
-                                });
+                                    None => {
+                                        ui.weak("(none)");
+                                    }
+                                }
+                            });
                         }); // end Data box
                         if group_switched {
                             self.replot_graph();
@@ -2602,7 +2586,7 @@ impl XafsViewApp {
 
                         // --- Graph: graph type + comparison-overlay display options
                         // (Feffit's panel gathers its graph controls the same way).
-                        crate::widgets::form_group(ui, |ui| {
+                        rsplot::widget::form::group(ui, |ui| {
                             ui.strong("Graph");
                             let n = self.session.groups.len();
                             ui.horizontal(|ui| {
@@ -2963,9 +2947,9 @@ impl XafsViewApp {
                     );
                     ui.add_space(8.0);
 
-                    // Flex form rows: fixed label column, path field growing
-                    // with the window, trailing Browse. Cap the row width so a
-                    // maximized window doesn't sprawl the fields.
+                    // Form rows: fixed label column, path field filling up to the
+                    // trailing Browse. Cap the row width so a maximized window
+                    // doesn't sprawl the fields.
                     ui.scope(|ui| {
                         ui.set_max_width(960.0);
 
@@ -2973,32 +2957,18 @@ impl XafsViewApp {
                         // already exists and differs from the current one — creates the
                         // five subfolders and fills the rows below. A half-typed path is
                         // not turned into a tree: only an existing directory is accepted.
-                        Flex::horizontal()
-                            .w_full()
-                            .id_salt("sub_base_row")
-                            .show(ui, |flex| {
-                                crate::widgets::flex_label(flex, FOLDER_LABEL_W, "Sub base folder");
-                                let mut text = self
-                                    .session
-                                    .folders
-                                    .sub_base
-                                    .as_ref()
-                                    .map(|p| p.display().to_string())
-                                    .unwrap_or_default();
-                                let resp = flex.add(
-                                    item().grow(1.0).basis(360.0),
-                                    egui::TextEdit::singleline(&mut text)
-                                        .hint_text("(pick a project folder)"),
-                                );
-                                if resp.lost_focus() && !text.trim().is_empty() {
-                                    let p = std::path::PathBuf::from(text.trim());
-                                    let unchanged = self.session.folders.sub_base.as_deref()
-                                        == Some(p.as_path());
-                                    if !unchanged && p.is_dir() {
-                                        sub_base_pick = Some(p);
-                                    }
-                                }
-                                flex.add_ui(item(), |ui| {
+                        ui.horizontal(|ui| {
+                            form::label(ui, FOLDER_LABEL_W, "Sub base folder");
+                            let mut text = self
+                                .session
+                                .folders
+                                .sub_base
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default();
+                            let resp = form::fill(
+                                ui,
+                                |ui| {
                                     if crate::widgets::action(
                                         ui,
                                         "Browse…",
@@ -3009,8 +2979,24 @@ impl XafsViewApp {
                                     {
                                         sub_base_pick = Some(picked);
                                     }
-                                });
-                            });
+                                },
+                                |ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut text)
+                                            .hint_text("(pick a project folder)")
+                                            .desired_width(ui.available_width()),
+                                    )
+                                },
+                            );
+                            if resp.lost_focus() && !text.trim().is_empty() {
+                                let p = std::path::PathBuf::from(text.trim());
+                                let unchanged =
+                                    self.session.folders.sub_base.as_deref() == Some(p.as_path());
+                                if !unchanged && p.is_dir() {
+                                    sub_base_pick = Some(p);
+                                }
+                            }
+                        });
 
                         ui.add_space(6.0);
                         ui.weak("Working folders (auto-filled from the sub base; each editable):");
@@ -3276,45 +3262,47 @@ fn set_project_folders(folders: &mut Folders, root: &std::path::Path) -> Vec<Str
 /// widest label).
 const FOLDER_LABEL_W: f32 = 110.0;
 
-/// One labelled folder row — a flex row: fixed label column, a path field
-/// growing with the window, and a trailing Browse button that opens a native
-/// folder picker.
+/// One labelled folder row — fixed label column, a path field filling up to
+/// the trailing Browse button that opens a native folder picker.
 fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBuf>) {
-    Flex::horizontal()
-        .w_full()
-        .id_salt(egui::Id::new(label))
-        .show(ui, |flex| {
-            crate::widgets::flex_label(flex, FOLDER_LABEL_W, label);
-            // Editable path text (mirrors the original's typeable folder field), kept in
-            // sync with the PathBuf; an empty string clears it.
-            let mut text = dir
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            let resp = flex.add(
-                item().grow(1.0).basis(360.0),
-                egui::TextEdit::singleline(&mut text).hint_text("(not set)"),
-            );
-            if resp.changed() {
-                *dir = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(std::path::PathBuf::from(text.clone()))
-                };
-            }
-            // A deep path can still outrun the field; show the whole path on hover
-            // so it stays readable.
-            if !text.is_empty() {
-                resp.on_hover_text(text);
-            }
-            flex.add_ui(item(), |ui| {
+    ui.horizontal(|ui| {
+        form::label(ui, FOLDER_LABEL_W, label);
+        // Editable path text (mirrors the original's typeable folder field), kept in
+        // sync with the PathBuf; an empty string clears it.
+        let mut text = dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let resp = form::fill(
+            ui,
+            |ui| {
                 if crate::widgets::action(ui, "Browse…", crate::widgets::BROWSE_BTN).clicked()
                     && let Some(picked) = rfd::FileDialog::new().pick_folder()
                 {
                     *dir = Some(picked);
                 }
-            });
-        });
+            },
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .hint_text("(not set)")
+                        .desired_width(ui.available_width()),
+                )
+            },
+        );
+        if resp.changed() {
+            *dir = if text.trim().is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(text.clone()))
+            };
+        }
+        // A deep path can still outrun the field; show the whole path on hover
+        // so it stays readable.
+        if !text.is_empty() {
+            resp.on_hover_text(text);
+        }
+    });
 }
 
 /// Whether two paths point to the same file. Canonicalizes both (so case-folding

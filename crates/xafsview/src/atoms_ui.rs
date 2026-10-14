@@ -115,16 +115,13 @@ impl AtomsTab {
                 // doesn't sprawl the field across the whole central panel.
                 ui.scope(|ui| {
                     ui.set_max_width(520.0);
-                    egui_flex::Flex::horizontal()
-                        .w_full()
-                        .id_salt("atoms_title")
-                        .show(ui, |flex| {
-                            crate::widgets::flex_label(flex, 36.0, "Title");
-                            flex.add(
-                                egui_flex::item().grow(1.0).basis(280.0),
-                                egui::TextEdit::singleline(&mut self.title),
-                            );
-                        });
+                    ui.horizontal(|ui| {
+                        rsplot::widget::form::label(ui, 36.0, "Title");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.title)
+                                .desired_width(ui.available_width()),
+                        );
+                    });
                 });
 
                 ui.add_space(4.0);

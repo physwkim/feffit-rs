@@ -38,33 +38,6 @@ pub fn primary(ui: &mut egui::Ui, text: &str, size: Vec2, enabled: bool) -> Resp
     )
 }
 
-/// The label column of a Qt-style form row built with [`egui_flex`]: a fixed
-/// `width` cell holding a left-centered label, so stacked flex rows align
-/// their fields like a `QFormLayout` label column.
-pub fn flex_label(flex: &mut egui_flex::FlexInstance, width: f32, text: &str) {
-    flex.add_ui(
-        egui_flex::item()
-            .basis(width)
-            .align_self_content(egui::Align2::LEFT_CENTER),
-        |ui| {
-            ui.label(text);
-        },
-    );
-}
-
-/// A `ui.group` that spans the full available width, like a `QGroupBox`
-/// stacked in a vertical form layout. egui groups shrink-wrap to their
-/// content, which leaves ragged right edges when boxes stack in a side panel.
-pub fn form_group<R>(
-    ui: &mut egui::Ui,
-    add_contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::InnerResponse<R> {
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
-        add_contents(ui)
-    })
-}
-
 /// The bare file name of `path`, for picker lists and legends.
 pub fn file_name_of(path: &Path) -> String {
     path.file_name()
