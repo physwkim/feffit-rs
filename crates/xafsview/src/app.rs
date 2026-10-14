@@ -1482,7 +1482,7 @@ impl XafsViewApp {
         egui::Panel::left("feffit_controls")
             .resizable(true)
             .default_size(380.0)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     // `controls` hosts the Graph section's "Show all fits" checkbox
                     // (shown only for >1 group); computing the group count up front
@@ -1538,7 +1538,7 @@ impl XafsViewApp {
             let (min, max) = self.feffit.range_window();
             crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
         }
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });
         if self.feffit.show_range
@@ -2469,8 +2469,8 @@ impl XafsViewApp {
         egui::Panel::left("autobk_controls")
             .resizable(true)
             .default_size(360.0)
-            .show_inside(ui, |ui| {
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+            .show(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Autobk");
 
@@ -2708,7 +2708,7 @@ impl XafsViewApp {
         if let Some((min, max)) = active_window {
             crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
         }
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });
         if let Some(w) = crate::plot::take_window_drag(&mut self.plot) {
@@ -2906,7 +2906,7 @@ impl XafsViewApp {
     /// editable individually.
     fn folders_panel(&mut self, ui: &mut egui::Ui) {
         let mut sub_base_pick: Option<std::path::PathBuf> = None;
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // `auto_shrink` off on the horizontal axis: otherwise the scroll area
             // collapses its width to the content, which clamps the path fields'
             // `desired_width` down to a sliver (the "folder name too small" bug).
@@ -3042,13 +3042,13 @@ impl eframe::App for XafsViewApp {
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
 
-        egui::Panel::top("menubar").show_inside(ui, |ui| {
+        egui::Panel::top("menubar").show(ui, |ui| {
             self.menu_bar(ui);
         });
 
         // Horizontal tab strip directly under the menu bar, in analysis-flow
         // order (Folders … About) rather than a vertical side list.
-        egui::Panel::top("tabs").show_inside(ui, |ui| {
+        egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 for tab in Tab::ALL {
@@ -3082,7 +3082,7 @@ impl eframe::App for XafsViewApp {
 
         // The common error/status strip at the top of the body (below the tabs),
         // matching XAFSView's shared text line shown on every tab.
-        egui::Panel::top("status").show_inside(ui, |ui| {
+        egui::Panel::top("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // A running background job shows its spinner + progress ahead
                 // of the status line.
@@ -3121,7 +3121,7 @@ impl eframe::App for XafsViewApp {
             self.session.folders.data_dir.as_deref(),
         );
 
-        egui::CentralPanel::default().show_inside(ui, |ui| match self.tab {
+        egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Folders => self.folders_panel(ui),
             Tab::Autobk => self.autobk_tab(ui),
             Tab::Feffit => self.feffit_tab(ui),

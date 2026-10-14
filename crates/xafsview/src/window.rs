@@ -47,7 +47,7 @@ pub fn detached(
     mut add_contents: impl FnMut(&mut egui::Ui),
 ) {
     detached_panels(ctx, id_source, title, open, default_size, |ui| {
-        egui::CentralPanel::default().show_inside(ui, |ui| add_contents(ui));
+        egui::CentralPanel::default().show(ui, |ui| add_contents(ui));
     });
 }
 

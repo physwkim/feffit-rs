@@ -258,7 +258,7 @@ impl PlotDataWindow {
                 egui::Panel::right("pd_controls")
                     .resizable(true)
                     .default_size(300.0)
-                    .show_inside(ui, |ui| {
+                    .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             self.controls_column(ui);
                         });
@@ -268,7 +268,7 @@ impl PlotDataWindow {
                 if self.take_dirty() {
                     self.rebuild();
                 }
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     crate::plot::show(&mut self.plot, ui);
                 });
             },

@@ -563,7 +563,7 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                         egui::ScrollArea::vertical()
                             .max_height((area.height() - 2.0 * PAD).max(40.0))
                             .scroll_source(egui::scroll_area::ScrollSource {
-                                drag: false,
+                                drag: egui::scroll_area::DragScroll::Never,
                                 ..Default::default()
                             })
                             .show(ui, |ui| {

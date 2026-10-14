@@ -131,10 +131,10 @@ impl LcfWindow {
                 egui::Panel::left("lcf_controls")
                     .resizable(true)
                     .default_size(280.0)
-                    .show_inside(ui, |ui| {
+                    .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui, groups));
                     });
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     if self.dirty {
                         self.rebuild_plot(groups);
                         self.dirty = false;
@@ -408,10 +408,10 @@ impl PcaWindow {
                 egui::Panel::left("pca_controls")
                     .resizable(true)
                     .default_size(280.0)
-                    .show_inside(ui, |ui| {
+                    .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui, groups));
                     });
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     if self.dirty {
                         self.rebuild_plot(groups);
                         self.dirty = false;
