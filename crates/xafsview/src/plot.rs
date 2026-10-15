@@ -1305,24 +1305,34 @@ fn draw_pick_readout(ui: &egui::Ui, area: egui::Rect, pick: &Pick, data_bg: egui
     } else {
         egui::Color32::from_gray(0x20)
     };
-    let text = format!(
-        "{}   x = {}, y = {}",
-        pick.label,
-        rsplot::format_value(pick.x),
-        rsplot::format_value(pick.y)
-    );
     let font = egui::FontId::proportional(11.0);
-    let galley = painter.layout_no_wrap(text, font, fg);
     let pad = egui::vec2(4.0, 2.0);
     // A colour swatch keys the readout to the picked curve (matching its legend row).
     const SWATCH: f32 = 8.0;
     const GAP: f32 = 5.0;
-    let size = egui::vec2(
-        galley.size().x + SWATCH + GAP + pad.x * 2.0,
-        galley.size().y + pad.y * 2.0,
-    );
     // Pin to the bottom-left of the data area, inset so it clears the axes.
     const INSET: f32 = 4.0;
+    // The coordinates are the point of the readout, so they are laid out
+    // first and the curve name gets whatever width is left, elided with an
+    // ellipsis — a long scan name on a narrow plot used to push "y = …" past
+    // the clip edge.
+    let coords = painter.layout_no_wrap(
+        format!(
+            "   x = {}, y = {}",
+            rsplot::format_value(pick.x),
+            rsplot::format_value(pick.y)
+        ),
+        font.clone(),
+        fg,
+    );
+    let label_w =
+        (area.width() - 2.0 * INSET - SWATCH - GAP - pad.x * 2.0 - coords.size().x).max(0.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(pick.label.clone(), font, fg);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(label_w);
+    let label = painter.layout_job(job);
+    let text_w = label.size().x + coords.size().x;
+    let text_h = label.size().y.max(coords.size().y);
+    let size = egui::vec2(text_w + SWATCH + GAP + pad.x * 2.0, text_h + pad.y * 2.0);
     let min = egui::pos2(area.left() + INSET, area.bottom() - INSET - size.y);
     let box_bg = if dark_canvas {
         egui::Color32::from_black_alpha(0xc8)
@@ -1336,11 +1346,10 @@ fn draw_pick_readout(ui: &egui::Ui, area: egui::Rect, pick: &Pick, data_bg: egui
     );
     let swatch_center = egui::pos2(min.x + pad.x + SWATCH * 0.5, min.y + size.y * 0.5);
     painter.circle_filled(swatch_center, SWATCH * 0.5, pick.color);
-    painter.galley(
-        egui::pos2(min.x + pad.x + SWATCH + GAP, min.y + pad.y),
-        galley,
-        fg,
-    );
+    let text_min = egui::pos2(min.x + pad.x + SWATCH + GAP, min.y + pad.y);
+    let label_w = label.size().x;
+    painter.galley(text_min, label, fg);
+    painter.galley(text_min + egui::vec2(label_w, 0.0), coords, fg);
 }
 
 /// A toolbar toggle button for the crosshair guide lines drawn by
