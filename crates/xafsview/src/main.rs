@@ -16,6 +16,7 @@ mod feffit_ui;
 mod file_browser;
 mod fonts;
 mod import;
+mod insitu_ui;
 mod jobs;
 mod mback_ui;
 mod mcp;

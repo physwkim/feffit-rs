@@ -325,8 +325,9 @@ fn to_color_image(wt: &WaveletTransform) -> egui::ColorImage {
     egui::ColorImage::new([w, h], pixels)
 }
 
-/// A compact plasma-style colormap for `t ∈ [0, 1]`.
-fn plasma(t: f64) -> Color32 {
+/// A compact plasma-style colormap for `t ∈ [0, 1]` (shared with the In-situ
+/// map's unsigned channel).
+pub(crate) fn plasma(t: f64) -> Color32 {
     const STOPS: [(f64, [u8; 3]); 5] = [
         (0.00, [13, 8, 135]),
         (0.25, [126, 3, 168]),

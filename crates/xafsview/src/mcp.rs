@@ -90,6 +90,10 @@ pub enum McpRequest {
     GetResults {
         reply: TextReply,
     },
+    InsituMap {
+        args: Box<InsituMapArgs>,
+        reply: TextReply,
+    },
     Screenshot {
         reply: PngReply,
     },
@@ -287,6 +291,30 @@ pub struct ParamSpec {
     pub value: Option<f64>,
     /// Constraint expression, for "expr".
     pub expr: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct InsituMapArgs {
+    /// Map channel built from the loaded groups, in series (load) order:
+    /// "rdf" (default — each group's |χ(R)| from the forward FT) or "xanes"
+    /// (normalized μ(E) interpolated onto a common energy grid).
+    pub channel: Option<String>,
+    /// Instead of the loaded groups, open a BL10C series .dat file: RDF
+    /// (x + one column per scan) or XANES ((E, μ) column pairs).
+    pub file: Option<String>,
+    /// Reference scan (1-based, series order): the map shows value − reference
+    /// (the Sub map, diverging colors). Omit for the plain map.
+    pub reference: Option<usize>,
+    /// XANES grid start (eV); seeded from the data when omitted.
+    pub e_start: Option<f64>,
+    /// XANES grid stop (eV); seeded from the data when omitted.
+    pub e_stop: Option<f64>,
+    /// XANES grid point count; seeded from the data when omitted.
+    pub e_steps: Option<usize>,
+    /// Write the displayed map to this path as a tab-separated matrix
+    /// (x first column, one named column per scan) — OriginPro-importable and
+    /// re-openable via `file`.
+    pub save: Option<String>,
 }
 
 /// The per-connection MCP handler: forwards each tool call to the egui thread
@@ -496,6 +524,20 @@ impl XafsMcp {
     async fn get_results(&self) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::GetResults { reply })
             .await
+    }
+
+    #[tool(
+        description = "Build and show the In-situ map (scan-series image, the BL10C IMAGE view): channel \"rdf\" (|χ(R)| rows) or \"xanes\" (normalized μ(E) on a common grid) from the loaded groups, or open a BL10C series .dat via `file`. `reference` (1-based) subtracts that scan (the Sub map); `save` writes the displayed map as an OriginPro-ready tab-separated matrix."
+    )]
+    async fn insitu_map(
+        &self,
+        Parameters(a): Parameters<InsituMapArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::InsituMap {
+            args: Box::new(a),
+            reply,
+        })
+        .await
     }
 
     #[tool(description = "Capture a screenshot of the XAFSView main window as a PNG image.")]

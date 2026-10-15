@@ -13,6 +13,7 @@ use crate::clean_ui::{CleanAction, EditXmuState};
 use crate::feffit_batch::{BatchAction, FeffitBatch};
 use crate::feffit_ui::{FeffitAction, FeffitPlot, FeffitUi, FitMode};
 use crate::import::ImportState;
+use crate::insitu_ui::InsituWindow;
 use crate::mback_ui::MbackWindow;
 use crate::mcp;
 use crate::open_data::OpenDataBrowser;
@@ -158,6 +159,8 @@ pub struct XafsViewApp {
     ke_convert: KeConvertWindow,
     /// The Extract-XAS-measured-time window (time-resolved series timing).
     time_resolved: TimeResolvedWindow,
+    /// The In-situ map window (scan-series image, the BL10C IMAGE view).
+    insitu: InsituWindow,
     /// The Atoms tab state (crystal cell → feff.inp).
     atoms_tab: AtomsTab,
     /// The Feff tab state (edit feff.inp / run FEFF).
@@ -280,6 +283,7 @@ impl XafsViewApp {
         let pca = PcaWindow::new(render_state);
         let xanes = XanesWindow::new(render_state);
         let mback = MbackWindow::new(render_state);
+        let insitu = InsituWindow::new(render_state);
         let periodic = PeriodicTableWindow::default();
         let ion_chamber = IonChamberWindow::default();
         let powder = PowderWindow::default();
@@ -316,6 +320,7 @@ impl XafsViewApp {
             powder,
             ke_convert: KeConvertWindow::default(),
             time_resolved: TimeResolvedWindow::default(),
+            insitu,
             atoms_tab: AtomsTab::default(),
             feff_tab: FeffTab::default(),
             plot_sites,
@@ -526,6 +531,9 @@ impl XafsViewApp {
             }
             mcp::McpRequest::GetResults { reply } => {
                 let _ = reply.send(Ok(self.mcp_results_text()));
+            }
+            mcp::McpRequest::InsituMap { args, reply } => {
+                let _ = reply.send(self.insitu.apply_mcp(&self.session.groups, &args));
             }
             mcp::McpRequest::Screenshot { reply } => {
                 self.mcp_shot_replies.push(reply);
@@ -3704,6 +3712,10 @@ impl XafsViewApp {
                     self.time_resolved.open = true;
                     ui.close();
                 }
+                if ui.button("In-situ map (scan series)…").clicked() {
+                    self.insitu.open = true;
+                    ui.close();
+                }
                 ui.separator();
                 // Structure visualization.
                 if ui.button("Plot Sites (3D cluster)…").clicked() {
@@ -4141,6 +4153,9 @@ impl eframe::App for XafsViewApp {
         self.ke_convert.show(ui.ctx(), group_e0);
         // Extract XAS measured time: self-contained (picks its own file series).
         self.time_resolved.show(ui.ctx());
+        // In-situ map: the scan-series image over the loaded groups (or a
+        // legacy BL10C series file it opens itself).
+        self.insitu.show(ui.ctx(), &self.session.groups);
 
         // The Plot Sites 3D viewer parses the shared feff.inp into a point cloud.
         // It needs the wgpu render state each frame (unlike the 2D Plot1D, which
