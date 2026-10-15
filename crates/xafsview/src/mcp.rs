@@ -71,6 +71,11 @@ pub enum McpRequest {
         tab: String,
         reply: TextReply,
     },
+    Deglitch {
+        nsig: f64,
+        apply: bool,
+        reply: TextReply,
+    },
     RunAutobk {
         reply: TextReply,
     },
@@ -152,6 +157,18 @@ pub struct SetGraphArgs {
     /// Overlay every loaded group's curve for the graph type, not just the
     /// current one (the "Show all groups" checkbox).
     pub show_all_groups: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct DeglitchArgs {
+    /// Spike threshold in robust σ of the 7-point rolling window (default 10):
+    /// points deviating from their rolling median by more than this are
+    /// glitches.
+    pub nsig: Option<f64>,
+    /// `true` removes the candidate points from every targeted group (re-run
+    /// run_autobk afterwards); `false`/absent is a dry run that only reports
+    /// each group's candidates.
+    pub apply: Option<bool>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -372,6 +389,21 @@ impl XafsMcp {
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::SetGraph { args: a, reply })
             .await
+    }
+
+    #[tool(
+        description = "Automatic glitch removal on the checked groups (or the current one): points deviating from a rolling median by nsig robust σ. Dry run by default (reports per-group candidates); apply=true removes them — run_autobk afterwards to recompute χ."
+    )]
+    async fn deglitch(
+        &self,
+        Parameters(a): Parameters<DeglitchArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Deglitch {
+            nsig: a.nsig.unwrap_or(10.0),
+            apply: a.apply.unwrap_or(false),
+            reply,
+        })
+        .await
     }
 
     #[tool(

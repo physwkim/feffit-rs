@@ -459,6 +459,9 @@ impl XafsViewApp {
             mcp::McpRequest::SetGraph { args, reply } => {
                 let _ = reply.send(self.apply_mcp_graph(args));
             }
+            mcp::McpRequest::Deglitch { nsig, apply, reply } => {
+                let _ = reply.send(self.apply_mcp_deglitch(nsig, apply));
+            }
             mcp::McpRequest::SetTab { tab, reply } => {
                 let _ = reply.send(
                     match Tab::ALL
@@ -634,6 +637,72 @@ impl XafsViewApp {
             "graph = {:?}; show all groups = {}",
             self.reduction.graph.label(),
             self.show_all_groups
+        ))
+    }
+
+    /// MCP `deglitch`: a dry run lists each Run-target group's auto-glitch
+    /// candidates; `apply` removes them through [`Self::deglitch_targets`],
+    /// the same owner the GUI batch button uses.
+    fn apply_mcp_deglitch(&mut self, nsig: f64, apply: bool) -> Result<String, String> {
+        if !nsig.is_finite() || nsig <= 0.0 {
+            return Err(format!("nsig must be a positive number, got {nsig}"));
+        }
+        if apply {
+            let (total, groups, targeted) = self.deglitch_targets(nsig);
+            if targeted == 0 {
+                return Err("no data to deglitch".to_owned());
+            }
+            return Ok(format!(
+                "removed {total} point(s) across {groups}/{targeted} group(s) at {nsig}σ — \
+                 run_autobk to recompute χ"
+            ));
+        }
+        let targets = self.session.run_targets();
+        if targets.is_empty() {
+            return Err("no data to deglitch".to_owned());
+        }
+        let mut lines = Vec::new();
+        let mut total = 0usize;
+        for &idx in &targets {
+            let Some(g) = self.session.groups.get(idx) else {
+                continue;
+            };
+            let energies = feffit::xasdata::find_glitches(g, nsig);
+            if energies.is_empty() {
+                continue;
+            }
+            total += energies.len();
+            let shown: Vec<String> = energies.iter().take(6).map(|e| format!("{e:.1}")).collect();
+            let more = if energies.len() > shown.len() {
+                ", …"
+            } else {
+                ""
+            };
+            lines.push(format!(
+                "  [{idx}] {}: {} at {} eV{more}",
+                g.label,
+                energies.len(),
+                shown.join(", "),
+            ));
+        }
+        if total == 0 {
+            return Ok(format!(
+                "no candidates at {nsig}σ in {} group(s)",
+                targets.len()
+            ));
+        }
+        // A dry run is the MCP counterpart of the GUI "Find": when the current
+        // group is targeted, preview its candidates as markers on the graph.
+        if let Some(cur) = self.session.current
+            && targets.contains(&cur)
+        {
+            self.auto_deglitch_find(nsig);
+        }
+        Ok(format!(
+            "{total} candidate(s) at {nsig}σ in {}/{} group(s) (dry run — apply=true removes):\n{}",
+            lines.len(),
+            targets.len(),
+            lines.join("\n"),
         ))
     }
 
@@ -1821,16 +1890,14 @@ impl XafsViewApp {
         ));
     }
 
-    /// Auto-deglitch every group checked for Run (the batch counterpart of
-    /// [`CleanAction::AutoDeglitch`], for a whole scan series in one pass).
-    /// A mass edit invalidates the single-group undo snapshots, so the undo
-    /// stack is cleared and the status says so.
-    fn auto_deglitch_checked(&mut self, nsig: f64) {
+    /// Auto-deglitch every Run-target group at `nsig`; the single owner of the
+    /// batch edit (the Edit-μ(E) button and the MCP `deglitch` tool both come
+    /// through here). Returns `(points removed, groups changed, groups
+    /// targeted)`. On any removal it clears the single-group undo stack (the
+    /// snapshots no longer describe one edit), drops stale candidate markers,
+    /// and replots.
+    fn deglitch_targets(&mut self, nsig: f64) -> (usize, usize, usize) {
         let targets = self.session.run_targets();
-        if targets.is_empty() {
-            self.status.error("No data to deglitch.");
-            return;
-        }
         let mut total = 0usize;
         let mut groups = 0usize;
         for &idx in &targets {
@@ -1846,22 +1913,31 @@ impl XafsViewApp {
                 groups += 1;
             }
         }
-        if total == 0 {
-            self.status.info(format!(
-                "Auto deglitch: no candidates at {nsig:.0}σ in {} group(s).",
-                targets.len()
-            ));
-            return;
+        if total > 0 {
+            self.clean_undo.clear();
+            self.plot.set_x_markers(&[], GLITCH_MARKER);
+            self.plot_data.mark_dirty();
+            self.replot_graph();
         }
-        self.clean_undo.clear();
-        self.plot.set_x_markers(&[], GLITCH_MARKER);
-        self.plot_data.mark_dirty();
-        self.replot_graph();
-        self.status.info(format!(
-            "Auto deglitch: removed {total} point(s) across {groups}/{} group(s) — \
-             re-run Autobk. Undo unavailable after a batch edit.",
-            targets.len()
-        ));
+        (total, groups, targets.len())
+    }
+
+    /// Auto-deglitch every group checked for Run (the batch counterpart of
+    /// [`CleanAction::AutoDeglitch`], for a whole scan series in one pass).
+    fn auto_deglitch_checked(&mut self, nsig: f64) {
+        let (total, groups, targeted) = self.deglitch_targets(nsig);
+        if targeted == 0 {
+            self.status.error("No data to deglitch.");
+        } else if total == 0 {
+            self.status.info(format!(
+                "Auto deglitch: no candidates at {nsig:.0}σ in {targeted} group(s)."
+            ));
+        } else {
+            self.status.info(format!(
+                "Auto deglitch: removed {total} point(s) across {groups}/{targeted} group(s) — \
+                 re-run Autobk. Undo unavailable after a batch edit.",
+            ));
+        }
     }
 
     /// Redraw the shared plot for the active group according to the selected
