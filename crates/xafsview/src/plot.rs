@@ -850,8 +850,13 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                         // Wide enough for a ~28-char curve name on one line
                         // (batch scan names differ only in their suffix, so
-                        // truncation must be the fallback, not the norm).
-                        let cap = (area.width() * 0.45).clamp(90.0, 280.0);
+                        // truncation must be the fallback, not the norm). The
+                        // 90px readability floor still loses to a plot too
+                        // narrow to hold it: a column wider than the constrain
+                        // rect cannot fit, and its overflow clips mid-label.
+                        let cap = (area.width() * 0.45)
+                            .clamp(90.0, 280.0)
+                            .min((area.width() - 4.0 * PAD).max(0.0));
                         ui.set_max_width(cap);
                         if foldable {
                             fold_click = draw_legend_header(ui, plot.legend.len(), folded, data_bg);
@@ -905,9 +910,12 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
         && let Some(state) = egui::AreaState::load(&ctx, legend_id)
         && let Some(pivot_pos) = state.pivot_pos
     {
+        // Clamped to [0, 1]: on a frame where the legend cannot fit the area
+        // (a mid-resize sliver), the derived fraction would land outside and
+        // keep placing the legend off-plot after the window grows back.
         plot.legend_frac = Some(egui::pos2(
-            (pivot_pos.x - area.left()) / area.width(),
-            (pivot_pos.y - area.top()) / area.height(),
+            ((pivot_pos.x - area.left()) / area.width()).clamp(0.0, 1.0),
+            ((pivot_pos.y - area.top()) / area.height()).clamp(0.0, 1.0),
         ));
     }
 }
