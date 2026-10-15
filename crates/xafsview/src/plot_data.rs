@@ -13,17 +13,18 @@
 //! whenever the loaded files or a control change. Save / zoom / legend come from
 //! the rsplot toolbar; the data work (averaging, peak finding) is the headless
 //! [`xasdata`] code. A Feffit fit can also be sent here for a quick
-//! data-vs-model look ([`set_fit_overlay`]).
+//! data-vs-model look ([`set_fit_overlay`]), and "Add loaded groups" overlays
+//! the in-memory session groups directly — no save-then-re-add round-trip.
 
 use std::path::PathBuf;
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use egui::Color32;
-use feffit::xasdata::{MonitorPolicy, average_curves, peak_in_range, x_at_y};
+use feffit::xasdata::{MonitorPolicy, XasGroup, average_curves, peak_in_range, x_at_y};
 
 use crate::file_browser::FileBrowser;
-use crate::plot_files::{FileType, GraphItem, LoadedTrace, load_result, load_trace};
+use crate::plot_files::{FileType, GraphItem, LoadedTrace, derivative, load_result, load_trace};
 use crate::widgets::file_name_of;
 
 /// The "Items" of the Multiple peaks catching window: which feature to locate
@@ -65,6 +66,60 @@ struct FitOverlay {
     x: Vec<f64>,
     data: Vec<f64>,
     model: Vec<f64>,
+}
+
+/// A session group's curve added via "Add loaded groups": its y is kept
+/// unweighted so the G_kweight slider re-derives k-space traces at build time
+/// (a loaded file is re-read from disk instead; a group has no file to
+/// re-read).
+struct GroupTrace {
+    /// Legend label (the group label).
+    label: String,
+    /// The graph item this curve was derived as (carries the axis labels).
+    item: GraphItem,
+    x: Vec<f64>,
+    y: Vec<f64>,
+}
+
+/// Derive `item`'s curve from a session group: `None` when the group lacks
+/// that stage (χ before AUTOBK, norm before pre-edge) or when the item is a
+/// file product (dat / fit / bkg / raw / result have no group equivalent).
+/// Mirrors what [`load_trace`] reads from the corresponding file.
+fn group_trace(g: &XasGroup, item: GraphItem) -> Option<GroupTrace> {
+    let (x, y) = match item {
+        GraphItem::XmuF => (g.energy.clone(), g.mu.clone()),
+        GraphItem::XmuNorm => (g.energy.clone(), g.norm.clone()?),
+        GraphItem::XmuD1 => (g.energy.clone(), derivative(&g.energy, &g.mu)),
+        GraphItem::XmuD2 => {
+            let d1 = derivative(&g.energy, &g.mu);
+            (g.energy.clone(), derivative(&g.energy, &d1))
+        }
+        GraphItem::ChiK => (g.k.clone()?, g.chi.clone()?),
+        GraphItem::ChiR => (g.r.clone()?, g.chir_mag.clone()?),
+        _ => return None,
+    };
+    if x.is_empty() || x.len() != y.len() {
+        return None;
+    }
+    Some(GroupTrace {
+        label: g.label.clone(),
+        item,
+        x,
+        y,
+    })
+}
+
+/// Whether "Add loaded groups" can derive `item` from a session group at all.
+fn item_derivable(item: GraphItem) -> bool {
+    matches!(
+        item,
+        GraphItem::XmuF
+            | GraphItem::XmuNorm
+            | GraphItem::XmuD1
+            | GraphItem::XmuD2
+            | GraphItem::ChiK
+            | GraphItem::ChiR
+    )
 }
 
 /// The Plot Data window state: a detached OS window owning its own graph, the
@@ -117,6 +172,8 @@ pub struct PlotDataWindow {
     clamp_monitors: bool,
     /// Files loaded for display.
     loaded: Vec<LoadedTrace>,
+    /// Session groups overlaid via "Add loaded groups" (no file round-trip).
+    group_traces: Vec<GroupTrace>,
     /// Whether the "Add / remove data files" picker is open.
     picker_open: bool,
     /// Folder navigation + the two-pane staging list (shared with the Open-data
@@ -142,7 +199,7 @@ impl PlotDataWindow {
     /// plot's 0 and the other windows' ids). Closed until opened from the top bar.
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 7);
-        plot.set_empty_hint("Add data files to overlay them.");
+        plot.set_empty_hint("Add data files (or the loaded groups) to overlay them.");
         Self {
             plot,
             open: false,
@@ -166,6 +223,7 @@ impl PlotDataWindow {
             graph_item: FileType::Chi.default_item(),
             clamp_monitors: false,
             loaded: Vec::new(),
+            group_traces: Vec::new(),
             picker_open: false,
             browser: FileBrowser::new("pd"),
             pick_status: String::new(),
@@ -243,7 +301,7 @@ impl PlotDataWindow {
     /// when closed. Rebuilds the graph when the overlay is dirty just before
     /// drawing it, so a control edit shows the same frame; a legend click toggles
     /// the clicked curve's highlight for the next rebuild.
-    pub fn show_window(&mut self, ctx: &egui::Context) {
+    pub fn show_window(&mut self, ctx: &egui::Context, groups: &[XasGroup]) {
         if !self.open {
             return;
         }
@@ -262,7 +320,7 @@ impl PlotDataWindow {
                     .default_size(300.0)
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            self.controls_column(ui);
+                            self.controls_column(ui, groups);
                         });
                     });
                 // Rebuild after the controls (so this frame's edits land) and
@@ -286,8 +344,8 @@ impl PlotDataWindow {
     /// The control column (right panel of the window), one vertical stack in the
     /// original's order: Files, Display (G_kweight / Stacking / Same height / …),
     /// the sent-fit toggle, Multiple peak catching, and the Redraw / Save actions.
-    fn controls_column(&mut self, ui: &mut egui::Ui) {
-        self.files_controls(ui);
+    fn controls_column(&mut self, ui: &mut egui::Ui, groups: &[XasGroup]) {
+        self.files_controls(ui, groups);
         ui.separator();
         self.display_controls(ui);
         self.fit_overlay_controls(ui);
@@ -455,12 +513,31 @@ impl PlotDataWindow {
                 self.peaks.push((label, px, py));
             }
         }
+        // The added groups join the catch, k-weighted like their drawn traces.
+        for idx in 0..self.group_traces.len() {
+            let t = &self.group_traces[idx];
+            let label = t.label.clone();
+            let x = t.x.clone();
+            let y0 = self.group_y(t);
+            let y = if self.smooth5 { smooth5(&y0) } else { y0 };
+            let found = match self.peak_mode {
+                PeakMode::Max => peak_in_range(&x, &y, self.peak_lo, self.peak_hi),
+                PeakMode::Min => min_in_range(&x, &y, self.peak_lo, self.peak_hi),
+                PeakMode::AtY => {
+                    x_at_y_in_range(&x, &y, self.peak_target, self.peak_lo, self.peak_hi)
+                        .map(|px| (px, self.peak_target))
+                }
+            };
+            if let Some((px, py)) = found {
+                self.peaks.push((label, px, py));
+            }
+        }
     }
 
     /// The "Files" control block: the picker button, the file-type / graph-item
     /// selectors (which drive the picker's filter), the loaded-file list, and
     /// Clear Graph / Clear All.
-    fn files_controls(&mut self, ui: &mut egui::Ui) {
+    fn files_controls(&mut self, ui: &mut egui::Ui, groups: &[XasGroup]) {
         ui.strong("Files");
 
         if ui.button("ADD or DEL Data Files…").clicked() {
@@ -477,6 +554,41 @@ impl PlotDataWindow {
             self.browser
                 .set_staged(self.loaded.iter().map(|t| t.path.clone()).collect());
             self.refresh_available();
+        }
+        // The in-memory session groups, overlaid directly — no χ-file save +
+        // re-add round-trip. Replaces the previously added set (idempotent).
+        if ui
+            .add_enabled(
+                !groups.is_empty() && item_derivable(self.graph_item),
+                egui::Button::new("Add loaded groups"),
+            )
+            .on_hover_text(
+                "Overlay every loaded session group as the selected graph item, \
+                 without saving χ files first",
+            )
+            .on_disabled_hover_text(
+                "Needs loaded groups and an xmu / chi graph item — dat / fit / \
+                 bkg / raw / result items are file products",
+            )
+            .clicked()
+        {
+            self.group_traces.clear();
+            let mut skipped = 0usize;
+            for g in groups {
+                match group_trace(g, self.graph_item) {
+                    Some(t) => self.group_traces.push(t),
+                    None => skipped += 1,
+                }
+            }
+            self.pick_status = if skipped > 0 {
+                format!(
+                    "Added {} group(s); {skipped} without data for this item.",
+                    self.group_traces.len()
+                )
+            } else {
+                format!("Added {} group(s).", self.group_traces.len())
+            };
+            self.dirty = true;
         }
 
         // File type + graph item — surfaced here (also in the picker; both share
@@ -535,9 +647,35 @@ impl PlotDataWindow {
             self.dirty = true;
         }
 
-        if self.loaded.is_empty() {
-            ui.weak("No files loaded — ADD Data Files to plot.");
-        } else {
+        if self.loaded.is_empty() && self.group_traces.is_empty() {
+            ui.weak("Nothing plotted — ADD Data Files or Add loaded groups.");
+        }
+        if !self.group_traces.is_empty() {
+            ui.add_space(2.0);
+            ui.label(format!("{} group(s) added:", self.group_traces.len()));
+            let mut remove = None;
+            egui::ScrollArea::vertical()
+                .id_salt("group_list")
+                .max_height(90.0)
+                .show(ui, |ui| {
+                    for (i, t) in self.group_traces.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if crate::widgets::delete_box(ui)
+                                .on_hover_text("Remove")
+                                .clicked()
+                            {
+                                remove = Some(i);
+                            }
+                            ui.label(&t.label).on_hover_text(t.item.label());
+                        });
+                    }
+                });
+            if let Some(i) = remove {
+                self.group_traces.remove(i);
+                self.dirty = true;
+            }
+        }
+        if !self.loaded.is_empty() {
             ui.add_space(2.0);
             ui.label(format!("{} file(s) loaded:", self.loaded.len()));
             let mut remove = None;
@@ -563,21 +701,24 @@ impl PlotDataWindow {
             }
             if ui
                 .button("Clear Graph")
-                .on_hover_text("Remove the loaded files only")
+                .on_hover_text("Remove the loaded files and added groups")
                 .clicked()
             {
                 self.loaded.clear();
+                self.group_traces.clear();
                 self.dirty = true;
             }
         }
         if ui
             .button("Clear All")
             .on_hover_text(
-                "Remove everything from the graph: the loaded files and any sent Feffit fit",
+                "Remove everything from the graph: the loaded files, added groups, \
+                 and any sent Feffit fit",
             )
             .clicked()
         {
             self.loaded.clear();
+            self.group_traces.clear();
             self.overlay = None;
             self.show_overlay = false;
             self.dirty = true;
@@ -788,10 +929,13 @@ impl PlotDataWindow {
                 Some((x, y)) => (x.clone(), y.clone()),
                 None => (t.item.x_label().to_owned(), t.item.y_label().to_owned()),
             },
-            None => (
-                self.graph_item.x_label().to_owned(),
-                self.graph_item.y_label().to_owned(),
-            ),
+            None => match self.group_traces.first() {
+                Some(t) => (t.item.x_label().to_owned(), t.item.y_label().to_owned()),
+                None => (
+                    self.graph_item.x_label().to_owned(),
+                    self.graph_item.y_label().to_owned(),
+                ),
+            },
         }
     }
 
@@ -806,6 +950,10 @@ impl PlotDataWindow {
         } else {
             crate::plot::PALETTE_LIGHT
         };
+        // A sent Feffit fit uses BLUE (data) and RED (model); start the file
+        // palette past PALETTE[0]=BLUE (and [1]=ORANGE) so a loaded file does
+        // not share the sent-fit data colour.
+        const FIT_PALETTE_SPAN: usize = 2;
         let mut traces: Vec<(String, Vec<f64>, Vec<f64>, Color32)> = Vec::new();
         for t in &self.loaded {
             let mut y = if self.smooth5 {
@@ -818,14 +966,37 @@ impl PlotDataWindow {
             if self.same_height {
                 y = same_height_scale(&y);
             }
-            // A sent Feffit fit uses BLUE (data) and RED (model); start the file
-            // palette past PALETTE[0]=BLUE (and [1]=ORANGE) so a loaded file does
-            // not share the sent-fit data colour.
-            const FIT_PALETTE_SPAN: usize = 2;
+            let color = palette[(traces.len() + FIT_PALETTE_SPAN) % palette.len()];
+            traces.push((t.label.clone(), t.x.clone(), y, color));
+        }
+        // The added session groups, after the files — k-weight applied here at
+        // build time (their χ is stored unweighted, see [`GroupTrace`]), then
+        // the same smoothing / same-height treatment as the files above.
+        for t in &self.group_traces {
+            let mut y = self.group_y(t);
+            if self.smooth5 {
+                y = smooth5(&y);
+            }
+            if self.same_height {
+                y = same_height_scale(&y);
+            }
             let color = palette[(traces.len() + FIT_PALETTE_SPAN) % palette.len()];
             traces.push((t.label.clone(), t.x.clone(), y, color));
         }
         traces
+    }
+
+    /// A group trace's y with the current G_kweight applied — the group store
+    /// keeps χ unweighted, like the k-space files on disk.
+    fn group_y(&self, t: &GroupTrace) -> Vec<f64> {
+        if t.item.applies_kweight() {
+            t.x.iter()
+                .zip(&t.y)
+                .map(|(&k, &c)| c * k.powi(self.kweight))
+                .collect()
+        } else {
+            t.y.clone()
+        }
     }
 
     /// Every displayed curve with its stacking offset applied — exactly what is
@@ -1188,6 +1359,22 @@ fn x_at_y_in_range(x: &[f64], y: &[f64], target: f64, lo: f64, hi: f64) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "Add loaded groups" derives exactly the stages a group carries: χ items
+    /// come from `from_chi` unweighted (the build applies G_kweight), and the
+    /// items whose stage is missing (|χ(R)| before FT, norm before pre-edge)
+    /// or that are file products (DatK) yield nothing.
+    #[test]
+    fn group_trace_derives_present_stages_only() {
+        let g = XasGroup::from_chi("s1", vec![1.0, 2.0, 3.0], vec![0.1, 0.2, 0.3]);
+        let t = group_trace(&g, GraphItem::ChiK).expect("χ(k) present");
+        assert_eq!(t.label, "s1");
+        assert_eq!(t.y, vec![0.1, 0.2, 0.3], "stored unweighted");
+        assert!(group_trace(&g, GraphItem::ChiR).is_none(), "no FT yet");
+        assert!(group_trace(&g, GraphItem::XmuNorm).is_none(), "no pre-edge");
+        assert!(group_trace(&g, GraphItem::XmuF).is_none(), "no μ(E)");
+        assert!(group_trace(&g, GraphItem::DatK).is_none(), "file product");
+    }
 
     #[test]
     fn min_in_range_finds_min_and_respects_range() {

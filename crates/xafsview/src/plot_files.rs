@@ -609,7 +609,7 @@ fn file_name(path: &Path) -> String {
 
 /// Central-difference derivative `dy/dx`, one-sided at the ends. Returns zeros
 /// for fewer than two points or where the x step collapses (duplicate x).
-fn derivative(x: &[f64], y: &[f64]) -> Vec<f64> {
+pub(crate) fn derivative(x: &[f64], y: &[f64]) -> Vec<f64> {
     let n = x.len().min(y.len());
     if n < 2 {
         return vec![0.0; n];

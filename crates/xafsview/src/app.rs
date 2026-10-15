@@ -4289,7 +4289,7 @@ impl eframe::App for XafsViewApp {
         // The detached Plot Data window (its own graph + control column, like the
         // original XAFSView) and its file-selection sub-window — both render here,
         // independent of the active tab, and only when opened.
-        self.plot_data.show_window(ui.ctx());
+        self.plot_data.show_window(ui.ctx(), &self.session.groups);
         self.plot_data.file_picker(ui.ctx(), &mut self.status);
 
         // The detached Log window: the session's cumulative status/error
