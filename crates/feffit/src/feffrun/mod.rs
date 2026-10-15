@@ -281,6 +281,10 @@ impl Feff10 {
             action: format!("read {}", inp.display()),
             source: e,
         })?;
+        // FEFF10 writes feffNNNN.dat only when asked via the PRINT card —
+        // normalize the input so this runner's contract (the feffNNNN.dat
+        // interface) holds for any feff.inp.
+        let content = ensure_path_output(&content);
         feff10::run_str(&content, workdir).map_err(|e| FeffError::Backend {
             backend: "feff10",
             message: e.to_string(),
@@ -337,6 +341,46 @@ impl Backend {
     }
 }
 
+/// FEFF10 writes `feffNNNN.dat` only when the `PRINT` card's sixth (ff2chi)
+/// field is at least 3, unlike FEFF8L whose genfmt always writes them. The
+/// runner promises those files, so make the input keep that promise: raise
+/// every lower ff2chi field, or prepend the card when absent.
+#[cfg(feature = "feff10")]
+fn ensure_path_output(inp: &str) -> String {
+    let mut saw_print = false;
+    let mut changed = false;
+    let mut out = String::with_capacity(inp.len() + 24);
+    for line in inp.lines() {
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        if toks
+            .first()
+            .is_some_and(|t| t.eq_ignore_ascii_case("PRINT"))
+        {
+            saw_print = true;
+            let ff2chi = toks.get(6).and_then(|t| t.parse::<i64>().ok());
+            if ff2chi.is_some_and(|v| v >= 3) {
+                out.push_str(line);
+            } else {
+                changed = true;
+                let mut fields: Vec<&str> = toks[1..].iter().copied().take(6).collect();
+                while fields.len() < 6 {
+                    fields.push("0");
+                }
+                fields[5] = "3";
+                out.push_str("PRINT ");
+                out.push_str(&fields.join(" "));
+            }
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    if !saw_print {
+        return format!("PRINT 1 0 0 0 0 3\n{inp}");
+    }
+    if changed { out } else { inp.to_string() }
+}
+
 /// Collect and sort the `feffNNNN.dat` files a pipeline left in `workdir`.
 fn collect_dat_files(workdir: &Path) -> Result<Vec<PathBuf>, FeffError> {
     let mut dat_files: Vec<PathBuf> = std::fs::read_dir(workdir)
@@ -372,6 +416,30 @@ fn is_feff_dat(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::is_feff_dat;
+
+    #[cfg(feature = "feff10")]
+    #[test]
+    fn ensure_path_output_rules() {
+        use super::ensure_path_output;
+        // Missing card: prepended.
+        assert_eq!(
+            ensure_path_output("TITLE t\nATOMS\nEND\n"),
+            "PRINT 1 0 0 0 0 3\nTITLE t\nATOMS\nEND\n"
+        );
+        // ff2chi below 3: raised in place, other fields kept.
+        assert_eq!(
+            ensure_path_output("TITLE t\nPRINT     1 0 0 0 0 0\nATOMS\n"),
+            "TITLE t\nPRINT 1 0 0 0 0 3\nATOMS\n"
+        );
+        // Short card: padded then raised.
+        assert_eq!(
+            ensure_path_output("print 2 1\nATOMS\n"),
+            "PRINT 2 1 0 0 0 3\nATOMS\n"
+        );
+        // Already requesting path files: untouched.
+        let ok = "TITLE t\nPRINT 1 0 0 0 0 3\nATOMS\n";
+        assert_eq!(ensure_path_output(ok), ok);
+    }
 
     #[test]
     fn feff_dat_name_matching() {

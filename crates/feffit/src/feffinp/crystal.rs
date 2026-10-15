@@ -245,7 +245,8 @@ impl Cluster {
         s.push_str(&format!(" EDGE      {}\n", self.edge.as_str()));
         s.push_str(" S02       1.0\n");
         s.push_str(" CONTROL   1 1 1 1 1 1\n");
-        s.push_str(" PRINT     1 0 0 0 0 0\n");
+        // ff2chi print level 3: FEFF8/10 write feffNNNN.dat only when asked.
+        s.push_str(" PRINT     1 0 0 0 0 3\n");
         s.push_str(&format!(" RMAX      {:.4}\n", self.rmax));
         s.push_str(" EXCHANGE  0\n");
         s.push('\n');
