@@ -189,6 +189,10 @@ pub struct XafsViewApp {
     /// The slider edits this freely; the live zoom is applied only when the drag
     /// ends, so the UI doesn't reflow under the cursor on every drag tick.
     ui_scale: f32,
+    /// Mirror of the active visuals' dark/light choice, kept by the Settings
+    /// toggle so [`Prefs::capture`] can persist it (eframe's `save` has no
+    /// `Context` to read the live visuals from).
+    dark_mode: bool,
     /// The embedded MCP server when enabled (`--mcp` or the Settings toggle):
     /// the listener handle plus the channel its tool requests arrive on.
     /// Dropping it (toggle off) stops the server. See [`crate::mcp`].
@@ -210,6 +214,51 @@ pub struct XafsViewApp {
 /// from the Settings menu. egui's `Context` holds the live value, so it persists
 /// across frames within a session without any extra app state.
 const DEFAULT_UI_SCALE: f32 = 1.2;
+
+/// What survives a restart, through eframe's storage (written on exit and on
+/// its periodic autosave): the Settings-menu choices and the working folders.
+/// The MCP toggle is deliberately left out — silently re-opening a localhost
+/// server on launch would be surprising, so `--mcp` / the Settings checkbox
+/// opt in per run. Window geometry persists separately via eframe itself.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Prefs {
+    ui_scale: f32,
+    dark: bool,
+    sub_base: Option<std::path::PathBuf>,
+    data_dir: Option<std::path::PathBuf>,
+    autobk_dir: Option<std::path::PathBuf>,
+    feffit_dir: Option<std::path::PathBuf>,
+    atoms_dir: Option<std::path::PathBuf>,
+    results_dir: Option<std::path::PathBuf>,
+}
+
+/// eframe storage key for [`Prefs`].
+const PREFS_KEY: &str = "prefs";
+
+impl Prefs {
+    fn capture(app: &XafsViewApp) -> Self {
+        let f = &app.session.folders;
+        Self {
+            ui_scale: app.ui_scale,
+            dark: app.dark_mode,
+            sub_base: f.sub_base.clone(),
+            data_dir: f.data_dir.clone(),
+            autobk_dir: f.autobk_dir.clone(),
+            feffit_dir: f.feffit_dir.clone(),
+            atoms_dir: f.atoms_dir.clone(),
+            results_dir: f.results_dir.clone(),
+        }
+    }
+
+    fn apply_folders(&self, f: &mut Folders) {
+        f.sub_base = self.sub_base.clone();
+        f.data_dir = self.data_dir.clone();
+        f.autobk_dir = self.autobk_dir.clone();
+        f.feffit_dir = self.feffit_dir.clone();
+        f.atoms_dir = self.atoms_dir.clone();
+        f.results_dir = self.results_dir.clone();
+    }
+}
 
 /// Widen egui's stock spacing to desktop-form density (the Qt layout metrics
 /// the original XAFSView forms were designed around): egui's defaults are
@@ -251,10 +300,21 @@ impl XafsViewApp {
         // glyphs the default font lacks (Å⁻¹, kʷ, χ²ᵣ).
         crate::fonts::install_fallback(&cc.egui_ctx);
 
-        // Start a touch larger than egui's default so the whole UI (text and
-        // spacing) is more legible out of the box; the Settings menu adjusts it.
-        cc.egui_ctx.set_zoom_factor(DEFAULT_UI_SCALE);
+        // Restore the persisted Settings choices before anything draws; first
+        // run (or no storage) falls back to the defaults.
+        let prefs: Option<Prefs> = cc.storage.and_then(|s| eframe::get_value(s, PREFS_KEY));
+        let ui_scale = prefs.as_ref().map_or(DEFAULT_UI_SCALE, |p| p.ui_scale);
+        let dark_mode = prefs.as_ref().is_none_or(|p| p.dark);
+        cc.egui_ctx.set_zoom_factor(ui_scale);
+        if !dark_mode {
+            cc.egui_ctx.set_visuals(egui::Visuals::light());
+        }
         apply_form_density(&cc.egui_ctx);
+
+        let mut session = Session::new();
+        if let Some(p) = &prefs {
+            p.apply_folders(&mut session.folders);
+        }
 
         let render_state = cc
             .wgpu_render_state
@@ -290,7 +350,7 @@ impl XafsViewApp {
         let plot_sites = PlotSitesWindow::new(render_state);
 
         let mut app = Self {
-            session: Session::new(),
+            session,
             // Open on Folders — the flow entry point where the working
             // directories are set before any data is loaded.
             tab: Tab::Folders,
@@ -331,7 +391,8 @@ impl XafsViewApp {
             about_open: false,
             status: Default::default(),
             jobs: Default::default(),
-            ui_scale: DEFAULT_UI_SCALE,
+            ui_scale,
+            dark_mode,
             mcp: None,
             mcp_port: mcp_port.unwrap_or(mcp::DEFAULT_PORT),
             mcp_job_reply: None,
@@ -3803,6 +3864,7 @@ impl XafsViewApp {
                     } else {
                         egui::Visuals::dark()
                     });
+                    self.dark_mode = !dark;
                 }
                 ui.separator();
                 // The embedded MCP server (also startable with `--mcp [port]`),
@@ -3958,6 +4020,10 @@ impl XafsViewApp {
 }
 
 impl eframe::App for XafsViewApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, PREFS_KEY, &Prefs::capture(self));
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // Apply a finished background job's results first, so this frame draws
         // the post-job state (the Apply closure runs on this thread — the only

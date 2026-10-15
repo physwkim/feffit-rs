@@ -35,6 +35,9 @@ eframe = { version = "0.36", default-features = false, features = [
     "default_fonts",
     "x11",
     "wayland",
+    # Settings/window persistence across runs (Prefs in app.rs): enables
+    # `cc.storage` + `App::save` and the automatic window-geometry restore.
+    "persistence",
 ] }
 egui = "0.36"
 rsplot = "0.5.0"
