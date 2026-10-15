@@ -341,6 +341,14 @@ enum ProfileMode {
     Trace,
 }
 
+/// What the In-situ window needs the app to do this frame.
+pub enum InsituAction {
+    /// Re-run AUTOBK with the current Autobk-tab parameters (the same run
+    /// Autobk Start does — those parameters live on the app, not here), then
+    /// rebuild the map from the re-reduced groups.
+    ReduceAndBuild,
+}
+
 /// The In-situ map window.
 pub struct InsituWindow {
     pub open: bool,
@@ -516,7 +524,7 @@ impl InsituWindow {
     }
 
     /// Build the map from the loaded groups with the current channel settings.
-    fn build_from_groups(&mut self, groups: &[XasGroup]) {
+    pub(crate) fn build_from_groups(&mut self, groups: &[XasGroup]) {
         let built = match self.channel {
             SeriesKind::Xanes => {
                 map_from_groups_xanes(groups, self.e_start, self.e_stop, self.e_steps)
@@ -535,12 +543,16 @@ impl InsituWindow {
         }
     }
 
-    /// Render the window over `groups`.
-    pub fn show(&mut self, ctx: &egui::Context, groups: &[XasGroup]) {
+    /// Render the window over `groups`. Returns
+    /// [`InsituAction::ReduceAndBuild`] when the user asks for a re-reduce:
+    /// the reduction parameters live on the app's Autobk tab, so the app runs
+    /// the reduction and calls [`Self::build_from_groups`] back.
+    pub fn show(&mut self, ctx: &egui::Context, groups: &[XasGroup]) -> Option<InsituAction> {
         if !self.open {
-            return;
+            return None;
         }
         let mut open = self.open;
+        let mut action = None;
         crate::window::detached_panels(
             ctx,
             "insitu",
@@ -552,15 +564,18 @@ impl InsituWindow {
                     .resizable(true)
                     .default_size(300.0)
                     .show(ui, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui, groups));
+                        egui::ScrollArea::vertical()
+                            .show(ui, |ui| action = self.controls(ui, groups));
                     });
                 egui::CentralPanel::default().show(ui, |ui| self.map_pane(ui));
             },
         );
         self.open = open;
+        action
     }
 
-    fn controls(&mut self, ui: &mut egui::Ui, groups: &[XasGroup]) {
+    fn controls(&mut self, ui: &mut egui::Ui, groups: &[XasGroup]) -> Option<InsituAction> {
+        let mut action = None;
         ui.heading("In-situ map");
         ui.label("One row per scan in series order (first scan at the top).");
 
@@ -592,12 +607,27 @@ impl InsituWindow {
                 }
             });
         }
-        if ui
-            .add_enabled(!groups.is_empty(), egui::Button::new("Build map"))
-            .clicked()
-        {
-            self.build_from_groups(groups);
-        }
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!groups.is_empty(), egui::Button::new("Build map"))
+                .clicked()
+            {
+                self.build_from_groups(groups);
+            }
+            // Parameter changes on the Autobk tab need a re-reduce before the
+            // map reflects them; this closes that round-trip in one click.
+            if ui
+                .add_enabled(!groups.is_empty(), egui::Button::new("Re-reduce & build"))
+                .on_hover_text(
+                    "Re-run AUTOBK with the current Autobk-tab parameters \
+                     (the same run Autobk Start does, χ files included), \
+                     then rebuild the map",
+                )
+                .clicked()
+            {
+                action = Some(InsituAction::ReduceAndBuild);
+            }
+        });
         if groups.is_empty() {
             ui.weak("Load a scan series first (Open data / batch load).");
         }
@@ -631,7 +661,7 @@ impl InsituWindow {
                 ui.separator();
                 ui.weak(&self.status);
             }
-            return;
+            return action;
         };
 
         ui.separator();
@@ -715,6 +745,7 @@ impl InsituWindow {
         if !self.status.is_empty() {
             ui.weak(&self.status);
         }
+        action
     }
 
     /// The central pane: the map image (clickable) above the profile plot.

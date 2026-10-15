@@ -13,7 +13,7 @@ use crate::clean_ui::{CleanAction, EditXmuState};
 use crate::feffit_batch::{BatchAction, FeffitBatch};
 use crate::feffit_ui::{FeffitAction, FeffitPlot, FeffitUi, FitMode};
 use crate::import::ImportState;
-use crate::insitu_ui::InsituWindow;
+use crate::insitu_ui::{InsituAction, InsituWindow};
 use crate::mback_ui::MbackWindow;
 use crate::mcp;
 use crate::open_data::OpenDataBrowser;
@@ -4195,8 +4195,18 @@ impl eframe::App for XafsViewApp {
         // Extract XAS measured time: self-contained (picks its own file series).
         self.time_resolved.show(ui.ctx());
         // In-situ map: the scan-series image over the loaded groups (or a
-        // legacy BL10C series file it opens itself).
-        self.insitu.show(ui.ctx(), &self.session.groups);
+        // legacy BL10C series file it opens itself). Re-reduce & build runs
+        // the Autobk-tab reduction here (the window has no parameters of its
+        // own) and rebuilds only when the reduction added no error, so a
+        // failed reduce keeps the window's map and status untouched.
+        if let Some(InsituAction::ReduceAndBuild) = self.insitu.show(ui.ctx(), &self.session.groups)
+        {
+            let errors = self.status.error_count();
+            self.run_reduction();
+            if self.status.error_count() == errors {
+                self.insitu.build_from_groups(&self.session.groups);
+            }
+        }
 
         // The Plot Sites 3D viewer parses the shared feff.inp into a point cloud.
         // It needs the wgpu render state each frame (unlike the 2D Plot1D, which
