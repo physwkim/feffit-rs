@@ -55,6 +55,18 @@ pub enum McpRequest {
         indices: Vec<usize>,
         reply: TextReply,
     },
+    RemoveGroups {
+        indices: Vec<usize>,
+        reply: TextReply,
+    },
+    RemovePaths {
+        indices: Vec<usize>,
+        reply: TextReply,
+    },
+    SetGraph {
+        args: SetGraphArgs,
+        reply: TextReply,
+    },
     RunAutobk {
         reply: TextReply,
     },
@@ -111,6 +123,31 @@ pub struct SelectGroupsArgs {
     /// the current group. An empty list clears the checks, so runs target only
     /// the current group.
     pub indices: Vec<usize>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct RemoveGroupsArgs {
+    /// Group indices (as shown by get_results) to remove. Indices above a
+    /// removed group shift down by one, exactly as in the Data window.
+    pub indices: Vec<usize>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct RemovePathsArgs {
+    /// Feffit path-list indices (0-based, in add order) to remove. Indices
+    /// above a removed path shift down by one.
+    pub indices: Vec<usize>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SetGraphArgs {
+    /// Graph type by its menu label (case-insensitive): "XMU + BKG", "*K.CHI",
+    /// "*R.CHI", "*Q.CHI", "XMU' + XMU''", "BKG(E)'", "BKG(k)'",
+    /// "XMU' + BKG(E)'", "BKG(E)''", or "Normalize".
+    pub graph: Option<String>,
+    /// Overlay every loaded group's curve for the graph type, not just the
+    /// current one (the "Show all groups" checkbox).
+    pub show_all_groups: Option<bool>,
 }
 
 /// Parameters for `set_params`. Every field is optional; only the given ones
@@ -285,6 +322,45 @@ impl XafsMcp {
             reply,
         })
         .await
+    }
+
+    #[tool(
+        description = "Remove loaded groups by index (as shown by get_results). Remaining groups' indices shift down, exactly as in the Data window."
+    )]
+    async fn remove_groups(
+        &self,
+        Parameters(a): Parameters<RemoveGroupsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::RemoveGroups {
+            indices: a.indices,
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Remove Feff paths from the Feffit model by path-list index (0-based, in add order)."
+    )]
+    async fn remove_paths(
+        &self,
+        Parameters(a): Parameters<RemovePathsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::RemovePaths {
+            indices: a.indices,
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Switch the plotted graph type (XMU + BKG, *K.CHI, *R.CHI, *Q.CHI, derivatives, Normalize) and/or toggle the all-groups overlay — what screenshot then shows."
+    )]
+    async fn set_graph(
+        &self,
+        Parameters(a): Parameters<SetGraphArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::SetGraph { args: a, reply })
+            .await
     }
 
     #[tool(

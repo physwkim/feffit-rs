@@ -405,6 +405,56 @@ impl XafsViewApp {
                     )));
                 }
             }
+            mcp::McpRequest::RemoveGroups { indices, reply } => {
+                let n = self.session.groups.len();
+                if let Some(&bad) = indices.iter().find(|&&i| i >= n) {
+                    let _ = reply.send(Err(format!(
+                        "group index {bad} out of range ({n} group(s) loaded)"
+                    )));
+                } else {
+                    // Descending order so each removal leaves the smaller
+                    // indices still pointing at the groups the caller named.
+                    let mut sorted = indices;
+                    sorted.sort_unstable();
+                    sorted.dedup();
+                    for &i in sorted.iter().rev() {
+                        self.session.remove_group(i);
+                    }
+                    self.plot_data.mark_dirty();
+                    self.replot_graph();
+                    let _ = reply.send(Ok(format!(
+                        "removed {} group(s); {} remain; current group = {:?}",
+                        sorted.len(),
+                        self.session.groups.len(),
+                        self.session.current
+                    )));
+                }
+            }
+            mcp::McpRequest::RemovePaths { indices, reply } => {
+                let n = self.feffit.path_count();
+                if let Some(&bad) = indices.iter().find(|&&i| i >= n) {
+                    let _ = reply.send(Err(format!(
+                        "path index {bad} out of range ({n} path(s) loaded)"
+                    )));
+                } else {
+                    let mut sorted = indices;
+                    sorted.sort_unstable();
+                    sorted.dedup();
+                    let removed: Vec<String> = sorted
+                        .iter()
+                        .rev()
+                        .filter_map(|&i| self.feffit.remove_path(i))
+                        .collect();
+                    let _ = reply.send(Ok(format!(
+                        "removed path(s) {:?}; {} remain",
+                        removed,
+                        self.feffit.path_count()
+                    )));
+                }
+            }
+            mcp::McpRequest::SetGraph { args, reply } => {
+                let _ = reply.send(self.apply_mcp_graph(args));
+            }
             mcp::McpRequest::RunAutobk { reply } => {
                 let errors = self.status.error_count();
                 self.run_reduction();
@@ -538,6 +588,31 @@ impl XafsViewApp {
         self.status.info(format!("Added Feff path {label}."));
         Ok(format!(
             "added path \"{label}\": reff = {reff:.4} Å, nleg = {nleg}, degen = {degen}"
+        ))
+    }
+
+    /// MCP `set_graph`: switch the plotted graph type by its menu label and/or
+    /// toggle the all-groups overlay, then replot — the same state the Graph
+    /// box's combo and checkbox mutate.
+    fn apply_mcp_graph(&mut self, args: mcp::SetGraphArgs) -> Result<String, String> {
+        if let Some(name) = &args.graph {
+            let Some(g) = GraphType::ALL
+                .into_iter()
+                .find(|g| g.label().eq_ignore_ascii_case(name))
+            else {
+                let labels: Vec<&str> = GraphType::ALL.iter().map(|g| g.label()).collect();
+                return Err(format!("unknown graph type {name:?}; one of {labels:?}"));
+            };
+            self.reduction.graph = g;
+        }
+        if let Some(all) = args.show_all_groups {
+            self.show_all_groups = all;
+        }
+        self.replot_graph();
+        Ok(format!(
+            "graph = {:?}; show all groups = {}",
+            self.reduction.graph.label(),
+            self.show_all_groups
         ))
     }
 

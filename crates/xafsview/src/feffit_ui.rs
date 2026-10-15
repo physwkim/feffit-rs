@@ -1399,6 +1399,26 @@ impl FeffitUi {
         self.paths.push(PathRow::new(label, path));
     }
 
+    /// Number of Feff paths in the fit list.
+    pub fn path_count(&self) -> usize {
+        self.paths.len()
+    }
+
+    /// Remove the path at `idx` (0-based, in add order), returning its label;
+    /// `None` when out of range. Owns the `selected_path` clamp, so every
+    /// removal (the path row's delete box, MCP `remove_paths`) keeps the
+    /// selection in range.
+    pub fn remove_path(&mut self, idx: usize) -> Option<String> {
+        if idx >= self.paths.len() {
+            return None;
+        }
+        let row = self.paths.remove(idx);
+        if self.selected_path >= self.paths.len() {
+            self.selected_path = self.paths.len().saturating_sub(1);
+        }
+        Some(row.label)
+    }
+
     /// MCP `add_path`: add a path with [`PathWiring`] overrides applied over
     /// the standard starter wiring.
     pub fn add_path_wired(&mut self, label: String, path: FeffPath, w: PathWiring) {
@@ -1816,10 +1836,7 @@ impl FeffitUi {
                     }
                 }
                 if let Some(i) = remove_path {
-                    self.paths.remove(i);
-                    if self.selected_path >= self.paths.len() {
-                        self.selected_path = self.paths.len().saturating_sub(1);
-                    }
+                    self.remove_path(i);
                 }
             }
         });
