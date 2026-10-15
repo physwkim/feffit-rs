@@ -1133,10 +1133,18 @@ impl PlotSitesWindow {
                 .append_to(&mut geometry);
         }
         if !ax.is_empty() {
-            // The absorber, larger and as a diamond, to mark the cluster centre.
+            // The absorber, larger and as a diamond, to mark the cluster centre —
+            // in its own colour: on the ipot colormap it sat at Viridis 0, the
+            // dark purple that vanishes against the black scene background.
+            let absorber_color = Colormap::from_colors(
+                &[[0xff, 0xff, 0xff, 0xff], [0xff, 0xff, 0xff, 0xff]],
+                0.0,
+                1.0,
+            )
+            .unwrap_or_else(cmap);
             Scatter3D::new()
                 .with_data(&ax, &ay, &az, &av)
-                .with_colormap(cmap())
+                .with_colormap(absorber_color)
                 .with_marker(PointMarker::Diamond)
                 .with_size(self.point_size * 1.8)
                 .append_to(&mut geometry);
