@@ -60,7 +60,7 @@ impl Tab {
         match self {
             Tab::Autobk => "Autobk",
             Tab::Feffit => "Feffit",
-            Tab::FeffitTxt => "Feffit_txt",
+            Tab::FeffitTxt => "Fit report",
             Tab::Atoms => "Atoms",
             Tab::Feff => "Feff",
             Tab::Folders => "Folders",
@@ -470,21 +470,25 @@ impl XafsViewApp {
                 let _ = reply.send(self.apply_mcp_deglitch(nsig, apply));
             }
             mcp::McpRequest::SetTab { tab, reply } => {
-                let _ = reply.send(
-                    match Tab::ALL
-                        .into_iter()
-                        .find(|t| t.label().eq_ignore_ascii_case(&tab))
-                    {
-                        Some(t) => {
-                            self.tab = t;
-                            Ok(format!("tab = {:?}", t.label()))
-                        }
-                        None => {
-                            let labels: Vec<&str> = Tab::ALL.iter().map(|t| t.label()).collect();
-                            Err(format!("unknown tab {tab:?}; one of {labels:?}"))
-                        }
-                    },
-                );
+                // "Feffit_txt" stays accepted: the tab's label until the Fit
+                // report rename, so existing MCP drivers keep working.
+                let found = Tab::ALL
+                    .into_iter()
+                    .find(|t| t.label().eq_ignore_ascii_case(&tab))
+                    .or_else(|| {
+                        tab.eq_ignore_ascii_case("Feffit_txt")
+                            .then_some(Tab::FeffitTxt)
+                    });
+                let _ = reply.send(match found {
+                    Some(t) => {
+                        self.tab = t;
+                        Ok(format!("tab = {:?}", t.label()))
+                    }
+                    None => {
+                        let labels: Vec<&str> = Tab::ALL.iter().map(|t| t.label()).collect();
+                        Err(format!("unknown tab {tab:?}; one of {labels:?}"))
+                    }
+                });
             }
             mcp::McpRequest::RunAutobk { reply } => {
                 let errors = self.status.error_count();
@@ -2416,10 +2420,11 @@ impl XafsViewApp {
         action
     }
 
-    /// The Feffit_txt tab: a plain-text report of the last fit.
+    /// The Fit report tab (the original's Feffit_txt): a plain-text report of
+    /// the last fit.
     fn feffit_txt_tab(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("Feffit_txt");
+            ui.heading("Fit report");
             ui.add_space(8.0);
             ui.weak("Text report of the last FEFFIT fit");
         });
