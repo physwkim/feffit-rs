@@ -1013,7 +1013,11 @@ impl XafsViewApp {
         // Deferred out of the render closure (which reads disjoint `self` fields):
         // the representative re-read and `build_xmu_from_paths` borrow all of self.
         let mut do_start = false;
-        crate::window::detached(
+        // Read before the closures: the pinned action row renders first (one
+        // frame stale on the stage-first-file frame) and cannot borrow
+        // `open_data` while the content closure holds it mutably.
+        let has_staged = self.open_data.has_staged();
+        crate::window::detached_with_action(
             ctx,
             "open_data",
             "Open data",
@@ -1028,12 +1032,13 @@ impl XafsViewApp {
                         ui.weak("Stage a raw scan file above to set its columns.");
                     }
                 }
-                ui.separator();
+            },
+            |ui| {
                 let start = crate::widgets::primary(
                     ui,
                     "Autobk Start",
                     crate::widgets::ROW_BTN,
-                    self.open_data.has_staged(),
+                    has_staged,
                 )
                 .on_hover_text("Build μ(E) from every staged file, then run AUTOBK");
                 if start.clicked() {

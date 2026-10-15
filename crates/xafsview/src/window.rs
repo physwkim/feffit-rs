@@ -51,6 +51,29 @@ pub fn detached(
     });
 }
 
+/// As [`detached`] but with `action_row` pinned in its own bottom panel, for a
+/// window whose last row is its primary action (OK, Autobk Start). In the
+/// single-flow [`detached`] body a tall form pushes that row past the viewport
+/// edge, and a detached window has no outer scroll, so the action becomes
+/// unreachable; a bottom panel holds its space by construction. The panel
+/// renders before `add_contents`, so anything the action row reads (an enabled
+/// gate) is one frame stale — fine for display state; apply the action itself
+/// from a flag after this call returns.
+pub fn detached_with_action(
+    ctx: &egui::Context,
+    id_source: &str,
+    title: &str,
+    open: &mut bool,
+    default_size: [f32; 2],
+    mut add_contents: impl FnMut(&mut egui::Ui),
+    mut action_row: impl FnMut(&mut egui::Ui),
+) {
+    detached_panels(ctx, id_source, title, open, default_size, |ui| {
+        egui::Panel::bottom(egui::Id::new((id_source, "action_row"))).show(ui, |ui| action_row(ui));
+        egui::CentralPanel::default().show(ui, |ui| add_contents(ui));
+    });
+}
+
 /// [`detached`] without the [`egui::CentralPanel`] wrap, for windows whose body
 /// builds its own `SidePanel`/`CentralPanel` layout on the viewport root (the
 /// panels' frames then supply the margins). Every other window goes through

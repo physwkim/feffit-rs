@@ -598,16 +598,17 @@ impl PlotDataWindow {
     /// the plot and `<=` un-plots — the original browser's Open and Append in one
     /// action, which is why there are not two buttons here for them.
     ///
-    /// Shown as its own OS viewport (via [`crate::window::detached`]) so it can be
-    /// dragged outside the Plot Data window. `log` receives the per-file reasons
-    /// when staged files fail to load (the in-window `pick_status` line only
-    /// carries the count).
+    /// Shown as its own OS viewport (via
+    /// [`crate::window::detached_with_action`]) so it can be dragged outside the
+    /// Plot Data window. `log` receives the per-file reasons when staged files
+    /// fail to load (the in-window `pick_status` line only carries the count).
     pub fn file_picker(&mut self, ctx: &egui::Context, log: &mut crate::status_log::StatusLog) {
         if !self.picker_open {
             return;
         }
         let mut keep_open = true;
-        crate::window::detached(
+        let mut do_ok = false;
+        crate::window::detached_with_action(
             ctx,
             "plot_data_picker",
             "File selection",
@@ -659,28 +660,31 @@ impl PlotDataWindow {
                 });
 
                 FileBrowser::pane_headers(ui);
-                // Leave room for the bottom action row (separator + OK), like
-                // the Open data loader's Autobk Start.
-                let list_h = (ui.available_height() - 56.0).max(160.0);
+                // The pinned action panel already took its height, so the panes
+                // get exactly what is left.
+                let list_h = ui.available_height().max(160.0);
                 let item = self.graph_item;
                 if self.browser.panes(ui, list_h, |name| item.matches(name)) {
                     // The staged set is what OK/Append will load; nothing to do
                     // until then, but a stale status line would mislead.
                     self.pick_status.clear();
                 }
-
-                ui.separator();
+            },
+            |ui| {
                 // Always enabled: OK with an emptied Selected pane un-plots
                 // everything (the pane is seeded with the loaded set).
                 if crate::widgets::primary(ui, "OK", crate::widgets::ROW_BTN, true)
                     .on_hover_text("Plot exactly the staged files")
                     .clicked()
                 {
-                    self.load_staged(log);
-                    self.picker_open = false;
+                    do_ok = true;
                 }
             },
         );
+        if do_ok {
+            self.load_staged(log);
+            self.picker_open = false;
+        }
         // The OS window's close button (keep_open=false) closes the picker too.
         self.picker_open = self.picker_open && keep_open;
         // The confirmation is a top-level window so the detached viewport does
