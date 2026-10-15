@@ -580,6 +580,7 @@ impl PlotDataWindow {
                     None => skipped += 1,
                 }
             }
+            self.traces_changed();
             self.pick_status = if skipped > 0 {
                 format!(
                     "Added {} group(s); {skipped} without data for this item.",
@@ -588,7 +589,6 @@ impl PlotDataWindow {
             } else {
                 format!("Added {} group(s).", self.group_traces.len())
             };
-            self.dirty = true;
         }
 
         // File type + graph item — surfaced here (also in the picker; both share
@@ -672,7 +672,7 @@ impl PlotDataWindow {
                 });
             if let Some(i) = remove {
                 self.group_traces.remove(i);
-                self.dirty = true;
+                self.traces_changed();
             }
         }
         if !self.loaded.is_empty() {
@@ -697,7 +697,7 @@ impl PlotDataWindow {
                 });
             if let Some(i) = remove {
                 self.loaded.remove(i);
-                self.dirty = true;
+                self.traces_changed();
             }
             if ui
                 .button("Clear Graph")
@@ -706,7 +706,7 @@ impl PlotDataWindow {
             {
                 self.loaded.clear();
                 self.group_traces.clear();
-                self.dirty = true;
+                self.traces_changed();
             }
         }
         if ui
@@ -721,7 +721,7 @@ impl PlotDataWindow {
             self.group_traces.clear();
             self.overlay = None;
             self.show_overlay = false;
-            self.dirty = true;
+            self.traces_changed();
         }
         if !self.pick_status.is_empty() {
             ui.weak(&self.pick_status);
@@ -846,10 +846,24 @@ impl PlotDataWindow {
             let before = self.loaded.len();
             self.loaded.retain(|t| t.path.exists());
             if self.loaded.len() != before {
+                self.traces_changed();
                 self.pick_status = format!("{} file(s) deleted.", before - self.loaded.len());
-                self.dirty = true;
             }
         }
+    }
+
+    /// Every change to the plotted trace set (`loaded` / `group_traces`) ends
+    /// here. The status line described the previous set, so it is cleared (a
+    /// load writes its own afterwards); the caught-peak table keeps only the
+    /// rows whose trace is still plotted, so no marker outlives its curve; and
+    /// the graph is marked for rebuild.
+    fn traces_changed(&mut self) {
+        self.pick_status.clear();
+        self.peaks.retain(|(label, _, _)| {
+            self.loaded.iter().any(|t| t.label == *label)
+                || self.group_traces.iter().any(|t| t.label == *label)
+        });
+        self.dirty = true;
     }
 
     /// Re-list the picker's folder under the current graph item, excluding the
@@ -894,6 +908,7 @@ impl PlotDataWindow {
                 }
             }
         }
+        self.traces_changed();
         let n = self.loaded.len();
         self.pick_status = if failed > 0 {
             format!("Showing {n} file(s); {failed} could not be read.")
@@ -901,7 +916,6 @@ impl PlotDataWindow {
             format!("Showing {n} file(s).")
         };
         self.refresh_available();
-        self.dirty = true;
     }
 
     /// The monitor-reading policy the raw-scan ratios are built under.
