@@ -86,15 +86,7 @@ impl OpenDataBrowser {
             self.browser.refresh(raw_scans);
         }
         ui.separator();
-        ui.horizontal_top(|ui| {
-            let pane_w = ((ui.available_width() - 72.0) * 0.5).max(150.0);
-            ui.vertical(|ui| {
-                ui.set_width(pane_w);
-                ui.strong("Available Data");
-            });
-            ui.add_space(72.0 - ui.spacing().item_spacing.x * 2.0);
-            ui.vertical(|ui| ui.strong("Selected Data"));
-        });
+        FileBrowser::pane_headers(ui);
         let _ = self.browser.panes(ui, 180.0, raw_scans);
     }
 

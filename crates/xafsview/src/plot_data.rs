@@ -620,13 +620,12 @@ impl PlotDataWindow {
                 }
                 ui.separator();
 
-                let mut do_ok = false;
-
                 // The type / item filters sit above the panes: they decide what
                 // "Available Data" lists, so they belong to the whole row rather
-                // than to one column of it.
+                // than to one column of it. Labelled like the Plot Data window's
+                // own Files block, which shares these two fields.
                 ui.horizontal(|ui| {
-                    ui.strong("Available Data");
+                    ui.label("file type");
                     egui::ComboBox::from_id_salt("pd_ftype")
                         .selected_text(self.file_type.label())
                         .show_ui(ui, |ui| {
@@ -640,6 +639,11 @@ impl PlotDataWindow {
                                 }
                             }
                         });
+                    ui.label(if self.file_type == FileType::Xmu {
+                        "xmu data type"
+                    } else {
+                        "graph item"
+                    });
                     egui::ComboBox::from_id_salt("pd_gitem")
                         .selected_text(self.graph_item.label())
                         .show_ui(ui, |ui| {
@@ -652,18 +656,12 @@ impl PlotDataWindow {
                                 }
                             }
                         });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button("OK")
-                            .on_hover_text("Plot exactly the staged files")
-                            .clicked()
-                        {
-                            do_ok = true;
-                        }
-                    });
                 });
 
-                let list_h = (ui.available_height() - 12.0).max(160.0);
+                FileBrowser::pane_headers(ui);
+                // Leave room for the bottom action row (separator + OK), like
+                // the Open data loader's Autobk Start.
+                let list_h = (ui.available_height() - 56.0).max(160.0);
                 let item = self.graph_item;
                 if self.browser.panes(ui, list_h, |name| item.matches(name)) {
                     // The staged set is what OK/Append will load; nothing to do
@@ -671,7 +669,13 @@ impl PlotDataWindow {
                     self.pick_status.clear();
                 }
 
-                if do_ok {
+                ui.separator();
+                // Always enabled: OK with an emptied Selected pane un-plots
+                // everything (the pane is seeded with the loaded set).
+                if crate::widgets::primary(ui, "OK", crate::widgets::ROW_BTN, true)
+                    .on_hover_text("Plot exactly the staged files")
+                    .clicked()
+                {
                     self.load_staged(log);
                     self.picker_open = false;
                 }

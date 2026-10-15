@@ -212,6 +212,23 @@ impl FileBrowser {
         }
     }
 
+    /// The header row above [`panes`](Self::panes) — "Available Data" over the
+    /// left pane, "Selected Data" over the right — with the same column widths,
+    /// so every staging dialog carries the same two-pane chrome.
+    pub fn pane_headers(ui: &mut egui::Ui) {
+        ui.horizontal_top(|ui| {
+            let pane_w = ((ui.available_width() - 72.0) * 0.5).max(150.0);
+            ui.vertical(|ui| {
+                ui.set_width(pane_w);
+                ui.strong("Available Data");
+            });
+            ui.add_space(72.0 - ui.spacing().item_spacing.x * 2.0);
+            ui.vertical(|ui| {
+                ui.strong("Selected Data");
+            });
+        });
+    }
+
     /// Render the two panes and the transfer buttons. `keep` is the same
     /// predicate [`refresh`](Self::refresh) takes — the lists are re-listed in
     /// place when a button changes them. Returns whether the staged set changed.
