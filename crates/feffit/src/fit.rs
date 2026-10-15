@@ -130,6 +130,8 @@ pub enum FitError {
     Expr(ExprError),
     /// Mismatched path/spec counts or other structural problem.
     Shape(String),
+    /// Varied parameters that no path expression references.
+    Unused(Vec<String>),
 }
 
 impl std::fmt::Display for FitError {
@@ -138,6 +140,12 @@ impl std::fmt::Display for FitError {
             FitError::Param(e) => write!(f, "{e}"),
             FitError::Expr(e) => write!(f, "path parameter expression: {e}"),
             FitError::Shape(s) => write!(f, "{s}"),
+            FitError::Unused(names) => write!(
+                f,
+                "varied parameter(s) not used by any path: {} — fix or remove them \
+                 (an unused variable makes every uncertainty undefined)",
+                names.join(", ")
+            ),
         }
     }
 }
@@ -171,6 +179,41 @@ struct CompiledPathSpec {
     sigma2: CompiledSpec,
     third: CompiledSpec,
     fourth: CompiledSpec,
+}
+
+/// The varied parameters that no compiled path expression reaches, directly or
+/// transitively through constraint-expression parameters. Path-local symbols
+/// (`reff`, …) collected along the way are not parameters and drop out in the
+/// final filter.
+fn unused_vars(params: &Parameters, compiled: &[Vec<CompiledPathSpec>]) -> Vec<String> {
+    let mut pending: Vec<String> = Vec::new();
+    for cspecs in compiled {
+        for c in cspecs {
+            for s in [
+                &c.degen, &c.s02, &c.e0, &c.ei, &c.deltar, &c.sigma2, &c.third, &c.fourth,
+            ] {
+                if let CompiledSpec::Expr(e) = s {
+                    e.vars(&mut pending);
+                }
+            }
+        }
+    }
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        if !used.insert(name.clone()) {
+            continue;
+        }
+        if let Some(src) = params.get(&name).and_then(|p| p.expr.as_deref())
+            && let Ok(e) = parse(src)
+        {
+            e.vars(&mut pending);
+        }
+    }
+    params
+        .var_names()
+        .into_iter()
+        .filter(|n| !used.contains(n))
+        .collect()
 }
 
 fn compile(spec: &Spec) -> Result<CompiledSpec, ExprError> {
@@ -396,6 +439,15 @@ pub fn feffit(
         compiled.push(cspecs);
     }
 
+    // Reject varied parameters no path references before touching the fit
+    // vector (UWXAFS feffit does the same for unused `guess`es): each one adds
+    // a zero Jacobian column, so the covariance turns singular and every
+    // uncertainty — not just its own — comes back NaN with no diagnostic.
+    let orphans = unused_vars(params, &compiled);
+    if !orphans.is_empty() {
+        return Err(FitError::Unused(orphans));
+    }
+
     // refine_bkg: each background-refining dataset contributes `nspline` free
     // variables (the spline coefficients), added after the user's variables so
     // the variable order matches larch (user variables, then bkg coefficients).
@@ -592,6 +644,46 @@ pub fn feffit(
         aic,
         bic,
     })
+}
+
+#[cfg(test)]
+mod unused_vars_tests {
+    use super::*;
+
+    /// Variables reached only transitively (through an expr parameter) count
+    /// as used; varied parameters nothing references are reported in
+    /// insertion order; path-local symbols are ignored.
+    #[test]
+    fn transitive_use_and_orphans() {
+        let mut params = Parameters::new();
+        params.add_var("amp", 0.9);
+        params.add_var("del_e0", 0.0); // orphan
+        params.add_var("alpha", 0.0); // orphan
+        params.add_var("e1", 0.0);
+        params.add_var("scale", 1.0); // used via n1
+        params.add_expr("n1", "2*scale");
+        let spec = PathSpec {
+            s02: Spec::Expr("amp*n1".into()),
+            e0: Spec::Expr("e1".into()),
+            deltar: Spec::Expr("0.01*reff".into()),
+            ..PathSpec::defaults(12.0)
+        };
+        let compiled = vec![vec![CompiledPathSpec::from(&spec).unwrap()]];
+        assert_eq!(unused_vars(&params, &compiled), ["del_e0", "alpha"]);
+    }
+
+    /// No orphans when every varied parameter is referenced.
+    #[test]
+    fn all_used_is_empty() {
+        let mut params = Parameters::new();
+        params.add_var("e1", 0.0);
+        let spec = PathSpec {
+            e0: Spec::Expr("e1".into()),
+            ..PathSpec::defaults(12.0)
+        };
+        let compiled = vec![vec![CompiledPathSpec::from(&spec).unwrap()]];
+        assert!(unused_vars(&params, &compiled).is_empty());
+    }
 }
 
 #[cfg(test)]
