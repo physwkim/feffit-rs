@@ -225,6 +225,12 @@ pub struct Plot {
     /// none, and drawn as a pinned bottom readout so the clicked curve's name and
     /// coordinates stay visible.
     last_pick: Option<Pick>,
+    /// Set once [`show`] has reset the view for an empty plot, cleared when a
+    /// curve is back. The inner plot keeps its last data limits after a
+    /// clear (rsplot's content-change refit skips an itemless plot), so a
+    /// graph emptied of k-space curves went on showing k ticks under an R
+    /// axis label; the one-shot reset puts the empty home view there instead.
+    empty_view: bool,
     /// Each legend-bearing curve's inner item handle, in lockstep with
     /// [`legend`](Self::legend) / [`pick_curves`](Self::pick_curves), so a
     /// declared rebuild ([`begin_declare`](Self::begin_declare)) can update or
@@ -313,6 +319,7 @@ impl Plot {
             legend_clicked: None,
             pick_curves: Vec::new(),
             last_pick: None,
+            empty_view: false,
             handles: Vec::new(),
             declared: None,
             legend_folded: None,
@@ -718,6 +725,19 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     }
 
     toolbar(plot, ui);
+
+    // An emptied plot shows the empty home view, not the last curves' limits
+    // (see `empty_view`). Once per emptying, so a later manual zoom on an
+    // empty canvas is left alone; a plot that is cleared and refilled within
+    // one frame never passes through here empty.
+    if plot.legend.is_empty() {
+        if !plot.empty_view {
+            plot.inner.reset_zoom_to_data();
+            plot.empty_view = true;
+        }
+    } else {
+        plot.empty_view = false;
+    }
 
     // rsplot fuses the crosshair guide lines and the coordinate readout behind a
     // single `graph_cursor` flag, drawing both or neither. The GUI splits them so
