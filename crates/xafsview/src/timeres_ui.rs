@@ -2,12 +2,14 @@
 //! the measurement start/finish times of a time-resolved (quick-XAFS) file
 //! series, then save the table as a single file.
 //!
-//! This is the UI skeleton: pick the file series, list one row per file with its
-//! start and finish time (hours from the first scan), and "Save as a single
-//! file". The per-file timestamp extraction is a stub — see
-//! [`extract_measured_time`] — pending the beamline data-file header format.
+//! Pick the file series, list one row per file with its start and finish time
+//! (hours from the first scan), and "Save as a single file". The timestamps
+//! come from the `Date and Time : <date> <start> ~ <finish>` field the PLS-II
+//! 10C DAQ writes into every file's first header line — see
+//! [`extract_measured_time`].
 
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::Path;
 
 use eframe::egui;
@@ -17,15 +19,16 @@ struct TimeRow {
     /// The file's display name (its file name).
     name: String,
     /// Absolute measurement `(start, finish)` timestamps in hours, parsed from
-    /// the file header — `None` until [`extract_measured_time`] is implemented.
+    /// the file header ([`extract_measured_time`]); `None` when the file has no
+    /// readable `Date and Time` field.
     abs: Option<(f64, f64)>,
 }
 
 /// **Extract XAS measured time** (그림 1-3-10): a table of one row per file in a
 /// time-resolved series — `File name | starting time (hr) | finish time (hr)` —
 /// rebased so the first scan starts at `0`, with "Save as a single file". The
-/// timestamps come from each file's header; that parser is not yet implemented
-/// (see [`extract_measured_time`]), so the time columns read `—` for now.
+/// timestamps come from each file's header (see [`extract_measured_time`]); a
+/// file without one shows `—`.
 #[derive(Default)]
 pub struct TimeResolvedWindow {
     /// Whether the window is shown.
@@ -82,13 +85,9 @@ impl TimeResolvedWindow {
     /// The window contents: pick/clear controls and the time table (the save
     /// action is the window's pinned action row).
     fn body(&mut self, ui: &mut egui::Ui) {
-        // Honest notice while [`extract_measured_time`] is a stub: without the
-        // header parser every row's times show "—", which otherwise reads as a
-        // silent failure.
-        ui.colored_label(
-            ui.visuals().warn_fg_color,
-            "⚠ Timestamp parsing is not implemented yet (the beamline header \
-             format is unconfirmed) — times below show \"—\".",
+        ui.label(
+            "Start / finish times from each file's \"Date and Time\" header, in \
+             hours from the first scan.",
         );
         ui.separator();
         ui.horizontal(|ui| {
@@ -141,7 +140,7 @@ impl TimeResolvedWindow {
     }
 
     /// Replace the table with the picked file series, extracting each file's
-    /// measurement timestamps (a no-op stub for now).
+    /// measurement timestamps from its header.
     fn pick_files(&mut self) {
         let Some(paths) = rfd::FileDialog::new().pick_files() else {
             return;
@@ -157,16 +156,13 @@ impl TimeResolvedWindow {
             })
             .collect();
         let parsed = self.rows.iter().filter(|r| r.abs.is_some()).count();
-        self.status = if parsed == 0 {
-            format!(
-                "{} file(s) listed. Measurement-time extraction is not yet implemented \
-                 (data-file header format pending).",
-                self.rows.len()
-            )
+        let n = self.rows.len();
+        self.status = if parsed == n {
+            format!("{n} file(s) listed.")
         } else {
             format!(
-                "{} file(s) listed, {parsed} with extracted times.",
-                self.rows.len()
+                "{n} file(s) listed; {} without a readable \"Date and Time\" header (shown as —).",
+                n - parsed
             )
         };
     }
@@ -219,21 +215,142 @@ impl TimeResolvedWindow {
 }
 
 /// Parse the absolute measurement `(start, finish)` timestamps, in hours, from a
-/// time-resolved data file's header.
-///
-/// **Stub** — always returns `None`. The original extracts these from the
-/// timestamp the beamline DAQ writes into each file's header; a faithful port
-/// needs that header format (PLS/POSTECH), which is not yet confirmed. Once the
-/// format is known, parse the absolute start/finish here and the window's
-/// [`displayed`](TimeResolvedWindow::displayed) rebasing + table + save fill in
-/// without further UI changes.
-fn extract_measured_time(_path: &Path) -> Option<(f64, f64)> {
-    None
+/// time-resolved data file's header: the `Date and Time : 2026-03-11 15:15:24 ~
+/// 15:32:00` field of the PLS-II 10C first header line (tab-separated
+/// `key : value` fields). `None` when the file cannot be read or carries no
+/// such field. Only the file's first bytes are read — the field sits in the
+/// first line and a fly-scan file runs to megabytes.
+fn extract_measured_time(path: &Path) -> Option<(f64, f64)> {
+    const HEADER_BYTES: u64 = 8192;
+    let mut head = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(HEADER_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    parse_date_and_time(&String::from_utf8_lossy(&head))
+}
+
+/// The `(start, finish)` of a header's `Date and Time : <date> <start> ~
+/// <finish>` field as absolute hours (days since 1970-01-01 × 24 + clock).
+/// `<finish>` is a bare clock on the same day, or a full `<date> <clock>`; a
+/// bare finish earlier than the start is a scan that crossed midnight.
+fn parse_date_and_time(header: &str) -> Option<(f64, f64)> {
+    let after_key = header.split_once("Date and Time")?.1;
+    let value = after_key.split_once(':')?.1;
+    // The field ends at the next tab-separated header field or the line end.
+    let field = value.split(['\t', '\r', '\n']).next()?.trim();
+    let (start_s, finish_s) = field.split_once('~')?;
+    let (date, clock) = start_s.trim().split_once(' ')?;
+    let day = civil_days(date.trim())?;
+    let start = day as f64 * 24.0 + clock_hours(clock.trim())?;
+    let finish_s = finish_s.trim();
+    let finish = match finish_s.split_once(' ') {
+        Some((d2, c2)) => civil_days(d2.trim())? as f64 * 24.0 + clock_hours(c2.trim())?,
+        None => {
+            let same_day = day as f64 * 24.0 + clock_hours(finish_s)?;
+            if same_day < start {
+                same_day + 24.0
+            } else {
+                same_day
+            }
+        }
+    };
+    Some((start, finish))
+}
+
+/// `HH:MM:SS` (or `HH:MM`) as hours.
+fn clock_hours(clock: &str) -> Option<f64> {
+    let mut parts = clock.split(':');
+    let h: f64 = parts.next()?.trim().parse().ok()?;
+    let m: f64 = parts.next()?.trim().parse().ok()?;
+    let s: f64 = match parts.next() {
+        Some(s) => s.trim().parse().ok()?,
+        None => 0.0,
+    };
+    if parts.next().is_some() || !(0.0..24.0).contains(&h) || !(0.0..60.0).contains(&m) {
+        return None;
+    }
+    Some(h + m / 60.0 + s / 3600.0)
+}
+
+/// Days from 1970-01-01 to a `YYYY-MM-DD` date (proleptic Gregorian; the
+/// days-from-civil algorithm), so dates subtract as whole days.
+fn civil_days(date: &str) -> Option<i64> {
+    let mut parts = date.split('-');
+    let y: i64 = parts.next()?.parse().ok()?;
+    let m: u32 = parts.next()?.parse().ok()?;
+    let d: u32 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let mp = (m + 9) % 12; // March = 0
+    let doy = (153 * u64::from(mp) + 2) / 5 + u64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe as i64 - 719_468)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first header line of a 10C step-scan file, verbatim.
+    const HEADER_10C: &str = "Data were taken at HFXAFS in Pohang Light Source(PLS-II) by : \
+        bl10c\tNumber of Points : 459\tScanning Mode : Step Scan (Transmission)\t\
+        Date and Time : 2026-03-11 15:15:24 ~ 15:32:00\tEnergy Origin(Eo) : 6539.000 (eV)\t\
+        Mono Offset(deg) : -0.006681\tScanning Time : 16.599 (min)\t\n\
+        Slit size (normal) : 0.500 x 5.000\n";
+
+    #[test]
+    fn parses_the_10c_date_and_time_field() {
+        let (start, finish) = parse_date_and_time(HEADER_10C).expect("field present");
+        // 2026-03-11 is day 20523 since the epoch; 15:15:24 and 15:32:00.
+        assert_eq!(civil_days("2026-03-11"), Some(20_523));
+        assert!((start - (20_523.0 * 24.0 + 15.0 + 15.0 / 60.0 + 24.0 / 3600.0)).abs() < 1e-9);
+        assert!((finish - (20_523.0 * 24.0 + 15.0 + 32.0 / 60.0)).abs() < 1e-9);
+        // 16 min 36 s of scanning, as the header's own "Scanning Time : 16.599".
+        assert!(((finish - start) * 60.0 - 16.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn finish_clock_before_start_crossed_midnight_and_a_dated_finish_is_taken_as_is() {
+        let (s, f) =
+            parse_date_and_time("Date and Time : 2026-03-11 23:50:00 ~ 00:10:00\t").unwrap();
+        assert!(((f - s) * 60.0 - 20.0).abs() < 1e-6);
+        let (s, f) =
+            parse_date_and_time("Date and Time : 2026-03-11 23:50:00 ~ 2026-03-12 00:10:00\n")
+                .unwrap();
+        assert!(((f - s) * 60.0 - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rejects_headers_without_a_usable_field() {
+        assert_eq!(parse_date_and_time("Number of Points : 459\n"), None);
+        assert_eq!(
+            parse_date_and_time("Date and Time : \tEnergy Origin : 1\n"),
+            None
+        );
+        assert_eq!(
+            parse_date_and_time("Date and Time : 2026-13-01 10:00:00 ~ 11:00:00"),
+            None
+        );
+        assert_eq!(clock_hours("25:00:00"), None);
+    }
+
+    #[test]
+    fn extract_reads_the_file_head() {
+        let dir = std::env::temp_dir().join(format!("xafsview_timeres_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let p = dir.join("scan.000");
+        std::fs::write(&p, HEADER_10C).expect("write");
+        let (s, f) = extract_measured_time(&p).expect("parsed");
+        assert!(((f - s) * 60.0 - 16.6).abs() < 1e-6);
+        assert_eq!(extract_measured_time(&dir.join("missing.001")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn win(rows: Vec<TimeRow>) -> TimeResolvedWindow {
         TimeResolvedWindow {
@@ -268,8 +385,7 @@ mod tests {
 
     #[test]
     fn displayed_all_none_when_no_timestamps_parsed() {
-        // With the stub parser (no header support yet), every row is None and the
-        // table shows no times.
+        // Unreadable files parse to None, and the table then shows no times.
         let w = win(vec![
             TimeRow {
                 name: "a".into(),
