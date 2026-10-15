@@ -551,11 +551,13 @@ impl Plot {
         changed
     }
 
-    /// The x coordinate of the last clicked data point (the pinned readout),
-    /// if a click has landed on a curve. In the data space of the current
-    /// graph — the caller knows whether that axis is energy, k, or R.
-    pub fn last_pick_x(&self) -> Option<f64> {
-        self.last_pick.as_ref().map(|p| p.x)
+    /// The last clicked data point (the pinned readout) as `(curve label, x)`,
+    /// if a click has landed on a curve. `x` is in the data space of the
+    /// current graph — the caller knows whether that axis is energy, k, or R —
+    /// and the label is the clicked curve's legend entry, so a caller that
+    /// overlays several groups can tell whose curve was picked.
+    pub fn last_pick(&self) -> Option<(&str, f64)> {
+        self.last_pick.as_ref().map(|p| (p.label.as_str(), p.x))
     }
 
     /// Y bounds `(min, max)` over every curve's samples whose x lies within

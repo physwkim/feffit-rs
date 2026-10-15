@@ -2305,6 +2305,24 @@ impl XafsViewApp {
         }
     }
 
+    /// Whether a click landing on the Autobk graph's curve `label` picked a
+    /// point of the current group (its principal curve, or an auxiliary one
+    /// such as the background) rather than another group's Show-all overlay.
+    /// Overlays are legended by their own group's label
+    /// ([`overlay_other_groups`](Self::overlay_other_groups)), so any other
+    /// group's label marks one; a label the current group shares with another
+    /// group is taken as the current group's own curve.
+    fn pick_is_current_group(groups: &[XasGroup], cur: Option<usize>, label: &str) -> bool {
+        let is_current = cur
+            .and_then(|i| groups.get(i))
+            .is_some_and(|g| g.label == label);
+        is_current
+            || !groups
+                .iter()
+                .enumerate()
+                .any(|(i, g)| Some(i) != cur && g.label == label)
+    }
+
     /// Draw the Autobk tab's own base curves for the selected graph type into the
     /// (already-cleared) shared plot. Called only by [`replot_graph`], which then
     /// appends the Plot Data overlay.
@@ -4328,14 +4346,23 @@ impl eframe::App for XafsViewApp {
         let npts = self.session.current_group().map_or(0, |g| g.len());
         let can_undo = !self.clean_undo.is_empty();
         let n_checked = self.session.selected.len();
-        // The last clicked data point seeds "use clicked" only when the graph's
-        // x axis is energy — on a k/R graph the pick is not an energy.
-        let picked = self
-            .reduction
-            .graph
-            .x_is_energy()
-            .then(|| self.plot.last_pick_x())
-            .flatten();
+        // "use clicked" takes the last clicked data point only when it is an
+        // energy of the group being edited: the shared plot must be showing
+        // the Autobk tab's graph (the Feffit tab draws k/R/q on the same
+        // plot) in an energy space, and the clicked curve must be the current
+        // group's, not another group's Show-all overlay.
+        let picked = (self.tab == Tab::Autobk && self.reduction.graph.x_is_energy())
+            .then(|| self.plot.last_pick())
+            .flatten()
+            .filter(|(label, _)| {
+                !self.show_all_groups
+                    || Self::pick_is_current_group(
+                        &self.session.groups,
+                        self.session.current,
+                        label,
+                    )
+            })
+            .map(|(_, x)| x);
         if let Some(action) =
             self.edit_xmu
                 .show(ui.ctx(), has_group, npts, can_undo, n_checked, picked)
@@ -4629,6 +4656,30 @@ mod tests {
 
         // A μ(E)-only group has no χ(R) stage → nothing to overlay in the R view.
         assert!(XafsViewApp::group_principal_curve(&gm, GraphType::ChiR, 2).is_none());
+    }
+
+    #[test]
+    fn pick_is_current_group_rejects_other_groups_overlay_labels() {
+        let groups = vec![
+            XasGroup::from_mu("a", vec![1.0], vec![0.1]),
+            XasGroup::from_mu("b", vec![1.0], vec![0.1]),
+        ];
+        // The current group's own curve and its auxiliary curves pass …
+        assert!(XafsViewApp::pick_is_current_group(&groups, Some(1), "b"));
+        assert!(XafsViewApp::pick_is_current_group(
+            &groups,
+            Some(1),
+            "background"
+        ));
+        // … another group's overlay (legended by that group's label) does not.
+        assert!(!XafsViewApp::pick_is_current_group(&groups, Some(1), "a"));
+        // A label the current group shares with another group is the current
+        // group's own curve, not an overlay.
+        let dup = vec![
+            XasGroup::from_mu("a", vec![1.0], vec![0.1]),
+            XasGroup::from_mu("a", vec![1.0], vec![0.1]),
+        ];
+        assert!(XafsViewApp::pick_is_current_group(&dup, Some(0), "a"));
     }
 
     #[test]
