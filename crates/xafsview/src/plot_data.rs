@@ -66,6 +66,10 @@ struct FitOverlay {
     x: Vec<f64>,
     data: Vec<f64>,
     model: Vec<f64>,
+    /// `Some(kw)` when the series is k-space `kʷ·χ(k)` at the fit's k-weight
+    /// `kw`; the draw re-weights it to the graph's G_kweight on a k-space graph.
+    /// `None` for an R/q-space series, which has no k-weight to reconcile.
+    kweight: Option<i32>,
 }
 
 /// A session group's curve added via "Add loaded groups": its y is kept
@@ -272,13 +276,22 @@ impl PlotDataWindow {
 
     /// Take a Feffit fit's data + model curves (the Feffit form's "Send to plot
     /// data"). The fit is drawn on top of the loaded files; untick "Show Feffit
-    /// fit" or "Clear fit" to remove it.
-    pub fn set_fit_overlay(&mut self, label: String, x: Vec<f64>, data: Vec<f64>, model: Vec<f64>) {
+    /// fit" or "Clear fit" to remove it. `kweight` is the fit's k-weight for a
+    /// k-space series (see [`FitOverlay::kweight`]), `None` otherwise.
+    pub fn set_fit_overlay(
+        &mut self,
+        label: String,
+        x: Vec<f64>,
+        data: Vec<f64>,
+        model: Vec<f64>,
+        kweight: Option<i32>,
+    ) {
         self.overlay = Some(FitOverlay {
             label,
             x,
             data,
             model,
+            kweight,
         });
         self.show_overlay = true;
         self.dirty = true;
@@ -964,6 +977,17 @@ impl PlotDataWindow {
         }
     }
 
+    /// The graph item the displayed curves were derived as — the same
+    /// precedence as [`axis_labels`](Self::axis_labels): the loaded files, then
+    /// the added groups, then the picker's selector when nothing is loaded.
+    fn displayed_item(&self) -> GraphItem {
+        self.loaded
+            .first()
+            .map(|t| t.item)
+            .or_else(|| self.group_traces.first().map(|t| t.item))
+            .unwrap_or(self.graph_item)
+    }
+
     /// Build the displayed traces from the loaded files — palette colours,
     /// 5-point smoothing, and "same height" applied, before any stacking offset.
     /// One source of truth for both drawing and saving.
@@ -1105,6 +1129,11 @@ impl PlotDataWindow {
         let dimming = highlighted.is_some();
         let stack = self.stack;
         let show_overlay = self.show_overlay;
+        let (g_kweight, k_graph, same_height) = (
+            self.kweight,
+            self.displayed_item().applies_kweight(),
+            self.same_height,
+        );
 
         // Palette colours, smoothing and same-height, before any stacking offset
         // (shared with the "Save in single file" path).
@@ -1141,12 +1170,15 @@ impl PlotDataWindow {
             } else {
                 (FIT_DATA, FIT_MODEL)
             };
+            // The fit follows the files' G_kweight and "Same height" treatment,
+            // so it sits on the same scale as the curves it is compared with.
+            let (data, model) = overlay_curves(ov, g_kweight, k_graph, same_height);
             self.plot
-                .add_curve_with_legend(&ov.x, &ov.data, data_c, "fit data");
+                .add_curve_with_legend(&ov.x, &data, data_c, "fit data");
             // "Only FT" overlays carry no model curve.
-            if !ov.model.is_empty() {
+            if !model.is_empty() {
                 self.plot
-                    .add_curve_with_legend(&ov.x, &ov.model, model_c, "fit model");
+                    .add_curve_with_legend(&ov.x, &model, model_c, "fit model");
             }
         }
 
@@ -1313,19 +1345,68 @@ fn smooth5(y: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+/// The `(min, span)` of `y` that [`same_height_scale`] maps onto `[0, 1]`;
+/// `None` for a flat curve (zero span) or an empty slice, which stay unscaled.
+fn same_height_span(y: &[f64]) -> Option<(f64, f64)> {
+    let mn = y.iter().copied().fold(f64::INFINITY, f64::min);
+    let mx = y.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let span = mx - mn;
+    (span.is_finite() && span != 0.0).then_some((mn, span))
+}
+
 /// Normalize `y` to unit peak-to-peak height, mapping its range onto `[0, 1]`
 /// (min → 0, max → 1) — the original's waterfall "Same height", so every stacked
 /// curve reaches the same height regardless of its native amplitude. A flat
 /// curve (zero span) and an empty slice are returned unchanged. Our
 /// interpretation: no local UWXAFS reference exists for the exact scaling.
 fn same_height_scale(y: &[f64]) -> Vec<f64> {
-    let mn = y.iter().copied().fold(f64::INFINITY, f64::min);
-    let mx = y.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let span = mx - mn;
-    if !span.is_finite() || span == 0.0 {
-        return y.to_vec();
+    match same_height_span(y) {
+        Some((mn, span)) => y.iter().map(|v| (v - mn) / span).collect(),
+        None => y.to_vec(),
     }
-    y.iter().map(|v| (v - mn) / span).collect()
+}
+
+/// A sent Feffit fit's data and model as drawn next to the files. On a k-space
+/// graph a k-space fit (`ov.kweight == Some(fit_kw)`) is re-weighted from
+/// `k^fit_kw` to the graph's `k^g_kweight`; under "Same height" both curves are
+/// then scaled by the *data* curve's span, so the model keeps its misfit
+/// against the data rather than being normalized to unit height on its own.
+fn overlay_curves(
+    ov: &FitOverlay,
+    g_kweight: i32,
+    k_graph: bool,
+    same_height: bool,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut data = ov.data.clone();
+    let mut model = ov.model.clone();
+    if let Some(fit_kw) = ov.kweight
+        && k_graph
+    {
+        let dkw = g_kweight - fit_kw;
+        if dkw != 0 {
+            // χ(0) is 0, so dividing out a k power at k = 0 stays 0, not NaN.
+            let reweight = |y: &[f64]| -> Vec<f64> {
+                ov.x.iter()
+                    .zip(y)
+                    .map(|(&k, &v)| {
+                        if k == 0.0 && dkw < 0 {
+                            0.0
+                        } else {
+                            v * k.powi(dkw)
+                        }
+                    })
+                    .collect()
+            };
+            data = reweight(&data);
+            model = reweight(&model);
+        }
+    }
+    if same_height && let Some((mn, span)) = same_height_span(&data) {
+        let scale = |y: &[f64]| -> Vec<f64> { y.iter().map(|v| (v - mn) / span).collect() };
+        data = scale(&data);
+        model = scale(&model);
+    }
+    (data, model)
 }
 
 /// Fade a curve colour (translucent) so a legend-highlighted selection stands
@@ -1477,6 +1558,55 @@ mod tests {
         assert_eq!(stack_offset_y(y.clone(), 2, 2.5), vec![6.0, 7.0, 8.0]);
         // A zero offset leaves the values untouched (no stacking, no change).
         assert_eq!(stack_offset_y(y.clone(), 3, 0.0), y);
+    }
+
+    fn overlay(x: Vec<f64>, data: Vec<f64>, model: Vec<f64>, kweight: Option<i32>) -> FitOverlay {
+        FitOverlay {
+            label: "fit".into(),
+            x,
+            data,
+            model,
+            kweight,
+        }
+    }
+
+    #[test]
+    fn overlay_curves_reweights_a_k_space_fit_to_the_graph_kweight() {
+        // A k²-weighted fit on a G_kweight = 3 k-space graph gains one power of k
+        // (k = 0 stays 0); R-space (`kweight: None`) and a non-k graph are untouched.
+        let ov = overlay(
+            vec![0.0, 1.0, 2.0],
+            vec![0.0, 1.0, 4.0],
+            vec![0.0, 2.0, 8.0],
+            Some(2),
+        );
+        let (d, m) = overlay_curves(&ov, 3, true, false);
+        assert_eq!(d, vec![0.0, 1.0, 8.0]);
+        assert_eq!(m, vec![0.0, 2.0, 16.0]);
+        // Lower G_kweight divides a power out, with k = 0 held at 0.
+        let (d, _) = overlay_curves(&ov, 1, true, false);
+        assert_eq!(d, vec![0.0, 1.0, 2.0]);
+        assert_eq!(overlay_curves(&ov, 3, false, false).0, vec![0.0, 1.0, 4.0]);
+        let r = overlay(vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 4.0], vec![], None);
+        assert_eq!(
+            overlay_curves(&r, 3, true, false),
+            (vec![0.0, 1.0, 4.0], vec![])
+        );
+    }
+
+    #[test]
+    fn overlay_curves_same_height_scales_model_by_the_data_span() {
+        // Data spans [0, 4] → [0, 1]; the model is scaled by that same span, so a
+        // model twice the data stays twice as tall instead of also topping at 1.
+        let ov = overlay(
+            vec![1.0, 2.0, 3.0],
+            vec![0.0, 2.0, 4.0],
+            vec![0.0, 4.0, 8.0],
+            None,
+        );
+        let (d, m) = overlay_curves(&ov, 2, true, true);
+        assert_eq!(d, vec![0.0, 0.5, 1.0]);
+        assert_eq!(m, vec![0.0, 1.0, 2.0]);
     }
 
     #[test]
