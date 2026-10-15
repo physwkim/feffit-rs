@@ -4546,6 +4546,15 @@ fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBu
             resp.on_hover_text(text);
         }
     });
+    // A typed path is kept as typed (the writers create a missing output folder
+    // on first save), but a path that does not exist yet is said so here, under
+    // its field, instead of a silently accepted typo.
+    if dir.as_ref().is_some_and(|d| !d.is_dir()) {
+        ui.horizontal(|ui| {
+            ui.add_space(FOLDER_LABEL_W + ui.spacing().item_spacing.x);
+            ui.colored_label(ui.visuals().warn_fg_color, "⚠ folder does not exist yet");
+        });
+    }
 }
 
 /// Whether two paths point to the same file. Canonicalizes both (so case-folding
