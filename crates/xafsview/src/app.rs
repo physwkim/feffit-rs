@@ -287,6 +287,10 @@ fn apply_form_density(ctx: &egui::Context) {
         s.icon_spacing = 6.0;
         s.window_margin = egui::Margin::same(8);
         s.menu_margin = egui::Margin::same(8);
+        // Combo popups (group / spectrum / target pickers) list every loaded
+        // scan; egui's default caps the popup at 200 px, about seven rows, so a
+        // 66-scan series was mostly behind a scrollbar.
+        s.combo_height = 480.0;
     });
 }
 
