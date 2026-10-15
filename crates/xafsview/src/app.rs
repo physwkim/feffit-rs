@@ -3667,10 +3667,18 @@ impl XafsViewApp {
                                 form::label(ui, INFO_LABEL_W, "Title");
                                 match self.session.current_group_mut() {
                                     Some(g) => {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut g.label)
-                                                .desired_width(ui.available_width()),
-                                        );
+                                        // The label is the graph title and the
+                                        // group's legend entry; redraw as it is
+                                        // typed so the plot never shows the old name.
+                                        if ui
+                                            .add(
+                                                egui::TextEdit::singleline(&mut g.label)
+                                                    .desired_width(ui.available_width()),
+                                            )
+                                            .changed()
+                                        {
+                                            change.replot = true;
+                                        }
                                     }
                                     None => {
                                         ui.weak("— no data —");
