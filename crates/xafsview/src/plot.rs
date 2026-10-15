@@ -234,6 +234,10 @@ pub struct Plot {
     /// only inside a declare session; [`commit_declare`](Self::commit_declare)
     /// diffs them against the retained curves and resets this to `None`.
     declared: Option<Vec<CurveDecl>>,
+    /// Legend fold override: `None` follows the auto rule (folded while more
+    /// than [`LEGEND_AUTO_FOLD`] entries), `Some` is the user's explicit choice
+    /// from clicking the legend header. See [`show`].
+    legend_folded: Option<bool>,
 }
 
 /// Emphasized-curve styling: the default curve width is 1.0; 3.0 reads as
@@ -285,6 +289,7 @@ impl Plot {
             last_pick: None,
             handles: Vec::new(),
             declared: None,
+            legend_folded: None,
         }
     }
 
@@ -704,7 +709,18 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
         ),
         None => area.right_top() + egui::vec2(-PAD, PAD),
     };
+    // With many curves (a batch of scans) a full legend would blanket the
+    // canvas, so past LEGEND_AUTO_FOLD entries it starts folded to a one-line
+    // "N curves" header; clicking the header toggles, and the user's choice
+    // sticks (`legend_folded`). A long unfolded legend is capped to a fraction
+    // of the plot height and scrolls, instead of spanning the full canvas.
+    const LEGEND_AUTO_FOLD: usize = 15;
+    let folded = plot
+        .legend_folded
+        .unwrap_or(plot.legend.len() > LEGEND_AUTO_FOLD);
+    let foldable = plot.legend.len() > LEGEND_AUTO_FOLD;
     let mut legend_click: Option<String> = None;
+    let mut fold_click = false;
     egui::Area::new(legend_id)
         .order(egui::Order::Foreground)
         .movable(true)
@@ -718,13 +734,30 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                 .inner_margin(egui::Margin::same(PAD as i8))
                 .show(ui, |ui| {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.set_max_width((area.width() * 0.45).clamp(90.0, 200.0));
+                        // Wide enough for a ~28-char curve name on one line
+                        // (batch scan names differ only in their suffix, so
+                        // truncation must be the fallback, not the norm).
+                        let cap = (area.width() * 0.45).clamp(90.0, 280.0);
+                        ui.set_max_width(cap);
+                        if foldable {
+                            fold_click = draw_legend_header(ui, plot.legend.len(), folded, data_bg);
+                        }
+                        if folded && foldable {
+                            return;
+                        }
+                        // Fix the column width before entering the ScrollArea:
+                        // the rows' truncating labels have no intrinsic width,
+                        // and auto-shrink would collapse them all to "…". Only
+                        // the unfolded legend gets the width — the folded
+                        // header keeps its natural (narrow) size so the
+                        // invisible `Area` doesn't blanket the plot's corner.
+                        ui.set_width(legend_intrinsic_width(ui, &plot.legend).min(cap));
                         // Disable drag-to-scroll: the ScrollArea sits above the Area
                         // and would otherwise sense the drag and scroll instead of
                         // letting the movable Area move. Scrollbar + wheel still scroll
                         // an overflowing legend (only the `drag` source is turned off).
                         egui::ScrollArea::vertical()
-                            .max_height((area.height() - 2.0 * PAD).max(40.0))
+                            .max_height((area.height() * 0.4).max(80.0))
                             .scroll_source(egui::scroll_area::ScrollSource {
                                 drag: egui::scroll_area::DragScroll::Never,
                                 ..Default::default()
@@ -735,6 +768,10 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                     });
                 });
         });
+    if fold_click {
+        plot.legend_folded = Some(!folded);
+    }
+
     // A legend row was clicked this frame — record it for `take_legend_click`.
     if legend_click.is_some() {
         plot.legend_clicked = legend_click;
@@ -755,6 +792,108 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     }
 }
 
+/// The fold header shown above a long legend: a painted fold triangle plus
+/// "N curves" in the legend's contrast colour. Senses a click only (like the
+/// rows), so a drag anywhere on it still moves the enclosing `Area`. Returns
+/// `true` when clicked.
+fn draw_legend_header(
+    ui: &mut egui::Ui,
+    count: usize,
+    folded: bool,
+    data_bg: egui::Color32,
+) -> bool {
+    let luma = 0.299 * data_bg.r() as f32 + 0.587 * data_bg.g() as f32 + 0.114 * data_bg.b() as f32;
+    let text = if luma > 128.0 {
+        egui::Color32::from_gray(0x20)
+    } else {
+        egui::Color32::from_gray(0xe0)
+    };
+    let row = ui
+        .horizontal(|ui| {
+            // The fold arrow is painted (a triangle), not a text glyph: the
+            // embedded font lacks ▸/▾, which render as tofu and make the two
+            // states indistinguishable.
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            let r = rect.shrink(1.5);
+            let points = if folded {
+                vec![r.left_top(), r.right_center(), r.left_bottom()]
+            } else {
+                vec![r.left_top(), r.right_top(), r.center_bottom()]
+            };
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
+                text,
+                egui::Stroke::NONE,
+            ));
+            ui.label(
+                egui::RichText::new(format!("{count} curves"))
+                    .color(text)
+                    .strong(),
+            );
+        })
+        .response
+        .interact(egui::Sense::click())
+        .on_hover_text(if folded {
+            "Show the legend"
+        } else {
+            "Fold the legend"
+        });
+    if row.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    row.clicked()
+}
+
+/// Width of the legend rows' line-swatch column (shared by the width estimate
+/// and the row renderer).
+const SWATCH_W: f32 = 22.0;
+
+/// The width the legend's widest row wants: swatch + spacing + the widest
+/// label laid out un-wrapped, plus row margins and scrollbar room. The rows'
+/// labels truncate (see [`draw_legend`]) and so have no intrinsic width of
+/// their own — egui's auto-shrink would collapse them to "…" — so [`show`]
+/// sets the legend column to this width (capped) before entering the
+/// `ScrollArea`.
+fn legend_intrinsic_width(ui: &egui::Ui, entries: &[(String, egui::Color32, bool)]) -> f32 {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let painter = ui.painter();
+    let widest = entries
+        .iter()
+        .map(|(l, _, _)| {
+            painter
+                .layout_no_wrap(l.clone(), body.clone(), egui::Color32::WHITE)
+                .rect
+                .width()
+        })
+        .fold(0.0f32, f32::max);
+    // swatch + spacing(4) + frame margins(8) + bold slack for the emphasized
+    // row + scrollbar width when the list overflows.
+    SWATCH_W + widest + 36.0
+}
+
+/// Elide `label` from the LEFT to fit `max_w`, keeping the tail. Batch scan
+/// names share a long common prefix and differ only in their suffix, so
+/// trailing elision ("PGT_Mn_S2_…") would make every row look identical;
+/// "…Insitu_064" keeps the part that tells curves apart.
+fn elide_left(painter: &egui::Painter, font: &egui::FontId, label: &str, max_w: f32) -> String {
+    let w = |s: String| {
+        painter
+            .layout_no_wrap(s, font.clone(), egui::Color32::WHITE)
+            .rect
+            .width()
+    };
+    if w(label.to_owned()) <= max_w {
+        return label.to_owned();
+    }
+    for (i, _) in label.char_indices().skip(1) {
+        let cand = format!("…{}", &label[i..]);
+        if w(cand.clone()) <= max_w {
+            return cand;
+        }
+    }
+    "…".to_owned()
+}
+
 /// Draw the plain in-axes legend: one row per entry — a short line swatch in the
 /// curve's colour, then its label. No fill, border, or visibility toggle (unlike
 /// rsplot's `show_legend`, which the GUI deliberately bypasses); just the colour
@@ -770,7 +909,6 @@ fn draw_legend(
     entries: &[(String, egui::Color32, bool)],
     data_bg: egui::Color32,
 ) -> Option<String> {
-    const SWATCH_W: f32 = 22.0;
     const SWATCH_H: f32 = 12.0;
     // Pick a label colour that contrasts with the data-area background (dark
     // text on a light canvas, light text on a dark one) rather than inheriting
@@ -791,6 +929,7 @@ fn draw_legend(
     } else {
         egui::Color32::from_white_alpha(110)
     };
+    let body = egui::TextStyle::Body.resolve(ui.style());
     let mut clicked = None;
     for (label, color, emph) in entries {
         let mut frame = egui::Frame::new()
@@ -816,7 +955,14 @@ fn draw_legend(
                         egui::Stroke::new(swatch_w, *color),
                     );
                     ui.add_space(4.0);
-                    let rich = egui::RichText::new(label.as_str()).color(text);
+                    // Elide to the available width instead of overflowing: a
+                    // label inside `horizontal` neither wraps nor clips by
+                    // default, so a long curve name would push the row past
+                    // the legend's width cap. The emphasized row renders bold
+                    // (wider), hence its slack.
+                    let avail = ui.available_width() - if *emph { 8.0 } else { 0.0 };
+                    let shown = elide_left(ui.painter(), &body, label, avail);
+                    let rich = egui::RichText::new(shown).color(text);
                     ui.label(if *emph { rich.strong() } else { rich });
                 });
             })
