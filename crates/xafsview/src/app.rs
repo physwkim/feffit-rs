@@ -128,6 +128,12 @@ pub struct XafsViewApp {
     /// "Add data files…", and "Clear all") is shown. The Autobk sidebar keeps
     /// only a compact current-group combo; the full list lives here.
     data_window_open: bool,
+    /// Last plain-clicked Run-checkbox row in the Data window: the anchor a
+    /// shift-click extends from ([`widgets::select_index_list`]'s convention).
+    /// Cleared when rows are removed, which would shift the indices under it.
+    ///
+    /// [`widgets::select_index_list`]: crate::widgets::select_index_list
+    data_check_anchor: Option<usize>,
     /// Whether the detached "Feffit — Batch" window is shown. The Feffit tab
     /// keeps only a "Batch…" button (left controls); the batch panel itself —
     /// an occasional bulk op — opens on demand so the central plot keeps the
@@ -372,6 +378,7 @@ impl XafsViewApp {
             feffit_batch: FeffitBatch::default(),
             open_data: OpenDataBrowser::default(),
             data_window_open: false,
+            data_check_anchor: None,
             feffit_batch_open: false,
             edit_xmu: EditXmuState::default(),
             wavelet: WaveletWindow::default(),
@@ -500,6 +507,7 @@ impl XafsViewApp {
                     for &i in sorted.iter().rev() {
                         self.session.remove_group(i);
                     }
+                    self.data_check_anchor = None;
                     self.plot_data.mark_dirty();
                     self.replot_graph();
                     let _ = reply.send(Ok(format!(
@@ -3388,7 +3396,11 @@ impl XafsViewApp {
                                     let mut on = checked[i];
                                     if ui
                                         .checkbox(&mut on, "")
-                                        .on_hover_text("Include this group in Run")
+                                        .on_hover_text(
+                                            "Include this group in Run — shift-click \
+                                             checks/unchecks the whole range from the \
+                                             last clicked row",
+                                        )
                                         .changed()
                                     {
                                         toggle = Some((i, on));
@@ -3405,6 +3417,7 @@ impl XafsViewApp {
                     self.session.groups.clear();
                     self.session.current = None;
                     self.session.clear_selected();
+                    self.data_check_anchor = None;
                     self.plot_data.mark_dirty();
                     changed = true;
                 }
@@ -3418,7 +3431,21 @@ impl XafsViewApp {
                     changed = true;
                 }
                 if let Some((i, on)) = toggle {
-                    self.session.set_selected(i, on);
+                    // Shift extends the clicked checkbox's new state over the
+                    // inclusive range from the anchor (select_index_list's
+                    // convention, as a checkbox: shift-uncheck clears a range).
+                    let shift = ui.input(|inp| inp.modifiers.shift);
+                    match (shift, self.data_check_anchor) {
+                        (true, Some(a)) if a < n => {
+                            for j in a.min(i)..=a.max(i) {
+                                self.session.set_selected(j, on);
+                            }
+                        }
+                        _ => {
+                            self.session.set_selected(i, on);
+                            self.data_check_anchor = Some(i);
+                        }
+                    }
                     changed = true;
                 }
                 if let Some(i) = select {
@@ -3427,6 +3454,9 @@ impl XafsViewApp {
                 }
                 if let Some(i) = remove {
                     self.session.remove_group(i);
+                    // Indices shifted under the anchor; a later shift-click
+                    // would range over the wrong rows.
+                    self.data_check_anchor = None;
                     self.plot_data.mark_dirty();
                     changed = true;
                 }
