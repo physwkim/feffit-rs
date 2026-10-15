@@ -483,7 +483,7 @@ impl XafsViewApp {
                         self.session.current = Some(first);
                     }
                     self.plot_data.mark_dirty();
-                    self.replot_graph();
+                    self.replot_active_tab();
                     let mut sorted = indices;
                     sorted.sort_unstable();
                     let _ = reply.send(Ok(format!(
@@ -509,7 +509,7 @@ impl XafsViewApp {
                     }
                     self.data_check_anchor = None;
                     self.plot_data.mark_dirty();
-                    self.replot_graph();
+                    self.replot_active_tab();
                     let _ = reply.send(Ok(format!(
                         "removed {} group(s); {} remain; current group = {:?}",
                         sorted.len(),
@@ -736,7 +736,7 @@ impl XafsViewApp {
         if let Some(all) = args.show_all_groups {
             self.show_all_groups = all;
         }
-        self.replot_graph();
+        self.replot_active_tab();
         Ok(format!(
             "graph = {:?}; show all groups = {}",
             self.reduction.graph.label(),
@@ -1250,7 +1250,7 @@ impl XafsViewApp {
                 self.clean_undo.clear();
                 self.edit_xmu.reset_seed();
                 self.plot_data.mark_dirty();
-                self.replot_graph();
+                self.replot_active_tab();
             }
             Err(e) => self.status.error(format!("Calc XMU failed: {e}")),
         }
@@ -1323,7 +1323,7 @@ impl XafsViewApp {
             (g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len()))
         };
         self.plot_data.mark_dirty();
-        self.replot_graph();
+        self.replot_active_tab();
         Some(info)
     }
 
@@ -1485,7 +1485,7 @@ impl XafsViewApp {
             self.show_all_groups = true;
         }
         self.plot_data.mark_dirty();
-        self.replot_graph();
+        self.replot_active_tab();
         // A parked MCP run_autobk reply belongs to this job (single job slot).
         if let Some(reply) = self.mcp_job_reply.take() {
             let line = self.status.line().to_owned();
@@ -1749,7 +1749,7 @@ impl XafsViewApp {
         // Show the whole batch at once, not just the current group.
         self.show_all_groups = true;
         self.plot_data.mark_dirty();
-        self.replot_graph();
+        self.replot_active_tab();
     }
 
     /// Build a μ(E) group from each path using the active import's column
@@ -1877,7 +1877,7 @@ impl XafsViewApp {
             // Show every μ(E) just built at once, not just the last group.
             self.show_all_groups = true;
             self.plot_data.mark_dirty();
-            self.replot_graph();
+            self.replot_active_tab();
         }
         let msg = format!(
             "Batch μ(E): built {built}, wrote {written} .xmu \
@@ -2004,7 +2004,7 @@ impl XafsViewApp {
                         self.session.groups[idx] = prev;
                         self.plot.set_x_markers(&[], GLITCH_MARKER);
                         self.plot_data.mark_dirty();
-                        self.replot_graph();
+                        self.replot_active_tab();
                     }
                     None => self.status.error(format!(
                         "Undo target \"{}\" is no longer loaded.",
@@ -2073,7 +2073,7 @@ impl XafsViewApp {
             // Any edit moves the data the candidate markers pointed at.
             self.plot.set_x_markers(&[], GLITCH_MARKER);
             self.plot_data.mark_dirty();
-            self.replot_graph();
+            self.replot_active_tab();
         }
     }
 
@@ -2094,7 +2094,9 @@ impl XafsViewApp {
                 .info(format!("Auto deglitch: no candidates at {nsig:.0}σ."));
             return;
         }
-        // The markers are energies — show them on the E-space graph.
+        // The markers are energies — show them on the E-space graph, which is
+        // the Autobk tab's (the Edit μ(E) window can be driven from any tab).
+        self.tab = Tab::Autobk;
         self.reduction.graph = GraphType::MuBkg;
         self.replot_graph();
         self.plot.set_x_markers(&energies, GLITCH_MARKER);
@@ -2138,7 +2140,7 @@ impl XafsViewApp {
             self.clean_undo.clear();
             self.plot.set_x_markers(&[], GLITCH_MARKER);
             self.plot_data.mark_dirty();
-            self.replot_graph();
+            self.replot_active_tab();
         }
         (total, groups, targets.len())
     }
@@ -2161,8 +2163,25 @@ impl XafsViewApp {
         }
     }
 
+    /// Repopulate the shared plot for whichever tab is showing it. The Autobk and
+    /// Feffit tabs draw different content onto one `Plot`, so every path that
+    /// changes shared state from outside a tab (the Data window, the Open data
+    /// loader, Edit μ(E), background AUTOBK completions, MCP calls) must replot
+    /// through here: calling `replot_graph` directly while the Feffit tab is
+    /// active overwrote the fit graph with the Autobk μ(E) overlay until the
+    /// next Run. Tabs without the shared plot leave it alone.
+    fn replot_active_tab(&mut self) {
+        match self.tab {
+            Tab::Autobk => self.replot_graph(),
+            Tab::Feffit => self.replot_feffit(),
+            Tab::Folders | Tab::FeffitTxt | Tab::Atoms | Tab::Feff => {}
+        }
+    }
+
     /// Redraw the shared plot for the active group according to the selected
     /// [`GraphType`]. Curves that need a stage not yet computed are skipped.
+    /// Autobk-tab content: callers outside the Autobk tab's own controls go
+    /// through [`replot_active_tab`](Self::replot_active_tab).
     fn replot_graph(&mut self) {
         // The Autobk tab's own graph: the current group's base curves, plus the
         // other loaded groups overlaid after Multiple_data (the current group is
@@ -4215,11 +4234,7 @@ impl eframe::App for XafsViewApp {
         // On a tab switch, repopulate the shared plot for the newly active tab
         // so it shows that tab's curves rather than the previous tab's.
         if self.tab != self.last_tab {
-            match self.tab {
-                Tab::Autobk => self.replot_graph(),
-                Tab::Feffit => self.replot_feffit(),
-                _ => {}
-            }
+            self.replot_active_tab();
             self.last_tab = self.tab;
         }
 
@@ -4361,7 +4376,7 @@ impl eframe::App for XafsViewApp {
         // here repopulates the plot.
         let ctx = ui.ctx().clone();
         if self.data_manager_window(&ctx) {
-            self.replot_graph();
+            self.replot_active_tab();
         }
 
         // The detached "Open data" loader: the in-app raw-scan browser + two-pane
