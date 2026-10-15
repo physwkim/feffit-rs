@@ -4002,9 +4002,17 @@ impl eframe::App for XafsViewApp {
         let npts = self.session.current_group().map_or(0, |g| g.len());
         let can_undo = !self.clean_undo.is_empty();
         let n_checked = self.session.selected.len();
-        if let Some(action) = self
-            .edit_xmu
-            .show(ui.ctx(), has_group, npts, can_undo, n_checked)
+        // The last clicked data point seeds "use clicked" only when the graph's
+        // x axis is energy — on a k/R graph the pick is not an energy.
+        let picked = self
+            .reduction
+            .graph
+            .x_is_energy()
+            .then(|| self.plot.last_pick_x())
+            .flatten();
+        if let Some(action) =
+            self.edit_xmu
+                .show(ui.ctx(), has_group, npts, can_undo, n_checked, picked)
         {
             match action {
                 // The auto actions that reach beyond the current group (preview

@@ -55,6 +55,15 @@ impl GraphType {
         GraphType::Norm,
     ];
 
+    /// Whether this graph's x axis is energy (eV) — the spaces where a plot
+    /// click can seed the Edit-μ(E) energy fields.
+    pub fn x_is_energy(self) -> bool {
+        !matches!(
+            self,
+            GraphType::KChi | GraphType::ChiR | GraphType::ChiQ | GraphType::BkgKDeriv
+        )
+    }
+
     /// Short menu label (matches the original's "Graph type" radio text).
     pub fn label(self) -> &'static str {
         match self {

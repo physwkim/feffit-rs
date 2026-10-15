@@ -95,8 +95,10 @@ impl EditXmuState {
 
     /// Render the window. Returns a [`CleanAction`] when an action button is
     /// pressed. `npts` is the current group's point count, `can_undo` enables
-    /// the undo button, and `n_checked` (groups checked for Run) enables the
-    /// batch auto-deglitch.
+    /// the undo button, `n_checked` (groups checked for Run) enables the
+    /// batch auto-deglitch, and `picked` — the energy of the data point last
+    /// clicked on the graph, when the graph is in an energy space — enables
+    /// "use clicked".
     pub fn show(
         &mut self,
         ctx: &egui::Context,
@@ -104,6 +106,7 @@ impl EditXmuState {
         npts: usize,
         can_undo: bool,
         n_checked: usize,
+        picked: Option<f64>,
     ) -> Option<CleanAction> {
         let mut action = None;
         let mut open = self.open;
@@ -172,6 +175,16 @@ impl EditXmuState {
                             .speed(0.5)
                             .suffix(" eV"),
                     );
+                    if ui
+                        .add_enabled(picked.is_some(), egui::Button::new("use clicked"))
+                        .on_hover_text(
+                            "Fill in the energy of the data point last clicked on the graph",
+                        )
+                        .clicked()
+                        && let Some(e) = picked
+                    {
+                        self.deglitch_e = e;
+                    }
                     if ui.button("Remove point").clicked() {
                         action = Some(CleanAction::DeglitchPoint(self.deglitch_e));
                     }

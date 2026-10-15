@@ -515,6 +515,13 @@ impl Plot {
         changed
     }
 
+    /// The x coordinate of the last clicked data point (the pinned readout),
+    /// if a click has landed on a curve. In the data space of the current
+    /// graph — the caller knows whether that axis is energy, k, or R.
+    pub fn last_pick_x(&self) -> Option<f64> {
+        self.last_pick.as_ref().map(|p| p.x)
+    }
+
     /// Y bounds `(min, max)` over every curve's samples whose x lies within
     /// `[xmin, xmax]` (bounds accepted in either order; non-finite y skipped).
     /// `None` when no sample falls inside the window.
