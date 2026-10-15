@@ -1835,15 +1835,29 @@ impl XafsViewApp {
         const UNDO_CAP: usize = 32;
 
         if let CleanAction::Undo = action {
-            match (self.clean_undo.pop(), self.session.current) {
-                (Some(prev), Some(idx)) if idx < self.session.groups.len() => {
-                    self.session.groups[idx] = prev;
-                    self.status.info("Undid last edit.");
-                    self.plot.set_x_markers(&[], GLITCH_MARKER);
-                    self.plot_data.mark_dirty();
-                    self.replot_graph();
+            // The snapshot names its own group (its label): restore *that*
+            // group, wherever it now sits — the current index may point at a
+            // different group than the one edited.
+            if let Some(prev) = self.clean_undo.pop() {
+                match self
+                    .session
+                    .groups
+                    .iter()
+                    .position(|g| g.label == prev.label)
+                {
+                    Some(idx) => {
+                        self.status
+                            .info(format!("Undid last edit on {}.", prev.label));
+                        self.session.groups[idx] = prev;
+                        self.plot.set_x_markers(&[], GLITCH_MARKER);
+                        self.plot_data.mark_dirty();
+                        self.replot_graph();
+                    }
+                    None => self.status.error(format!(
+                        "Undo target \"{}\" is no longer loaded.",
+                        prev.label
+                    )),
                 }
-                _ => {}
             }
             return;
         }
