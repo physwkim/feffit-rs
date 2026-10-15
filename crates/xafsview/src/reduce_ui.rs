@@ -304,12 +304,26 @@ impl ReductionUi {
         }
     }
 
+    /// Leaving "auto": start the manual E0 at the value the reduction found for
+    /// the current group (`detected_e0`), not at whatever the field last held
+    /// (0.0 on a fresh session), so the next Run does not silently fit with
+    /// E0 = 0. A group without a detected E0 keeps the field as is.
+    fn seed_manual_e0(&mut self, detected_e0: Option<f64>) {
+        if !self.e0_auto
+            && let Some(e0) = detected_e0
+        {
+            self.e0 = e0;
+        }
+    }
+
     /// Render the "Autobk parameters" grid plus the graph-type selector,
-    /// mirroring the original 3-column layout. The returned
-    /// [`ControlsChange`] reports whether a reduction parameter's edit just
-    /// finished (`refit`, re-run Autobk) and/or only the graph type changed
-    /// (`replot`, a cheap re-render).
-    pub fn controls(&mut self, ui: &mut egui::Ui) -> ControlsChange {
+    /// mirroring the original 3-column layout. `detected_e0` is the current
+    /// group's E0 as found by the reduction: shown in the disabled field while
+    /// "auto" is on and copied into the manual field when "auto" is unchecked.
+    /// The returned [`ControlsChange`] reports whether a reduction parameter's
+    /// edit just finished (`refit`, re-run Autobk) and/or only the graph type
+    /// changed (`replot`, a cheap re-render).
+    pub fn controls(&mut self, ui: &mut egui::Ui, detected_e0: Option<f64>) -> ControlsChange {
         let mut change = ControlsChange::default();
         rsplot::widget::form::group(ui, |ui| {
             ui.strong("Autobk parameters");
@@ -323,12 +337,23 @@ impl ReductionUi {
                         crate::widgets::uniform_num_fields(ui);
                         ui.label("Eo");
                         ui.horizontal(|ui| {
-                            change.refit |= ui.checkbox(&mut self.e0_auto, "auto").changed();
-                            let r = ui.add_enabled(
-                                !self.e0_auto,
-                                egui::DragValue::new(&mut self.e0).speed(0.1).suffix(" eV"),
-                            );
-                            change.refit |= r.drag_stopped() || r.lost_focus();
+                            if ui.checkbox(&mut self.e0_auto, "auto").changed() {
+                                self.seed_manual_e0(detected_e0);
+                                change.refit = true;
+                            }
+                            if self.e0_auto {
+                                // Read-only: the value the reduction found.
+                                let mut shown = detected_e0.unwrap_or(self.e0);
+                                ui.add_enabled(
+                                    false,
+                                    egui::DragValue::new(&mut shown).speed(0.1).suffix(" eV"),
+                                );
+                            } else {
+                                let r = ui.add(
+                                    egui::DragValue::new(&mut self.e0).speed(0.1).suffix(" eV"),
+                                );
+                                change.refit |= r.drag_stopped() || r.lost_focus();
+                            }
                         });
                         ui.end_row();
 
@@ -520,6 +545,25 @@ fn window_name(w: Window) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unchecking "auto" seeds the manual E0 from the detected value; checking
+    /// it back, or a group without a detected E0, leaves the field alone.
+    #[test]
+    fn manual_e0_seeds_from_the_detected_value() {
+        let mut r = ReductionUi::default();
+        assert!(r.e0_auto);
+        r.e0_auto = false;
+        r.seed_manual_e0(Some(6551.2));
+        assert_eq!(r.e0, 6551.2);
+        r.seed_manual_e0(None);
+        assert_eq!(r.e0, 6551.2);
+        r.e0_auto = true;
+        r.seed_manual_e0(Some(11564.3));
+        assert_eq!(r.e0, 6551.2);
+        assert_eq!(r.autobk_params().ek0, None);
+        r.e0_auto = false;
+        assert_eq!(r.autobk_params().ek0, Some(6551.2));
+    }
 
     /// The Graph-type selector must mirror the original XAFSView list: the nine
     /// entries, in order, with the original radio labels — every label distinct

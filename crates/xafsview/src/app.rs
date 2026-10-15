@@ -3693,7 +3693,8 @@ impl XafsViewApp {
                         // instead of an OS dialog + inline panel.
 
                         // --- Autobk parameters (already wrapped in its own group) -
-                        change = self.reduction.controls(ui);
+                        let detected_e0 = self.session.current_group().and_then(|g| g.e0);
+                        change = self.reduction.controls(ui, detected_e0);
 
                         // --- Graph: graph type + comparison-overlay display options
                         // (Feffit's panel gathers its graph controls the same way).
