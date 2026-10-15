@@ -459,6 +459,9 @@ impl XafsViewApp {
             mcp::McpRequest::SetGraph { args, reply } => {
                 let _ = reply.send(self.apply_mcp_graph(args));
             }
+            mcp::McpRequest::SetZoom { args, reply } => {
+                let _ = reply.send(self.apply_mcp_zoom(args));
+            }
             mcp::McpRequest::Deglitch { nsig, apply, reply } => {
                 let _ = reply.send(self.apply_mcp_deglitch(nsig, apply));
             }
@@ -645,6 +648,46 @@ impl XafsViewApp {
             "graph = {:?}; show all groups = {}",
             self.reduction.graph.label(),
             self.show_all_groups
+        ))
+    }
+
+    /// MCP `set_zoom`: explicit display limits on the main graph (each axis
+    /// pair independently), or a reset to the data bounds. Reports the
+    /// resulting limits either way.
+    fn apply_mcp_zoom(&mut self, args: mcp::SetZoomArgs) -> Result<String, String> {
+        let pair = |name: &str, min: Option<f64>, max: Option<f64>| match (min, max) {
+            (None, None) => Ok(None),
+            (Some(lo), Some(hi)) => {
+                if !lo.is_finite() || !hi.is_finite() || lo >= hi {
+                    return Err(format!("{name} limits must be finite with min < max"));
+                }
+                Ok(Some((lo, hi)))
+            }
+            _ => Err(format!("give both {name}min and {name}max, or neither")),
+        };
+        let x = pair("x", args.xmin, args.xmax)?;
+        let y = pair("y", args.ymin, args.ymax)?;
+        if args.reset == Some(true) {
+            if x.is_some() || y.is_some() {
+                return Err("reset takes no limits alongside it".to_owned());
+            }
+            self.plot.reset_zoom();
+        } else if x.is_none() && y.is_none() {
+            return Err("nothing to do: give x/y limits or reset:true".to_owned());
+        }
+        if let Some((lo, hi)) = x {
+            self.plot.set_graph_x_limits(lo, hi);
+        }
+        if let Some((lo, hi)) = y {
+            self.plot.set_graph_y_limits(lo, hi, rsplot::YAxis::Left);
+        }
+        let (xmin, xmax) = self.plot.x_limits();
+        let (ymin, ymax) = self
+            .plot
+            .y_limits(rsplot::YAxis::Left)
+            .unwrap_or((f64::NAN, f64::NAN));
+        Ok(format!(
+            "x = [{xmin:.6}, {xmax:.6}], y = [{ymin:.6}, {ymax:.6}]"
         ))
     }
 

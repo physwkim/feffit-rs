@@ -67,6 +67,10 @@ pub enum McpRequest {
         args: SetGraphArgs,
         reply: TextReply,
     },
+    SetZoom {
+        args: SetZoomArgs,
+        reply: TextReply,
+    },
     SetTab {
         tab: String,
         reply: TextReply,
@@ -158,6 +162,19 @@ pub struct SetGraphArgs {
     /// Overlay every loaded group's curve for the graph type, not just the
     /// current one (the "Show all groups" checkbox).
     pub show_all_groups: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SetZoomArgs {
+    /// X axis display limits — give both or neither.
+    pub xmin: Option<f64>,
+    pub xmax: Option<f64>,
+    /// Y axis (left) display limits — give both or neither.
+    pub ymin: Option<f64>,
+    pub ymax: Option<f64>,
+    /// `true` resets the view to the data bounds (the toolbar's Reset Zoom);
+    /// no limits may be given alongside it.
+    pub reset: Option<bool>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -397,6 +414,17 @@ impl XafsMcp {
         Parameters(a): Parameters<SetGraphArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::SetGraph { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "Zoom the main graph: set explicit x and/or y display limits, or reset:true to refit the view to the data. Reports the resulting limits."
+    )]
+    async fn set_zoom(
+        &self,
+        Parameters(a): Parameters<SetZoomArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::SetZoom { args: a, reply })
             .await
     }
 
