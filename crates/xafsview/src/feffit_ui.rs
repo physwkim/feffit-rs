@@ -156,6 +156,24 @@ impl PathLocal {
     }
 }
 
+/// MCP `add_path` wiring overrides: each field, when set, replaces that part of
+/// the standard starter wiring with the given expression over the global
+/// parameters (a plain number is a constant). `n`/`sigma2`/`third`/`fourth`
+/// land in the matching per-path local as an enabled expression; `s02` replaces
+/// the whole `amp·N` amplitude.
+#[derive(Default)]
+pub struct PathWiring {
+    pub degen: Option<String>,
+    pub e0: Option<String>,
+    pub ei: Option<String>,
+    pub deltar: Option<String>,
+    pub s02: Option<String>,
+    pub n: Option<String>,
+    pub sigma2: Option<String>,
+    pub third: Option<String>,
+    pub fourth: Option<String>,
+}
+
 /// One loaded Feff path: the shared-parameter wiring (editable expressions over
 /// the global variables / the `.dat` file) plus the per-path local fit
 /// parameters ([`PATH_LOCALS`]).
@@ -1379,6 +1397,43 @@ impl FeffitUi {
     /// Add a path file the app picked from a dialog.
     pub fn add_path(&mut self, label: String, path: FeffPath) {
         self.paths.push(PathRow::new(label, path));
+    }
+
+    /// MCP `add_path`: add a path with [`PathWiring`] overrides applied over
+    /// the standard starter wiring.
+    pub fn add_path_wired(&mut self, label: String, path: FeffPath, w: PathWiring) {
+        let mut row = PathRow::new(label, path);
+        if let Some(s) = w.degen {
+            row.degen = s;
+        }
+        if let Some(s) = w.e0 {
+            row.e0 = s;
+        }
+        if let Some(s) = w.ei {
+            row.ei = s;
+        }
+        if let Some(s) = w.deltar {
+            row.deltar = s;
+        }
+        if let Some(s) = w.s02 {
+            row.s02_override = Some(s);
+        }
+        for (slot, over) in [
+            (LOC_N, w.n),
+            (LOC_SIG, w.sigma2),
+            (LOC_THIRD, w.third),
+            (LOC_FOURTH, w.fourth),
+        ] {
+            if let Some(expr) = over {
+                row.locals[slot] = PathLocal {
+                    kind: ParamKind::Expr,
+                    value: 0.0,
+                    expr,
+                    enabled: true,
+                };
+            }
+        }
+        self.paths.push(row);
     }
 
     /// Whether any enabled path is loaded (the fit needs at least one).

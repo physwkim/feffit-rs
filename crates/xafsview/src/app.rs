@@ -191,9 +191,11 @@ pub struct XafsViewApp {
     /// Port the Settings toggle (re)starts the MCP server on: the `--mcp` port
     /// when one was given, else [`mcp::DEFAULT_PORT`].
     mcp_port: u16,
-    /// An MCP `run_fit` reply parked while its Feffit job runs; answered by
-    /// [`finish_feffit`](Self::finish_feffit) or the job-failure path.
-    mcp_fit_reply: Option<mcp::TextReply>,
+    /// An MCP reply parked while the request's background job runs (`run_fit`,
+    /// batch `load_data` — the single job slot holds at most one); answered by
+    /// the job's finisher ([`finish_feffit`](Self::finish_feffit) /
+    /// [`finish_build_xmu`](Self::finish_build_xmu)) or the job-failure path.
+    mcp_job_reply: Option<mcp::TextReply>,
     /// MCP `screenshot` replies awaiting the next [`egui::Event::Screenshot`].
     mcp_shot_replies: Vec<mcp::PngReply>,
 }
@@ -319,7 +321,7 @@ impl XafsViewApp {
             ui_scale: DEFAULT_UI_SCALE,
             mcp: None,
             mcp_port: mcp_port.unwrap_or(mcp::DEFAULT_PORT),
-            mcp_fit_reply: None,
+            mcp_job_reply: None,
             mcp_shot_replies: Vec::new(),
         };
         if mcp_port.is_some() {
@@ -375,31 +377,33 @@ impl XafsViewApp {
     /// sessions (including the written output files).
     fn handle_mcp_request(&mut self, req: mcp::McpRequest, ctx: &egui::Context) {
         match req {
-            mcp::McpRequest::LoadData { path, reply } => {
-                let before = self.session.groups.len();
-                match ColumnFile::from_path(&path) {
-                    Ok(cf) => {
-                        // The Open-data flow with this file as representative:
-                        // the import seeds the column mapping from the header,
-                        // calc_xmu builds μ(E), adds the group (making it
-                        // current), and writes the .xmu.
-                        self.import = Some(ImportState::new(cf));
-                        self.set_data_dir_from(&path);
-                        self.calc_xmu();
-                        let line = self.status.line().to_owned();
-                        let _ = reply.send(if self.session.groups.len() > before {
-                            Ok(line)
-                        } else {
-                            Err(line)
-                        });
-                    }
-                    Err(e) => {
-                        let _ = reply.send(Err(format!("Open failed: {e}")));
-                    }
-                }
-            }
+            mcp::McpRequest::LoadData { paths, reply } => self.mcp_load_data(paths, reply),
             mcp::McpRequest::SetParams { args, reply } => {
                 let _ = reply.send(self.apply_mcp_params(*args));
+            }
+            mcp::McpRequest::AddPath { args, reply } => {
+                let _ = reply.send(self.mcp_add_path(*args));
+            }
+            mcp::McpRequest::SelectGroups { indices, reply } => {
+                let n = self.session.groups.len();
+                if let Some(&bad) = indices.iter().find(|&&i| i >= n) {
+                    let _ = reply.send(Err(format!(
+                        "group index {bad} out of range ({n} group(s) loaded)"
+                    )));
+                } else {
+                    self.session.selected = indices.iter().copied().collect();
+                    if let Some(&first) = indices.first() {
+                        self.session.current = Some(first);
+                    }
+                    self.plot_data.mark_dirty();
+                    self.replot_graph();
+                    let mut sorted = indices;
+                    sorted.sort_unstable();
+                    let _ = reply.send(Ok(format!(
+                        "checked {sorted:?}; current group = {:?}",
+                        self.session.current
+                    )));
+                }
             }
             mcp::McpRequest::RunAutobk { reply } => {
                 let errors = self.status.error_count();
@@ -419,7 +423,7 @@ impl XafsViewApp {
                     if self.jobs.busy() {
                         // Started: park the reply for finish_feffit (or the
                         // job-failure path in the frame hook).
-                        self.mcp_fit_reply = Some(reply);
+                        self.mcp_job_reply = Some(reply);
                     } else {
                         // run_feffit refused synchronously; the status line
                         // carries its reason.
@@ -435,6 +439,106 @@ impl XafsViewApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             }
         }
+    }
+
+    /// MCP `load_data`: one path goes through the single-file open (import
+    /// seeded from its header, `calc_xmu` builds + adds the group); several go
+    /// through the GUI's staged batch ([`build_xmu_from_paths`]) on the job
+    /// slot, with the reply parked for [`finish_build_xmu`]. Already-loaded
+    /// files are skipped, like the Open-data window skips them.
+    ///
+    /// [`build_xmu_from_paths`]: Self::build_xmu_from_paths
+    /// [`finish_build_xmu`]: Self::finish_build_xmu
+    fn mcp_load_data(&mut self, paths: Vec<std::path::PathBuf>, reply: mcp::TextReply) {
+        if paths.len() == 1 {
+            let path = &paths[0];
+            let before = self.session.groups.len();
+            match ColumnFile::from_path(path) {
+                Ok(cf) => {
+                    // The Open-data flow with this file as representative: the
+                    // import seeds the column mapping from the header, calc_xmu
+                    // builds μ(E), adds the group (making it current), and
+                    // writes the .xmu.
+                    self.import = Some(ImportState::new(cf));
+                    self.set_data_dir_from(path);
+                    self.calc_xmu();
+                    let line = self.status.line().to_owned();
+                    let _ = reply.send(if self.session.groups.len() > before {
+                        Ok(line)
+                    } else {
+                        Err(line)
+                    });
+                }
+                Err(e) => {
+                    let _ = reply.send(Err(format!("Open failed: {e}")));
+                }
+            }
+            return;
+        }
+        if self.jobs.busy() {
+            let _ = reply.send(Err(JOB_BUSY.to_owned()));
+            return;
+        }
+        let loaded: std::collections::HashSet<std::path::PathBuf> = self
+            .session
+            .groups
+            .iter()
+            .filter_map(|g| g.filename.clone())
+            .collect();
+        let to_build: Vec<std::path::PathBuf> = paths
+            .iter()
+            .filter(|p| !loaded.contains(*p))
+            .cloned()
+            .collect();
+        if to_build.is_empty() {
+            let _ = reply.send(Ok(format!("all {} file(s) already loaded", paths.len())));
+            return;
+        }
+        match ColumnFile::from_path(&to_build[0]) {
+            Ok(cf) => {
+                self.import = Some(ImportState::new(cf));
+                self.set_data_dir_from(&to_build[0]);
+                self.build_xmu_from_paths(to_build);
+                if self.jobs.busy() {
+                    self.mcp_job_reply = Some(reply);
+                } else {
+                    let _ = reply.send(Err(self.status.line().to_owned()));
+                }
+            }
+            Err(e) => {
+                let _ = reply.send(Err(format!("Open failed (first file): {e}")));
+            }
+        }
+    }
+
+    /// MCP `add_path`: load the Feff path file and add it to the Feffit model
+    /// with the given wiring overrides.
+    fn mcp_add_path(&mut self, args: mcp::AddPathArgs) -> Result<String, String> {
+        let path = std::path::Path::new(&args.path);
+        let fp = feffit::feffdat::FeffPath::from_path(path)
+            .map_err(|e| format!("Path load failed: {e}"))?;
+        let label = args.label.unwrap_or_else(|| {
+            path.file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "path".to_owned())
+        });
+        let (reff, nleg, degen) = (fp.feffdat.reff, fp.feffdat.nleg, fp.feffdat.degen);
+        let wiring = crate::feffit_ui::PathWiring {
+            degen: args.degen,
+            e0: args.e0,
+            ei: args.ei,
+            deltar: args.deltar,
+            s02: args.s02,
+            n: args.n,
+            sigma2: args.sigma2,
+            third: args.third,
+            fourth: args.fourth,
+        };
+        self.feffit.add_path_wired(label.clone(), fp, wiring);
+        self.status.info(format!("Added Feff path {label}."));
+        Ok(format!(
+            "added path \"{label}\": reff = {reff:.4} Å, nleg = {nleg}, degen = {degen}"
+        ))
     }
 
     /// Apply an MCP `set_params` patch to the Autobk and Feffit configuration.
@@ -606,6 +710,11 @@ impl XafsViewApp {
             } else {
                 ' '
             };
+            let chk = if self.session.selected.contains(&i) {
+                "[x]"
+            } else {
+                "[ ]"
+            };
             let e0 =
                 g.e0.map_or_else(|| "-".to_owned(), |e| format!("{e:.2} eV"));
             let chi = if g.k.is_some() && g.chi.is_some() {
@@ -614,7 +723,7 @@ impl XafsViewApp {
                 "no"
             };
             out.push_str(&format!(
-                "{cur} [{i}] {}: {} points, E0 = {e0}, chi(k): {chi}\n",
+                "{cur}{chk} [{i}] {}: {} points, E0 = {e0}, chi(k): {chi}\n",
                 g.label,
                 g.len()
             ));
@@ -1395,7 +1504,16 @@ impl XafsViewApp {
              ({write_failed} not written), build errors {build_errors}, \
              unreadable {read_errors}, AUTOBK reduced {reduced}."
         );
-        if write_failed + build_errors + read_errors > 0 {
+        let failed = write_failed + build_errors + read_errors > 0;
+        // Answer a parked MCP batch load_data with the same summary.
+        if let Some(reply) = self.mcp_job_reply.take() {
+            let _ = reply.send(if failed {
+                Err(msg.clone())
+            } else {
+                Ok(msg.clone())
+            });
+        }
+        if failed {
             self.status.error(msg);
         } else {
             self.status.info(msg);
@@ -2220,7 +2338,7 @@ impl XafsViewApp {
         };
         // Answer a parked MCP run_fit with the summary line plus, when a fit
         // produced one, the full report.
-        if let Some(reply) = self.mcp_fit_reply.take() {
+        if let Some(reply) = self.mcp_job_reply.take() {
             let _ = reply.send(if failed || fit_ok == 0 {
                 Err(msg.clone())
             } else {
@@ -3391,7 +3509,7 @@ impl eframe::App for XafsViewApp {
                 let msg = format!("{label}: the background job died unexpectedly — results lost.");
                 // The single job slot means a parked MCP run_fit reply belongs
                 // to this job — answer it so the client is not left hanging.
-                if let Some(reply) = self.mcp_fit_reply.take() {
+                if let Some(reply) = self.mcp_job_reply.take() {
                     let _ = reply.send(Err(msg.clone()));
                 }
                 self.status.error(msg);

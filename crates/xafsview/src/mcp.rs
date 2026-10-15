@@ -40,11 +40,19 @@ pub type PngReply = tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>;
 /// that resolves the awaiting HTTP request.
 pub enum McpRequest {
     LoadData {
-        path: std::path::PathBuf,
+        paths: Vec<std::path::PathBuf>,
         reply: TextReply,
     },
     SetParams {
         args: Box<SetParamsArgs>,
+        reply: TextReply,
+    },
+    AddPath {
+        args: Box<AddPathArgs>,
+        reply: TextReply,
+    },
+    SelectGroups {
+        indices: Vec<usize>,
         reply: TextReply,
     },
     RunAutobk {
@@ -63,10 +71,46 @@ pub enum McpRequest {
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct LoadDataArgs {
-    /// Path to a XAS data file (beamline column file or .xmu). Columns are
+    /// Path to one XAS data file (beamline column file or .xmu). Columns are
     /// auto-detected from the header; μ(E) is built and added as a new group,
-    /// which becomes the current group.
+    /// which becomes the current group. Give `path` or `paths`, not both.
+    pub path: Option<String>,
+    /// Several files loaded as one batch (the in-situ series flow): the first
+    /// file's auto-detected column mapping applies to every file, each becomes
+    /// a group, and files already loaded are skipped.
+    pub paths: Option<Vec<String>>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct AddPathArgs {
+    /// Path to a Feff path file (feffNNNN.dat).
     pub path: String,
+    /// Path label (defaults to the file name).
+    pub label: Option<String>,
+    /// Wiring overrides: each is an expression over the global parameters (a
+    /// plain number is a constant). Unset fields keep the standard first-shell
+    /// starter wiring: degen from the file, e0 = del_e0, deltar = alpha*reff,
+    /// amplitude = amp·N (N fixed at 1), and a varied per-path σ².
+    pub degen: Option<String>,
+    pub e0: Option<String>,
+    pub ei: Option<String>,
+    pub deltar: Option<String>,
+    /// Overrides the whole amplitude (replacing amp·N), e.g. "s02*N1".
+    pub s02: Option<String>,
+    /// The N local (amplitude factor in amp·N).
+    pub n: Option<String>,
+    pub sigma2: Option<String>,
+    pub third: Option<String>,
+    pub fourth: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SelectGroupsArgs {
+    /// Group indices (as shown by get_results) to check for Run — run_autobk
+    /// and run_fit then target exactly these groups; the first index becomes
+    /// the current group. An empty list clears the checks, so runs target only
+    /// the current group.
+    pub indices: Vec<usize>,
 }
 
 /// Parameters for `set_params`. Every field is optional; only the given ones
@@ -195,14 +239,49 @@ impl XafsMcp {
 #[tool_router]
 impl XafsMcp {
     #[tool(
-        description = "Load a XAS data file (beamline column file or .xmu): columns are auto-detected, μ(E) is built and added as a new group, and that group becomes current."
+        description = "Load XAS data (beamline column files or .xmu): columns are auto-detected, μ(E) is built and each file becomes a group. `path` loads one file (it becomes current); `paths` loads a batch with the first file's column mapping."
     )]
     async fn load_data(
         &self,
         Parameters(a): Parameters<LoadDataArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.roundtrip(|reply| McpRequest::LoadData {
-            path: a.path.into(),
+        let paths: Vec<std::path::PathBuf> = match (a.path, a.paths) {
+            (Some(p), None) => vec![p.into()],
+            (None, Some(v)) if !v.is_empty() => v.into_iter().map(Into::into).collect(),
+            _ => {
+                return Err(ErrorData::invalid_params(
+                    "give exactly one of `path` (one file) or `paths` (a non-empty batch)",
+                    None,
+                ));
+            }
+        };
+        self.roundtrip(|reply| McpRequest::LoadData { paths, reply })
+            .await
+    }
+
+    #[tool(
+        description = "Add a Feff path file (feffNNNN.dat) to the Feffit model, optionally overriding its parameter wiring with expressions over the global parameters (see set_params)."
+    )]
+    async fn add_path(
+        &self,
+        Parameters(a): Parameters<AddPathArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::AddPath {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Check groups for Run by index (see get_results): run_autobk and run_fit then target exactly these groups, and the first becomes the current group. An empty list clears the checks."
+    )]
+    async fn select_groups(
+        &self,
+        Parameters(a): Parameters<SelectGroupsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::SelectGroups {
+            indices: a.indices,
             reply,
         })
         .await
