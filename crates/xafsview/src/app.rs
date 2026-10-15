@@ -207,6 +207,11 @@ pub struct XafsViewApp {
     mcp_job_reply: Option<mcp::TextReply>,
     /// MCP `screenshot` replies awaiting the next [`egui::Event::Screenshot`].
     mcp_shot_replies: Vec<mcp::PngReply>,
+    /// Armed by the In-situ window's "Re-reduce & build" when its reduction
+    /// job starts; [`finish_reduction`](Self::finish_reduction) consumes it to
+    /// rebuild the map from the freshly reduced groups (cleared if the job
+    /// dies, so a later unrelated reduction doesn't rebuild unasked).
+    insitu_rebuild_after_reduce: bool,
 }
 
 /// Default overall UI zoom (scales text *and* spacing together). Set >1.0 so
@@ -397,6 +402,7 @@ impl XafsViewApp {
             mcp_port: mcp_port.unwrap_or(mcp::DEFAULT_PORT),
             mcp_job_reply: None,
             mcp_shot_replies: Vec::new(),
+            insitu_rebuild_after_reduce: false,
         };
         if mcp_port.is_some() {
             app.start_mcp(&cc.egui_ctx);
@@ -557,14 +563,16 @@ impl XafsViewApp {
                 });
             }
             mcp::McpRequest::RunAutobk { reply } => {
-                let errors = self.status.error_count();
-                self.run_reduction();
-                let line = self.status.line().to_owned();
-                let _ = reply.send(if self.status.error_count() > errors {
-                    Err(line)
+                if self.jobs.busy() {
+                    let _ = reply.send(Err(JOB_BUSY.to_owned()));
+                } else if self.run_reduction() {
+                    // Started: park the reply for finish_reduction (or the
+                    // job-failure path in the frame hook).
+                    self.mcp_job_reply = Some(reply);
                 } else {
-                    Ok(line)
-                });
+                    // Refused synchronously; the status line carries the reason.
+                    let _ = reply.send(Err(self.status.line().to_owned()));
+                }
             }
             mcp::McpRequest::RunFit { mode, reply } => {
                 if self.jobs.busy() {
@@ -1316,83 +1324,132 @@ impl XafsViewApp {
     /// each group's χ files. A single target keeps the original single-Autobk
     /// behaviour (the editable "Output file" stem, detailed status); several use
     /// each group's own label so the outputs stay distinct.
-    fn run_reduction(&mut self) {
+    ///
+    /// The reduction runs on a background job (one progress tick per group, the
+    /// UI stays live — a 66-scan series froze the frame for seconds when this
+    /// ran inline); [`finish_reduction`](Self::finish_reduction) applies the
+    /// results, writes the files, and answers a parked MCP reply. Returns
+    /// whether the job started — `false` means the refusal reason is already on
+    /// the status line (nothing to reduce, no μ(E), or the job slot is busy).
+    fn run_reduction(&mut self) -> bool {
         let targets = self.session.run_targets();
         if targets.is_empty() {
             self.status.error("No data to reduce.");
-            return;
+            return false;
         }
         let pre = self.reduction.pre_params();
         let bk = self.reduction.autobk_params();
         let ft = self.reduction.ft_params();
         let xr = self.reduction.xftr_params();
-        let current = self.session.current;
-        // Reduce each checked group; skip any without μ(E) (e.g. a directly-loaded
-        // χ(k) group). Record the current group's (E₀, k-count) for the status.
-        let mut reduced = 0usize;
-        let mut current_info: Option<(f64, usize)> = None;
-        for &idx in &targets {
-            let Some(g) = self.session.groups.get_mut(idx) else {
-                continue;
-            };
-            if g.mu.is_empty() {
-                continue;
-            }
-            feffit::xasdata::normalize(g, &pre);
-            feffit::xasdata::autobk_group(g, &bk, 1.0);
-            feffit::xasdata::xftf_group(g, &ft);
-            feffit::xasdata::xftr_group(g, &xr);
-            reduced += 1;
-            if Some(idx) == current {
-                current_info = Some((g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len())));
-            }
-        }
-        if reduced == 0 {
+        // Snapshot the targets with a μ(E) for the worker; skip any without
+        // (e.g. a directly-loaded χ(k) group), as the inline version did.
+        let items: Vec<XasGroup> = targets
+            .iter()
+            .filter_map(|&idx| self.session.groups.get(idx))
+            .filter(|g| !g.mu.is_empty())
+            .cloned()
+            .collect();
+        if items.is_empty() {
             self.status
                 .error("No μ(E) in the selected group(s) — Calc XMU first.");
-            return;
+            return false;
         }
-        // Persist χ(k)/χ(R) (+ background) per group. Original single-Autobk
-        // "Output file" behaviour when there is one target; per-group labels when
-        // several, so the batch outputs stay distinct.
-        let single = targets.len() == 1;
+        let current_label = self
+            .session
+            .current
+            .and_then(|i| self.session.groups.get(i))
+            .map(|g| g.label.clone());
+        let targets_len = targets.len();
+        let total = items.len();
+        let started = self.jobs.start("AUTOBK", total, move |job| {
+            use rayon::prelude::*;
+            let mut items = items;
+            let done = std::sync::atomic::AtomicUsize::new(0);
+            items.par_iter_mut().for_each(|g| {
+                feffit::xasdata::normalize(g, &pre);
+                feffit::xasdata::autobk_group(g, &bk, 1.0);
+                feffit::xasdata::xftf_group(g, &ft);
+                feffit::xasdata::xftr_group(g, &xr);
+                job.progress(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
+            });
+            Box::new(move |app: &mut Self| app.finish_reduction(items, targets_len, current_label))
+        });
+        if !started {
+            self.status.error(JOB_BUSY);
+        }
+        started
+    }
+
+    /// Apply a finished AUTOBK job: write each reduced group's χ outputs, put
+    /// the groups back into the session (matched by label — the session may
+    /// have changed while the job ran; vanished groups are dropped with a log
+    /// entry), refresh the plots, answer a parked MCP `run_autobk` reply, and
+    /// rebuild the In-situ map when its Re-reduce & build asked for this run.
+    fn finish_reduction(
+        &mut self,
+        reduced_groups: Vec<XasGroup>,
+        targets_len: usize,
+        current_label: Option<String>,
+    ) {
+        let reduced = reduced_groups.len();
+        let single = targets_len == 1;
+        let mut current_info: Option<(f64, usize)> = None;
+        let mut dropped = 0usize;
         let mut saved = 0usize;
         let mut write_failed = 0usize;
         let mut single_paths = None;
-        for &idx in &targets {
-            let Some(g) = self.session.groups.get(idx) else {
-                continue;
-            };
-            if !(g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some()) {
+        for g in reduced_groups {
+            if self.session.groups.iter().all(|s| s.label != g.label) {
+                dropped += 1;
+                self.status.detail_error(format!(
+                    "{}: group removed while AUTOBK ran — its result was dropped",
+                    g.label
+                ));
                 continue;
             }
-            let stem = if single {
-                std::path::Path::new(self.reduction.output_file.trim())
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| g.label.clone())
-            } else {
-                g.label.clone()
-            };
-            match self.write_chi_files(g, &stem) {
-                Ok(paths) => {
-                    saved += 1;
-                    if single {
-                        single_paths = Some(paths);
+            if current_label.as_deref() == Some(g.label.as_str()) {
+                current_info = Some((g.e0.unwrap_or(0.0), g.k.as_ref().map_or(0, |k| k.len())));
+            }
+            // Persist χ(k)/χ(R) (+ background): original single-Autobk "Output
+            // file" behaviour for one target; per-group labels for several, so
+            // the batch outputs stay distinct.
+            if g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some() {
+                let stem = if single {
+                    std::path::Path::new(self.reduction.output_file.trim())
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| g.label.clone())
+                } else {
+                    g.label.clone()
+                };
+                match self.write_chi_files(&g, &stem) {
+                    Ok(paths) => {
+                        saved += 1;
+                        if single {
+                            single_paths = Some(paths);
+                        }
+                    }
+                    Err(e) => {
+                        write_failed += 1;
+                        // Per-file reason into the log; the summary line below
+                        // only carries the count.
+                        self.status
+                            .detail_error(format!("{stem}: χ write failed: {e}"));
                     }
                 }
-                Err(e) => {
-                    write_failed += 1;
-                    // Per-file reason into the log; the summary line below only
-                    // carries the count.
-                    self.status
-                        .detail_error(format!("{stem}: χ write failed: {e}"));
-                }
+            }
+            if let Some(slot) = self.session.groups.iter_mut().find(|s| s.label == g.label) {
+                *slot = g;
             }
         }
         let fail = if write_failed > 0 {
             format!(", {write_failed} write error(s)")
+        } else {
+            String::new()
+        };
+        let drop_note = if dropped > 0 {
+            format!(", {dropped} dropped (group list changed)")
         } else {
             String::new()
         };
@@ -1405,19 +1462,33 @@ impl XafsViewApp {
             (true, Some((e0, npts)), None) => {
                 format!("AUTOBK done: E₀ = {e0:.2} eV, {npts} k-points{fail}")
             }
-            _ => format!("AUTOBK: reduced {reduced} group(s); saved {saved} χ pair(s){fail}"),
+            _ => format!(
+                "AUTOBK: reduced {reduced} group(s); saved {saved} χ pair(s){fail}{drop_note}"
+            ),
         };
-        if write_failed > 0 {
-            self.status.error(msg);
-        } else {
+        let ok = write_failed + dropped == 0;
+        if ok {
             self.status.info(msg);
+        } else {
+            self.status.error(msg);
         }
         // Show the whole batch at once when several were reduced.
-        if targets.len() > 1 {
+        if targets_len > 1 {
             self.show_all_groups = true;
         }
         self.plot_data.mark_dirty();
         self.replot_graph();
+        // A parked MCP run_autobk reply belongs to this job (single job slot).
+        if let Some(reply) = self.mcp_job_reply.take() {
+            let line = self.status.line().to_owned();
+            let _ = reply.send(if ok { Ok(line) } else { Err(line) });
+        }
+        // The In-situ window's Re-reduce & build: the groups now carry the
+        // fresh reduction, so rebuild its map. A write failure doesn't block
+        // this — the in-memory χ the map reads is valid regardless.
+        if std::mem::take(&mut self.insitu_rebuild_after_reduce) {
+            self.insitu.build_from_groups(&self.session.groups);
+        }
     }
 
     /// Write the AUTOBK outputs the original's "Output file" produces: χ(k) →
@@ -4032,11 +4103,13 @@ impl eframe::App for XafsViewApp {
             Some(crate::jobs::Polled::Apply(apply)) => apply(self),
             Some(crate::jobs::Polled::Failed(label)) => {
                 let msg = format!("{label}: the background job died unexpectedly — results lost.");
-                // The single job slot means a parked MCP run_fit reply belongs
-                // to this job — answer it so the client is not left hanging.
+                // The single job slot means a parked MCP reply belongs to this
+                // job — answer it so the client is not left hanging. Same for
+                // the In-situ rebuild armed on a reduction job: disarm it.
                 if let Some(reply) = self.mcp_job_reply.take() {
                     let _ = reply.send(Err(msg.clone()));
                 }
+                self.insitu_rebuild_after_reduce = false;
                 self.status.error(msg);
             }
             None => {}
@@ -4274,17 +4347,14 @@ impl eframe::App for XafsViewApp {
         // Extract XAS measured time: self-contained (picks its own file series).
         self.time_resolved.show(ui.ctx());
         // In-situ map: the scan-series image over the loaded groups (or a
-        // legacy BL10C series file it opens itself). Re-reduce & build runs
-        // the Autobk-tab reduction here (the window has no parameters of its
-        // own) and rebuilds only when the reduction added no error, so a
-        // failed reduce keeps the window's map and status untouched.
+        // legacy BL10C series file it opens itself). Re-reduce & build starts
+        // the Autobk-tab reduction job here (the window has no parameters of
+        // its own); the armed flag makes finish_reduction rebuild the map. A
+        // synchronous refusal keeps the window's map and status untouched.
         if let Some(InsituAction::ReduceAndBuild) = self.insitu.show(ui.ctx(), &self.session.groups)
+            && self.run_reduction()
         {
-            let errors = self.status.error_count();
-            self.run_reduction();
-            if self.status.error_count() == errors {
-                self.insitu.build_from_groups(&self.session.groups);
-            }
+            self.insitu_rebuild_after_reduce = true;
         }
 
         // The Plot Sites 3D viewer parses the shared feff.inp into a point cloud.
