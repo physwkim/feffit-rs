@@ -29,7 +29,7 @@ pub use clean::{
     trim,
 };
 pub use group::{Folders, Session, XasGroup};
-pub use reader::{ColumnFile, ReadError, RoleGuess, read_chi_dat};
+pub use reader::{ColumnFile, ReadError, RoleGuess, is_data_row, read_chi_dat};
 pub use reduce::{FtParams, XftrParams, autobk_group, normalize, xftf_group, xftr_group};
 pub use xmu::{
     MONITOR_FLOOR, MonitorPolicy, MuSpec, XmuError, build_mu, fluorescence_mu, transmission_mu,

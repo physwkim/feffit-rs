@@ -9,17 +9,21 @@
 //! ([`crate::import::ImportState`]) and an **Autobk Start** button that builds
 //! μ(E) for every staged file and reduces them.
 //!
-//! It lists **raw scan files only** (the `.xmu`/`.chi`/… outputs this app writes
-//! back are hidden by [`is_output_file`]); a precomputed-μ file is loaded through
-//! the same panel using the reading-format Mode "Raw μ". The reading-format
-//! mapping applies to *every* staged file at build time, so the app previews the
+//! It lists **raw scan files only**: the `.xmu`/`.chi`/… outputs this app writes
+//! back are hidden by [`is_output_file`], and a file whose content does not read
+//! as a scan table — an image, a window dump, a JSON manifest — is hidden by
+//! [`looks_like_scan`]. A precomputed-μ file is loaded through the same panel
+//! using the reading-format Mode "Raw μ". The reading-format mapping applies to
+//! *every* staged file at build time, so the app previews the
 //! [`representative`](OpenDataBrowser::representative) (the first staged file).
 
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
 use crate::file_browser::FileBrowser;
+use crate::widgets::file_name_of;
 
 /// The Open-data loader's browse + staging state. The reading-format chooser and
 /// the Autobk Start button live on the app (they need
@@ -97,9 +101,49 @@ impl OpenDataBrowser {
     }
 }
 
-/// The Open-data listing filter: raw scan files only.
-fn raw_scans(name: &str) -> bool {
-    !is_output_file(name)
+/// The Open-data listing filter — raw scan files only: not one of this app's
+/// own outputs, and content that plausibly holds a scan table. Shared with the
+/// Plot Data window's raw-channel items ([`crate::plot_files::GraphItem`]),
+/// which list by the same rule.
+pub(crate) fn raw_scans(path: &Path) -> bool {
+    !is_output_file(&file_name_of(path)) && looks_like_scan(path)
+}
+
+/// True when the file's first few KB read as text containing at least one
+/// numeric data row — judged by [`feffit::xasdata::is_data_row`], the reader's
+/// own tokenization, so this rule cannot drift from what import accepts.
+/// Binary files (images, window dumps) and structured text without bare
+/// numeric rows (JSON manifests) can never build μ(E), so the loader does not
+/// list them. The 8 KB window is generous: beamline headers run a dozen lines.
+/// Non-UTF-8 bytes are decoded lossily rather than rejected — CP949 Korean
+/// headers are text, not binary.
+fn looks_like_scan(path: &Path) -> bool {
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = [0u8; 8192];
+    let mut n = 0;
+    loop {
+        match f.read(&mut buf[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(_) => return false,
+        }
+        if n == buf.len() {
+            break;
+        }
+    }
+    if buf[..n].contains(&0) {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&buf[..n]);
+    let mut lines: Vec<&str> = text.lines().collect();
+    // A full window can cut the final line mid-row; judging a partial line
+    // (e.g. a JSON "6539.0," losing its comma) would misclassify.
+    if n == buf.len() {
+        lines.pop();
+    }
+    lines.into_iter().any(feffit::xasdata::is_data_row)
 }
 
 /// True for the `.xmu` / `.chi` / `.dat` / `.fit` / `.bkg` files this app writes
@@ -127,5 +171,49 @@ mod tests {
         assert!(!is_output_file("PGT_Mn_S2_NCM50_W_Insitu.000"));
         assert!(!is_output_file("scan.001"));
         assert!(!is_output_file("data.txt"));
+    }
+
+    #[test]
+    fn looks_like_scan_keeps_tables_drops_binaries_and_manifests() {
+        let d = std::env::temp_dir().join(format!("xafsview_od_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("mkdir");
+
+        let scan = d.join("scan.000");
+        std::fs::write(
+            &scan,
+            "1 Data were taken at HFXAFS\n2 Description :\n6539.0 100000 50000\n",
+        )
+        .expect("w");
+        assert!(raw_scans(&scan));
+
+        // EUC-KR header bytes are text, not binary — the lossy decode keeps
+        // the numeric rows below them visible.
+        let kr = d.join("korean.000");
+        let mut bytes = vec![0xC7, 0xD1, 0xB1, 0xDB, b'\n'];
+        bytes.extend_from_slice(b"6539.0 100.0\n");
+        std::fs::write(&kr, &bytes).expect("w");
+        assert!(raw_scans(&kr));
+
+        let json = d.join("batchload.json");
+        std::fs::write(
+            &json,
+            "{\n  \"files\": [\"a.000\"],\n  \"n\": [6539.0, 1.0]\n}\n",
+        )
+        .expect("w");
+        assert!(!raw_scans(&json), "no bare numeric row");
+
+        let png = d.join("shot.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR").expect("w");
+        assert!(!raw_scans(&png), "NUL bytes mark it binary");
+
+        let xmu = d.join("scan.xmu");
+        std::fs::write(&xmu, "6539.0 1.0\n").expect("w");
+        assert!(
+            !raw_scans(&xmu),
+            "our own output stays hidden even as a table"
+        );
+
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

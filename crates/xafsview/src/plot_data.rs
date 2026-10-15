@@ -617,7 +617,7 @@ impl PlotDataWindow {
             |ui| {
                 let item = self.graph_item;
                 if self.browser.nav_bar(ui, "(pick a folder)") {
-                    self.browser.refresh(|name| item.matches(name));
+                    self.browser.refresh(|p| item.matches(p));
                 }
                 ui.separator();
 
@@ -664,7 +664,7 @@ impl PlotDataWindow {
                 // get exactly what is left.
                 let list_h = ui.available_height().max(160.0);
                 let item = self.graph_item;
-                if self.browser.panes(ui, list_h, |name| item.matches(name)) {
+                if self.browser.panes(ui, list_h, |p| item.matches(p)) {
                     // The staged set is what OK/Append will load; nothing to do
                     // until then, but a stale status line would mislead.
                     self.pick_status.clear();
@@ -690,7 +690,7 @@ impl PlotDataWindow {
         // The confirmation is a top-level window so the detached viewport does
         // not clip it. A deletion can invalidate loaded traces, so drop those.
         let item = self.graph_item;
-        if self.browser.confirm_delete(ctx, |name| item.matches(name)) {
+        if self.browser.confirm_delete(ctx, |p| item.matches(p)) {
             let before = self.loaded.len();
             self.loaded.retain(|t| t.path.exists());
             if self.loaded.len() != before {
@@ -704,7 +704,7 @@ impl PlotDataWindow {
     /// staged files (which hold the loaded set while the picker is open).
     fn refresh_available(&mut self) {
         let item = self.graph_item;
-        self.browser.refresh(|name| item.matches(name));
+        self.browser.refresh(|p| item.matches(p));
     }
 
     /// Reconcile the loaded set to the staged selection (`pick_add`): reuse the

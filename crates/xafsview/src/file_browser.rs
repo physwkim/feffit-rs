@@ -108,12 +108,13 @@ impl FileBrowser {
     }
 
     /// Re-list the current folder: sub-folders into the nav row, and the files
-    /// `keep` accepts (by bare file name) into *Available*, minus the staged.
+    /// `keep` accepts (by full path, so a host may look at the contents, not
+    /// just the name) into *Available*, minus the staged.
     ///
     /// Dotfiles are always skipped — macOS AppleDouble `._*` sidecars and
     /// `.DS_Store` are not data and only clutter the list — so `keep` never sees
     /// them and no host has to re-state the rule.
-    pub fn refresh(&mut self, keep: impl Fn(&str) -> bool) {
+    pub fn refresh(&mut self, keep: impl Fn(&Path) -> bool) {
         // The lists are about to change, so any anchored row index is stale.
         self.avail_anchor = None;
         self.sel_anchor = None;
@@ -135,7 +136,7 @@ impl FileBrowser {
                 self.subdirs.push(path);
                 continue;
             }
-            if !path.is_file() || !keep(&name) || self.staged.contains(&path) {
+            if !path.is_file() || !keep(&path) || self.staged.contains(&path) {
                 continue;
             }
             self.available.push(path);
@@ -233,7 +234,7 @@ impl FileBrowser {
     /// predicate [`refresh`](Self::refresh) takes — the lists are re-listed in
     /// place when a button changes them. Returns whether the staged set changed.
     #[must_use]
-    pub fn panes(&mut self, ui: &mut egui::Ui, list_h: f32, keep: impl Fn(&str) -> bool) -> bool {
+    pub fn panes(&mut self, ui: &mut egui::Ui, list_h: f32, keep: impl Fn(&Path) -> bool) -> bool {
         let mut do_add = false;
         let mut do_remove = false;
         let mut do_sort = false;
@@ -370,7 +371,7 @@ impl FileBrowser {
     /// rows between panes, so the confirmation is not optional: nothing leaves
     /// the disk without this dialog being answered.
     #[must_use]
-    pub fn confirm_delete(&mut self, ctx: &egui::Context, keep: impl Fn(&str) -> bool) -> bool {
+    pub fn confirm_delete(&mut self, ctx: &egui::Context, keep: impl Fn(&Path) -> bool) -> bool {
         if self.pending_delete.is_empty() && self.delete_errors.is_empty() {
             return false;
         }
@@ -467,7 +468,7 @@ mod tests {
 
         let mut fb = FileBrowser::new("t");
         fb.set_dir(Some(d.clone()));
-        fb.refresh(|name| !name.ends_with(".xmu"));
+        fb.refresh(|p| !file_name_of(p).ends_with(".xmu"));
 
         assert_eq!(fb.subdirs, vec![d.join("sub")]);
         assert_eq!(

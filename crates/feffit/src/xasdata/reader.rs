@@ -284,6 +284,14 @@ fn parse_floats(line: &str) -> Option<Vec<f64>> {
     if out.is_empty() { None } else { Some(out) }
 }
 
+/// Whether `line` reads as a numeric data row under the same tokenization the
+/// reader uses for the data block (whitespace/comma split, every token a
+/// float, comment lines excluded). Public so a host listing candidate scan
+/// files can apply the reader's own notion of a data row without restating it.
+pub fn is_data_row(line: &str) -> bool {
+    parse_floats(line).is_some()
+}
+
 /// Strip a single leading comment character (and following space) from a header
 /// line, returning the remainder trimmed.
 fn strip_comment(line: &str) -> &str {

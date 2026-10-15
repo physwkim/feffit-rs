@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use feffit::xasdata::{ColumnFile, MonitorPolicy};
 use feffit::xasproc::{PreEdgeParams, pre_edge};
 
-use crate::open_data::is_output_file;
+use crate::open_data::raw_scans;
+use crate::widgets::file_name_of;
 
 /// The file-overlay types of the original's *File type* selector. (The remaining
 /// analysis-mode / beamline-specific types — `Normalize`, `res. all`,
@@ -364,13 +365,13 @@ impl GraphItem {
         })
     }
 
-    /// Whether `name` (a bare file name) is selected by this item.
-    pub fn matches(self, name: &str) -> bool {
+    /// Whether the file at `path` is selected by this item.
+    pub fn matches(self, path: &Path) -> bool {
         match self.suffix() {
-            Some(sfx) => name.to_ascii_lowercase().ends_with(sfx),
-            // Raw scans select by exclusion: everything in the folder that is
-            // not one of our own outputs.
-            None => !is_output_file(name),
+            Some(sfx) => file_name_of(path).to_ascii_lowercase().ends_with(sfx),
+            // Raw scans list by the Open-data loader's rule: not one of our
+            // own outputs, and content that reads as a scan table.
+            None => raw_scans(path),
         }
     }
 
@@ -638,11 +639,11 @@ mod tests {
     #[test]
     fn item_suffixes_are_mutually_exclusive_within_a_type() {
         // q.dat must not be picked up by the k.dat or r.dat filters.
-        assert!(GraphItem::DatQ.matches("FeS2q.dat"));
-        assert!(!GraphItem::DatK.matches("FeS2q.dat"));
-        assert!(!GraphItem::DatR.matches("FeS2q.dat"));
+        assert!(GraphItem::DatQ.matches(Path::new("FeS2q.dat")));
+        assert!(!GraphItem::DatK.matches(Path::new("FeS2q.dat")));
+        assert!(!GraphItem::DatR.matches(Path::new("FeS2q.dat")));
         // case-insensitive on the extension
-        assert!(GraphItem::XmuF.matches("SAMPLE.XMU"));
+        assert!(GraphItem::XmuF.matches(Path::new("SAMPLE.XMU")));
     }
 
     /// A PLS-II transmission scan with an SDD array: tab-separated labels whose
@@ -660,17 +661,29 @@ mod tests {
     #[test]
     fn raw_items_select_scans_and_exclude_our_own_outputs() {
         let raw = GraphItem::Raw(RawChannel::Transmission);
-        assert!(raw.matches("PGT_Mn_S2_NCM50_W_Insitu.000"));
-        assert!(raw.matches("scan.001"));
-        assert!(raw.matches("data.txt"));
+        // The raw rule sniffs content, so the positives are real files.
+        let d = std::env::temp_dir().join(format!("xafsview_pf_raw_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("mkdir");
+        for name in ["PGT_Mn_S2_NCM50_W_Insitu.000", "scan.001", "data.txt"] {
+            let p = d.join(name);
+            std::fs::write(&p, "header\n6539.0 100000 50000\n").expect("w");
+            assert!(raw.matches(&p), "{name}");
+        }
+        // A non-table file in the same folder is not offered as a scan.
+        let png = d.join("shot.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR").expect("w");
+        assert!(!raw.matches(&png));
         // Not our outputs — otherwise a raw overlay would list every .xmu the
-        // app has written into the same folder.
-        assert!(!raw.matches("sample.xmu"));
-        assert!(!raw.matches("samplek.chi"));
-        assert!(!raw.matches("samplee.bkg"));
-        assert!(!raw.matches("fit.FIT"));
+        // app has written into the same folder (excluded by name alone, so no
+        // file is needed).
+        assert!(!raw.matches(Path::new("sample.xmu")));
+        assert!(!raw.matches(Path::new("samplek.chi")));
+        assert!(!raw.matches(Path::new("samplee.bkg")));
+        assert!(!raw.matches(Path::new("fit.FIT")));
         // And the suffix-keyed items still do not claim a raw scan.
-        assert!(!GraphItem::XmuF.matches("scan.001"));
+        assert!(!GraphItem::XmuF.matches(Path::new("scan.001")));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -876,10 +889,10 @@ mod tests {
     #[test]
     fn bkg_items_select_their_files_and_load_the_value_untouched() {
         // e.bkg / k.bkg suffixes are exclusive of each other and of the χ items.
-        assert!(GraphItem::BkgK.matches("FeS2k.bkg"));
-        assert!(GraphItem::BkgE.matches("FeS2e.bkg"));
-        assert!(!GraphItem::BkgK.matches("FeS2e.bkg"));
-        assert!(!GraphItem::ChiK.matches("FeS2k.bkg"));
+        assert!(GraphItem::BkgK.matches(Path::new("FeS2k.bkg")));
+        assert!(GraphItem::BkgE.matches(Path::new("FeS2e.bkg")));
+        assert!(!GraphItem::BkgK.matches(Path::new("FeS2e.bkg")));
+        assert!(!GraphItem::ChiK.matches(Path::new("FeS2k.bkg")));
 
         // The background is stored ready-to-plot: no k-weighting, no derivative.
         let p = tmp("k.bkg");
