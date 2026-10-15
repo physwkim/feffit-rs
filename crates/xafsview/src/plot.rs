@@ -784,13 +784,18 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
             } else {
                 egui::Color32::from_gray(0x90)
             };
-            ui.painter().text(
-                area.center(),
-                egui::Align2::CENTER_CENTER,
-                hint,
+            // Wrapped to the data-area width and clipped to it: on a narrow
+            // plot the sentence folds into lines instead of spilling over the
+            // panels beside the graph (the clip covers the degenerate case of
+            // an area smaller than even the wrapped text).
+            let painter = ui.painter().with_clip_rect(area);
+            let galley = painter.layout(
+                hint.clone(),
                 egui::FontId::proportional(15.0),
                 color,
+                (area.width() - 16.0).max(0.0),
             );
+            painter.galley(area.center() - galley.size() / 2.0, galley, color);
         }
         return;
     }
@@ -1128,7 +1133,9 @@ fn draw_cursor_overlay(
     crosshair: bool,
     data_bg: egui::Color32,
 ) {
-    let painter = ui.painter();
+    // Clipped to the data area: the readout box flips to stay inside, but on a
+    // plot narrower than the label the flip alone cannot keep it in.
+    let painter = ui.painter().with_clip_rect(area);
     let luma = 0.299 * data_bg.r() as f32 + 0.587 * data_bg.g() as f32 + 0.114 * data_bg.b() as f32;
     let dark_canvas = luma <= 128.0;
     let fg = if dark_canvas {
@@ -1215,7 +1222,9 @@ fn nearest_pick(
 /// it stays put as a *separate* readout (unlike the pointer-following cursor
 /// overlay). `data_bg` is the canvas colour the text/box tones contrast against.
 fn draw_pick_readout(ui: &egui::Ui, area: egui::Rect, pick: &Pick, data_bg: egui::Color32) {
-    let painter = ui.painter();
+    // Clipped to the data area: a long curve name on a narrow plot must not
+    // spill over the panels beside the graph.
+    let painter = ui.painter().with_clip_rect(area);
     let luma = 0.299 * data_bg.r() as f32 + 0.587 * data_bg.g() as f32 + 0.114 * data_bg.b() as f32;
     let dark_canvas = luma <= 128.0;
     let fg = if dark_canvas {
