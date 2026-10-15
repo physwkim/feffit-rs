@@ -238,6 +238,11 @@ pub struct Plot {
     /// than [`LEGEND_AUTO_FOLD`] entries), `Some` is the user's explicit choice
     /// from clicking the legend header. See [`show`].
     legend_folded: Option<bool>,
+    /// One legend row's height as measured from the rows [`show`] laid out
+    /// last frame; sizes the unfolded legend's row-snapped scroll viewport.
+    /// `None` until first measured (the first frame uses
+    /// [`legend_row_metrics`]'s estimate).
+    legend_row_h: Option<f32>,
     /// Handles of the x-markers managed by [`set_x_markers`](Self::set_x_markers),
     /// removed and re-added as a set on each call. Markers added through the
     /// deref'd `Plot1D::add_x_marker` are NOT tracked here — their caller owns
@@ -303,6 +308,7 @@ impl Plot {
             handles: Vec::new(),
             declared: None,
             legend_folded: None,
+            legend_row_h: None,
             marker_handles: Vec::new(),
             limits_row: false,
             empty_hint: None,
@@ -878,10 +884,17 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                         // Snap the viewport down to whole rows: an arbitrary
                         // height cap slices the bottom row in half, which reads
                         // as a broken label rather than as an overflow.
-                        let (row_h, row_gap) = legend_row_metrics(ui);
+                        // The row height comes from the rows as they were
+                        // actually laid out last frame (`legend_row_h`); the
+                        // metrics estimate only seeds the first frame. An
+                        // estimate alone under-counted the pitch (egui's
+                        // horizontal-row minimum height, frame margins) and
+                        // capped a three-curve legend at two visible rows.
+                        let (est_row_h, row_gap) = legend_row_metrics(ui);
+                        let row_h = plot.legend_row_h.unwrap_or(est_row_h);
                         let cap_h = (area.height() * 0.4).max(80.0);
                         let rows = (((cap_h + row_gap) / (row_h + row_gap)).floor()).max(1.0);
-                        egui::ScrollArea::vertical()
+                        let out = egui::ScrollArea::vertical()
                             .max_height(rows * row_h + (rows - 1.0) * row_gap)
                             .scroll_source(egui::scroll_area::ScrollSource {
                                 drag: egui::scroll_area::DragScroll::Never,
@@ -890,6 +903,18 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                             .show(ui, |ui| {
                                 legend_click = draw_legend(ui, &plot.legend, data_bg);
                             });
+                        // Measure: N rows separated by N−1 gaps fill the content.
+                        let n = plot.legend.len() as f32;
+                        let measured = (out.content_size.y - (n - 1.0) * row_gap) / n;
+                        if measured.is_finite()
+                            && measured > 0.0
+                            && plot.legend_row_h != Some(measured)
+                        {
+                            plot.legend_row_h = Some(measured);
+                            // Re-cap with the real pitch right away instead of
+                            // showing a sliced bottom row for one frame.
+                            ui.ctx().request_repaint();
+                        }
                     });
                 });
         });
@@ -977,11 +1002,14 @@ const SWATCH_W: f32 = 22.0;
 /// Height of a legend row's colour swatch (see [`draw_legend`]).
 const SWATCH_H: f32 = 12.0;
 
-/// Height of one legend row and the gap between rows, as [`draw_legend`] lays
-/// them out: a row is the swatch/label line plus the row frame's 1px top and
-/// bottom margins, and rows are separated by the 2px `item_spacing` the legend
-/// sets. [`show`] snaps the unfolded legend's scroll viewport to a whole number
-/// of rows with these, so the cap never slices the bottom row in half.
+/// First-frame estimate of one legend row's height, and the gap between rows,
+/// as [`draw_legend`] lays them out: a row is the swatch/label line plus the
+/// row frame's 1px top and bottom margins, and rows are separated by the 2px
+/// `item_spacing` the legend sets. [`show`] snaps the unfolded legend's scroll
+/// viewport to a whole number of rows so the cap never slices the bottom row
+/// in half; from the second frame on it uses the measured row height
+/// (`Plot::legend_row_h`), since the estimate ignores egui's horizontal-row
+/// minimum height. The gap is exact.
 fn legend_row_metrics(ui: &egui::Ui) -> (f32, f32) {
     let text_h = ui.text_style_height(&egui::TextStyle::Body);
     (text_h.max(SWATCH_H) + 2.0, 2.0)
