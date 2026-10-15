@@ -181,6 +181,11 @@ pub struct ReductionUi {
     /// Auto-filled from the loaded file's stem on load; editable. Empty falls
     /// back to the group label at write time.
     pub output_file: String,
+    /// The group label `output_file` was seeded for (and edited under): the
+    /// single-target AUTOBK write honours the field only for that group
+    /// ([`output_stem_for`](Self::output_stem_for)), so a stem seeded from the
+    /// last-loaded scan can never name another scan's χ files.
+    pub output_file_for: Option<String>,
 }
 
 impl Default for ReductionUi {
@@ -213,11 +218,46 @@ impl Default for ReductionUi {
             nnorm: 2,
             theory: None,
             output_file: String::new(),
+            output_file_for: None,
         }
     }
 }
 
 impl ReductionUi {
+    /// Point the "Output file" field at `label`'s scan (`<label>.chi`) unless
+    /// it already belongs to that group — an edit made under it is kept — and
+    /// blank it when there is no group (`None`). Called on load and every
+    /// frame for the current group, so the field follows the group switch
+    /// instead of the last-loaded file.
+    pub fn seed_output_file(&mut self, label: Option<&str>) {
+        match label {
+            Some(label) if self.output_file_for.as_deref() != Some(label) => {
+                self.output_file = format!("{label}.chi");
+                self.output_file_for = Some(label.to_owned());
+            }
+            Some(_) => {}
+            None => {
+                self.output_file.clear();
+                self.output_file_for = None;
+            }
+        }
+    }
+
+    /// The χ-file stem for `label`'s single-target AUTOBK outputs: the field's
+    /// stem when the field belongs to that group and is not blank, else the
+    /// label itself (a batch always uses the labels).
+    pub fn output_stem_for(&self, label: &str) -> String {
+        if self.output_file_for.as_deref() == Some(label)
+            && let Some(stem) = std::path::Path::new(self.output_file.trim())
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .filter(|s| !s.is_empty())
+        {
+            return stem;
+        }
+        label.to_owned()
+    }
+
     /// Pre-edge parameters for this selection.
     pub fn pre_params(&self) -> PreEdgeParams {
         let mut p = PreEdgeParams::default();
@@ -563,6 +603,32 @@ mod tests {
         assert_eq!(r.autobk_params().ek0, None);
         r.e0_auto = false;
         assert_eq!(r.autobk_params().ek0, Some(6551.2));
+    }
+
+    /// The "Output file" stem belongs to the group it was seeded for: it
+    /// follows a group switch, keeps an edit made under the same group, and
+    /// never names another group's χ files (the single-target write falls
+    /// back to that group's label).
+    #[test]
+    fn output_file_follows_the_current_group() {
+        let mut r = ReductionUi::default();
+        assert_eq!(r.output_stem_for("Mn_000"), "Mn_000");
+        r.seed_output_file(Some("Pt_000"));
+        assert_eq!(r.output_file, "Pt_000.chi");
+        assert_eq!(r.output_stem_for("Pt_000"), "Pt_000");
+        assert_eq!(r.output_stem_for("Mn_000"), "Mn_000");
+        r.output_file = "pt_foil_run2.chi".into();
+        r.seed_output_file(Some("Pt_000"));
+        assert_eq!(r.output_stem_for("Pt_000"), "pt_foil_run2");
+        r.output_file = "  ".into();
+        assert_eq!(r.output_stem_for("Pt_000"), "Pt_000");
+        r.seed_output_file(Some("Mn_000"));
+        assert_eq!(r.output_file, "Mn_000.chi");
+        assert_eq!(r.output_stem_for("Mn_000"), "Mn_000");
+        r.seed_output_file(None);
+        assert!(r.output_file.is_empty());
+        r.seed_output_file(Some("Mn_000"));
+        assert_eq!(r.output_file, "Mn_000.chi");
     }
 
     /// The Graph-type selector must mirror the original XAFSView list: the nine

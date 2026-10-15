@@ -1251,7 +1251,7 @@ impl XafsViewApp {
                     Err(e) => format!(" · .xmu not written: {e}"),
                 };
                 // Seed the Autobk "Output file" chi base from the loaded name.
-                self.reduction.output_file = format!("{label}.chi");
+                self.reduction.seed_output_file(Some(&label));
                 // Record the source path on the group, so the "Data File" field
                 // shows it and AUTOBK's χ-file writer can fall back to the source
                 // folder instead of the launch directory.
@@ -1438,11 +1438,7 @@ impl XafsViewApp {
             // the batch outputs stay distinct.
             if g.k.as_deref().is_some_and(|k| !k.is_empty()) && g.r.is_some() {
                 let stem = if single {
-                    std::path::Path::new(self.reduction.output_file.trim())
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| g.label.clone())
+                    self.reduction.output_stem_for(&g.label)
                 } else {
                     g.label.clone()
                 };
@@ -3730,6 +3726,13 @@ impl XafsViewApp {
                             });
                             ui.horizontal(|ui| {
                                 form::label(ui, INFO_LABEL_W, "Output file");
+                                // The field follows the current group (it was
+                                // seeded only on load, so after loading Pt and
+                                // switching back to a Mn scan, Autobk Start on
+                                // the Mn scan wrote Pt-named χ files).
+                                self.reduction.seed_output_file(
+                                    self.session.current_group().map(|g| g.label.as_str()),
+                                );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.reduction.output_file)
                                         .hint_text("(auto)")
