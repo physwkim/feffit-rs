@@ -3026,6 +3026,11 @@ impl XafsViewApp {
         let (space, part) = self.feffit.plot_selection();
         let Some(p) = self.feffit.plot() else {
             self.plot.set_graph_title("XAFSView");
+            // No fit yet: still label the axes for the selected fit space, so
+            // the empty plot doesn't carry the previous tab's μ(E)/Energy axes.
+            let (xl, yl) = crate::feffit_ui::space_labels(space, part);
+            self.plot.set_graph_x_label(xl);
+            self.plot.set_graph_y_label(yl, rsplot::YAxis::Left);
             return;
         };
         // Same orientation rule as the Autobk graph: name the focused fit.
@@ -3036,9 +3041,9 @@ impl XafsViewApp {
         // K+Q: kʷ·χ(k) and χ(q) overlaid on the shared Å⁻¹ axis (four curves).
         if space == PlotSpace::KQ {
             let ((kx, kd, km), (qx, qd, qm)) = p.kq_series(part);
-            self.plot.set_graph_x_label("k, q (Å⁻¹)");
-            self.plot
-                .set_graph_y_label("kʷ·χ(k), χ(q)", rsplot::YAxis::Left);
+            let (xl, yl) = crate::feffit_ui::space_labels(space, part);
+            self.plot.set_graph_x_label(xl);
+            self.plot.set_graph_y_label(yl, rsplot::YAxis::Left);
             // Legend each focused curve with the group name (like the overlaid
             // fits), keeping the k/q + data/fit qualifier to tell the four apart.
             let (dk, mk, dq, mq) = match self.feffit_fit_group.as_deref() {

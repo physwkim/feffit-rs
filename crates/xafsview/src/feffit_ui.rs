@@ -652,21 +652,24 @@ impl FeffitPlot {
                 let weight = |k: &[f64], chi: &[f64]| -> Vec<f64> {
                     k.iter().zip(chi).map(|(&k, &c)| c * k.powi(kw)).collect()
                 };
+                let (xl, yl) = space_labels(PlotSpace::K, part);
                 (
                     self.data_k.clone(),
                     weight(&self.data_k, &self.data_chi),
                     weight(&self.data_k, &self.model_chi),
-                    "k (Å⁻¹)",
-                    "kʷ·χ(k)",
+                    xl,
+                    yl,
                 )
             }
             PlotSpace::R => {
-                let (dy, my, yl) = pick_part(part, &self.data, &self.model, true);
-                (self.data.r.clone(), dy, my, "R (Å)", yl)
+                let (dy, my) = pick_part(part, &self.data, &self.model, true);
+                let (xl, yl) = space_labels(PlotSpace::R, part);
+                (self.data.r.clone(), dy, my, xl, yl)
             }
             PlotSpace::Q => {
-                let (dy, my, yl) = pick_part(part, &self.data, &self.model, false);
-                (self.data.q.clone(), dy, my, "q (Å⁻¹)", yl)
+                let (dy, my) = pick_part(part, &self.data, &self.model, false);
+                let (xl, yl) = space_labels(PlotSpace::Q, part);
+                (self.data.q.clone(), dy, my, xl, yl)
             }
         }
     }
@@ -740,12 +743,37 @@ impl FeffitPlot {
 
 /// Pick the data/model component arrays (and a y-label) for the chosen part,
 /// from R-space (`r_space = true`) or q-space outputs.
+/// The `(x, y)` axis labels for a plot space/part — what [`FeffitPlot::series`]
+/// attaches to its data, but computable without a fit, so the empty Feffit
+/// plot can carry the fit-space axes instead of whatever the previous tab
+/// left behind. Single owner of the (space, part) → label mapping.
+pub(crate) fn space_labels(space: PlotSpace, part: PlotPart) -> (&'static str, &'static str) {
+    // Name the space in the label: rotated vertically, a bare "|χ|" reads as a
+    // single odd glyph, and the Autobk graph already says "|χ(R)|".
+    let y_part = |r_space: bool| match (part, r_space) {
+        (PlotPart::Mag, true) => "|χ(R)|",
+        (PlotPart::Mag, false) => "|χ(q)|",
+        (PlotPart::Re, true) => "Re χ(R)",
+        (PlotPart::Re, false) => "Re χ(q)",
+        (PlotPart::Im, true) => "Im χ(R)",
+        (PlotPart::Im, false) => "Im χ(q)",
+        (PlotPart::Pha, true) => "Phase χ(R)",
+        (PlotPart::Pha, false) => "Phase χ(q)",
+    };
+    match space {
+        PlotSpace::K => ("k (Å⁻¹)", "kʷ·χ(k)"),
+        PlotSpace::KQ => ("k, q (Å⁻¹)", "kʷ·χ(k), χ(q)"),
+        PlotSpace::R => ("R (Å)", y_part(true)),
+        PlotSpace::Q => ("q (Å⁻¹)", y_part(false)),
+    }
+}
+
 fn pick_part(
     part: PlotPart,
     data: &XafsOutput,
     model: &XafsOutput,
     r_space: bool,
-) -> (Vec<f64>, Vec<f64>, &'static str) {
+) -> (Vec<f64>, Vec<f64>) {
     let (dmag, dre, dim, dpha) = if r_space {
         (&data.chir_mag, &data.chir_re, &data.chir_im, &data.chir_pha)
     } else {
@@ -766,17 +794,11 @@ fn pick_part(
             &model.chiq_pha,
         )
     };
-    // Name the space in the label: rotated vertically, a bare "|χ|" reads as a
-    // single odd glyph, and the Autobk graph already says "|χ(R)|".
-    match (part, r_space) {
-        (PlotPart::Mag, true) => (dmag.clone(), mmag.clone(), "|χ(R)|"),
-        (PlotPart::Mag, false) => (dmag.clone(), mmag.clone(), "|χ(q)|"),
-        (PlotPart::Re, true) => (dre.clone(), mre.clone(), "Re χ(R)"),
-        (PlotPart::Re, false) => (dre.clone(), mre.clone(), "Re χ(q)"),
-        (PlotPart::Im, true) => (dim.clone(), mim.clone(), "Im χ(R)"),
-        (PlotPart::Im, false) => (dim.clone(), mim.clone(), "Im χ(q)"),
-        (PlotPart::Pha, true) => (dpha.clone(), mpha.clone(), "Phase χ(R)"),
-        (PlotPart::Pha, false) => (dpha.clone(), mpha.clone(), "Phase χ(q)"),
+    match part {
+        PlotPart::Mag => (dmag.clone(), mmag.clone()),
+        PlotPart::Re => (dre.clone(), mre.clone()),
+        PlotPart::Im => (dim.clone(), mim.clone()),
+        PlotPart::Pha => (dpha.clone(), mpha.clone()),
     }
 }
 
