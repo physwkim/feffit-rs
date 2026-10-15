@@ -4112,12 +4112,7 @@ impl XafsViewApp {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.heading("Folders");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.strong("Change folder");
-                        });
-                    });
+                    ui.heading("Folders");
                     ui.label(
                         "Pick a Sub base (project) folder: it creates and points the five \
                          working folders at <sub base>/{Data, Autobk, Feffit, Atoms, Results}. \
