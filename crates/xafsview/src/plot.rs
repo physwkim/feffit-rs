@@ -894,9 +894,8 @@ fn draw_legend_header(
     };
     let row = ui
         .horizontal(|ui| {
-            // The fold arrow is painted (a triangle), not a text glyph: the
-            // embedded font lacks ▸/▾, which render as tofu and make the two
-            // states indistinguishable.
+            // The fold arrow is painted (a triangle), not a text glyph, so its
+            // look does not depend on which fallback font supplies ▸/▾.
             let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
             let r = rect.shrink(1.5);
             let points = if folded {

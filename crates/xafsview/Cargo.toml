@@ -66,6 +66,11 @@ serde_json = "1.0.154"
 base64 = "0.23"
 png = "0.18.1"
 
+# Font-chain glyph-coverage test (src/fonts.rs): parse the vendored + egui
+# default fonts' cmaps. Already in the dependency tree via epaint.
+[dev-dependencies]
+skrifa = "0.44"
+
 # Embed assets/icon.ico into the .exe as its Windows Explorer/taskbar file icon
 # (see build.rs). Gated to a Windows host: the resource compile needs the MSVC
 # (or GNU) resource compiler, and only a Windows build emits a .exe to carry it,

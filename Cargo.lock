@@ -4575,6 +4575,7 @@ dependencies = [
  "rsplot",
  "serde",
  "serde_json",
+ "skrifa",
  "tokio",
  "tokio-util",
  "winresource",
