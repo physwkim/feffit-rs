@@ -600,9 +600,8 @@ impl KeConvertWindow {
                             .suffix(" eV"),
                     );
                     ui.label("⇒");
-                    let de = self.energy - self.e0;
-                    if de > 0.0 {
-                        ui.strong(format!("k = {:.4} Å⁻¹", feffit::feffdat::etok(de).sqrt()));
+                    if let Some(k) = k_from_energy(self.energy, self.e0) {
+                        ui.strong(format!("k = {k:.4} Å⁻¹"));
                     } else {
                         ui.strong("k = 0 Å⁻¹");
                         ui.weak("(at/below edge)");
@@ -630,9 +629,28 @@ impl KeConvertWindow {
     }
 }
 
+/// Photoelectron wavenumber [Å⁻¹] for photon energy `energy` about edge `e0`;
+/// `None` at or below the edge. `feffit::feffdat::etok` already returns `k`
+/// (`sqrt(ΔE·ETOK)`), so no further root is taken here.
+fn k_from_energy(energy: f64, e0: f64) -> Option<f64> {
+    let de = energy - e0;
+    (de > 0.0).then(|| feffit::feffdat::etok(de))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn k_from_energy_matches_ktoe_inverse() {
+        // ΔE = 100 eV → k = sqrt(100 / 3.809982) = 5.1232 Å⁻¹ (not the 2.2633 a
+        // second sqrt would give).
+        let k = k_from_energy(11664.3, 11564.3).unwrap();
+        assert!((k - 5.1232).abs() < 5e-5, "k = {k}");
+        assert!((feffit::feffdat::ktoe(k) - 100.0).abs() < 1e-9);
+        assert_eq!(k_from_energy(11564.3, 11564.3), None);
+        assert_eq!(k_from_energy(11000.0, 11564.3), None);
+    }
 
     #[test]
     fn symbols_match_xraydb() {
