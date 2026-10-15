@@ -1279,7 +1279,14 @@ impl FeffitUi {
                 let mut s = String::from("=== Fit statistics ===\n");
                 s.push_str(&format!("  n_independent  = {:.3}\n", res.n_idp));
                 s.push_str(&format!("  n_varys        = {}\n", res.nvarys));
-                s.push_str(&format!("  n_free         = {}\n", res.nfree));
+                s.push_str(&format!(
+                    "  deg_of_freedom = {:.3}  (n_independent - n_varys)\n",
+                    res.n_idp - res.nvarys as f64
+                ));
+                s.push_str(&format!(
+                    "  n_data, n_free = {}, {}  (residual points, minus n_varys)\n",
+                    res.ndata, res.nfree
+                ));
                 s.push_str(&format!("  chi_square     = {:.6}\n", res.chi_square));
                 s.push_str(&format!("  reduced chi^2  = {:.6}\n", res.chi2_reduced));
                 s.push_str(&format!("  R-factor       = {:.6}\n", res.rfactor));
@@ -2129,8 +2136,12 @@ impl FeffitUi {
                         ui.label("variable #");
                         ui.monospace(format!("{}", res.nvarys));
                         ui.end_row();
-                        ui.label("deg of free");
-                        ui.monospace(format!("{}", res.nfree));
+                        // Stern's ν = n_idp − nvarys, the divisor of red. χ²; the
+                        // result's `nfree` is lmfit's residual-point count minus
+                        // nvarys (kept for larch parity) and is not this row.
+                        ui.label("deg of free")
+                            .on_hover_text("ind. points − variable #: the divisor of red. χ²");
+                        ui.monospace(format!("{:.1}", res.n_idp - res.nvarys as f64));
                         ui.end_row();
                         stat_row(ui, "red. χ²", res.chi2_reduced);
                         stat_row(ui, "χ²", res.chi_square);
