@@ -2281,12 +2281,26 @@ impl XafsViewApp {
         let stack = self.stack;
         let cur = self.session.current;
         let palette = &crate::plot::PALETTE;
+        // On an energy axis a group at another edge (Mn at 6.5 keV next to Pt
+        // at 11.5 keV) squeezes both onto slivers of a 5 keV span, so only the
+        // groups whose energy range overlaps the focused group's are compared.
+        // k, R and q axes are shared by every group and need no such cut.
+        let cur_x: Option<Vec<f64>> = if graph.x_is_energy() {
+            cur.and_then(|i| self.session.groups.get(i))
+                .and_then(|g| Self::group_principal_curve(g, graph, kweight))
+                .map(|(x, _)| x)
+        } else {
+            None
+        };
         let mut j = 0usize;
         for (i, g) in self.session.groups.iter().enumerate() {
             if Some(i) == cur {
                 continue;
             }
             if let Some((x, y)) = Self::group_principal_curve(g, graph, kweight) {
+                if cur_x.as_deref().is_some_and(|cx| !spans_overlap(cx, &x)) {
+                    continue;
+                }
                 // Skip BLUE / ORANGE (the current group's colours) so a comparison
                 // curve never shares the focused group's colour.
                 let color = palette[2 + j % (palette.len() - 2)];
@@ -4557,6 +4571,20 @@ fn folder_row(ui: &mut egui::Ui, label: &str, dir: &mut Option<std::path::PathBu
     }
 }
 
+/// Whether the x ranges of two curves overlap (touching counts). An empty or
+/// all-NaN curve overlaps nothing.
+fn spans_overlap(a: &[f64], b: &[f64]) -> bool {
+    fn span(x: &[f64]) -> Option<(f64, f64)> {
+        let lo = x.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        (lo <= hi).then_some((lo, hi))
+    }
+    match (span(a), span(b)) {
+        (Some((alo, ahi)), Some((blo, bhi))) => alo <= bhi && blo <= ahi,
+        _ => false,
+    }
+}
+
 /// Whether two paths point to the same file. Canonicalizes both (so case-folding
 /// and `..` are resolved on macOS); falls back to a path compare when `b` does
 /// not exist yet (in which case it is a different, new file).
@@ -4666,6 +4694,16 @@ mod tests {
 
         // A μ(E)-only group has no χ(R) stage → nothing to overlay in the R view.
         assert!(XafsViewApp::group_principal_curve(&gm, GraphType::ChiR, 2).is_none());
+    }
+
+    #[test]
+    fn spans_overlap_requires_a_shared_x_range() {
+        // Mn (6.3–7.1 keV) and Pt (11.4–12.5 keV) never overlap; a shared edge
+        // does; touching ranges count; an empty curve overlaps nothing.
+        assert!(!spans_overlap(&[6339.0, 7100.0], &[11464.0, 12563.0]));
+        assert!(spans_overlap(&[6339.0, 7100.0], &[6400.0, 6900.0]));
+        assert!(spans_overlap(&[7100.0, 6339.0], &[7100.0, 7500.0]));
+        assert!(!spans_overlap(&[], &[1.0, 2.0]));
     }
 
     #[test]
