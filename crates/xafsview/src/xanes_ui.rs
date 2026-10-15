@@ -36,7 +36,9 @@ pub struct XanesWindow {
     rhi: f64,
     /// Target level for the "x @ y" cursor.
     yval: f64,
-    seeded: bool,
+    /// The spectrum (`target` index) the region / arctangent center were last
+    /// seeded for; a different pick reseeds them from the new spectrum.
+    seeded_for: Option<usize>,
     /// Cursor results, most recent last (capped).
     readouts: Vec<Readout>,
     // Arctangent-step baseline subtraction.
@@ -65,7 +67,7 @@ impl XanesWindow {
             rlo: 0.0,
             rhi: 0.0,
             yval: 0.5,
-            seeded: false,
+            seeded_for: None,
             readouts: Vec::new(),
             arc_on: false,
             amp: 1.0,
@@ -157,8 +159,12 @@ impl XanesWindow {
             self.dirty = true;
         }
 
-        // Seed region + arctangent center from the spectrum's span / e0 once.
-        if !self.seeded
+        // A newly picked spectrum: seed the region + arctangent center from its
+        // span / e0, drop the previous spectrum's cursors, and replot. Keyed to
+        // the picked index rather than a one-shot flag: a Pt-seeded region kept
+        // across a switch to a Mn group made every cursor search silently find
+        // nothing, and the plot kept the old curve until some other edit.
+        if self.seeded_for != self.target
             && let Some((e, _)) = self.target_xy(groups)
             && e.len() >= 2
         {
@@ -170,7 +176,9 @@ impl XanesWindow {
                 .and_then(|g| g.e0)
                 .unwrap_or((e[0] + e[e.len() - 1]) * 0.5);
             self.center = e0;
-            self.seeded = true;
+            self.readouts.clear();
+            self.seeded_for = self.target;
+            self.dirty = true;
         }
 
         ui.separator();

@@ -86,7 +86,9 @@ pub struct LcfWindow {
     use_flat: bool,
     emin: f64,
     emax: f64,
-    seeded: bool,
+    /// The target index the fit range was last seeded for; a different pick
+    /// reseeds it from the new target's span.
+    seeded_for: Option<usize>,
     result: Option<LcfResult>,
     error: Option<String>,
     dirty: bool,
@@ -106,7 +108,7 @@ impl LcfWindow {
             use_flat: true,
             emin: 0.0,
             emax: 0.0,
-            seeded: false,
+            seeded_for: None,
             result: None,
             error: None,
             dirty: true,
@@ -163,32 +165,33 @@ impl LcfWindow {
             .and_then(|i| groups.get(i))
             .map(|g| g.label.clone())
             .unwrap_or_else(|| "— pick target —".to_owned());
-        let mut target_changed = false;
         egui::ComboBox::from_label("Target")
             .selected_text(target_label)
             .show_ui(ui, |ui| {
                 for (i, g) in groups.iter().enumerate() {
                     if g.norm.is_some() {
-                        target_changed |= ui
-                            .selectable_value(&mut self.target, Some(i), &g.label)
-                            .clicked();
+                        ui.selectable_value(&mut self.target, Some(i), &g.label);
                     }
                 }
             });
-        if target_changed {
+        // A newly picked target: the previous target's fit no longer describes
+        // what is shown, and the fit range is reseeded from the new span (keyed
+        // to the picked index, not a one-shot flag — a Pt-seeded range kept
+        // across a switch to a Mn target has no overlap with it).
+        if self.seeded_for != self.target {
+            self.seeded_for = self.target;
+            self.result = None;
+            self.error = None;
             self.dirty = true;
-        }
-        // Seed the fit range from the target's energy span the first time.
-        if !self.seeded
-            && let Some((e, _)) = self
+            if let Some((e, _)) = self
                 .target
                 .and_then(|i| groups.get(i))
                 .and_then(|g| array_xy(g, self.use_flat))
-            && e.len() >= 2
-        {
-            self.emin = e[0];
-            self.emax = e[e.len() - 1];
-            self.seeded = true;
+                && e.len() >= 2
+            {
+                self.emin = e[0];
+                self.emax = e[e.len() - 1];
+            }
         }
 
         if array_toggle(ui, &mut self.use_flat) {
@@ -363,7 +366,10 @@ pub struct PcaWindow {
     use_flat: bool,
     emin: f64,
     emax: f64,
-    seeded: bool,
+    /// The group index the E range was last seeded from (the first checked
+    /// training spectrum, else the first normalized group); when a different
+    /// group takes that role the range is reseeded from its span.
+    seeded_for: Option<usize>,
     ncomps: usize,
     target: Option<usize>,
     trained: Option<PcaTrained>,
@@ -385,7 +391,7 @@ impl PcaWindow {
             use_flat: true,
             emin: 0.0,
             emax: 0.0,
-            seeded: false,
+            seeded_for: None,
             ncomps: 2,
             target: None,
             trained: None,
@@ -439,14 +445,26 @@ impl PcaWindow {
         ui.heading("PCA");
         ui.label("Decompose a training set; reconstruct an unknown.");
 
-        // Seed range from the first normalized group.
-        if !self.seeded
-            && let Some((e, _)) = groups.iter().find_map(|g| array_xy(g, self.use_flat))
+        // Seed the E range from the first checked training spectrum (before any
+        // is checked, from the first normalized group so the fields are not
+        // blank), and reseed when a different group takes that role — a range
+        // seeded once from an unrelated first group (Pt) made every training
+        // set at another edge (Mn) fail with "no overlap".
+        let seed_from = self.training.iter().position(|on| *on).or_else(|| {
+            groups
+                .iter()
+                .position(|g| array_xy(g, self.use_flat).is_some())
+        });
+        if seed_from.is_some()
+            && self.seeded_for != seed_from
+            && let Some((e, _)) = seed_from
+                .and_then(|i| groups.get(i))
+                .and_then(|g| array_xy(g, self.use_flat))
             && e.len() >= 2
         {
             self.emin = e[0];
             self.emax = e[e.len() - 1];
-            self.seeded = true;
+            self.seeded_for = seed_from;
         }
 
         if array_toggle(ui, &mut self.use_flat) {

@@ -68,7 +68,9 @@ pub struct MbackWindow {
     target: Option<usize>,
     z: u16,
     edge: EdgeSel,
-    seeded: bool,
+    /// The spectrum (`target` index) the element / edge were last seeded for;
+    /// a different pick reseeds them from the new spectrum's e0.
+    seeded_for: Option<usize>,
     result: Option<MbackResult>,
     error: Option<String>,
     dirty: bool,
@@ -87,7 +89,7 @@ impl MbackWindow {
             target: None,
             z: 26,
             edge: EdgeSel::K,
-            seeded: false,
+            seeded_for: None,
             result: None,
             error: None,
             dirty: true,
@@ -151,20 +153,27 @@ impl MbackWindow {
                 }
             });
 
-        // Seed the element from the group's e0 via xraydb's edge guesser, once.
-        if !self.seeded
-            && let Some(e0) = self.target.and_then(|i| groups.get(i)).and_then(|g| g.e0)
-            && let Some((sym, edge)) = self.db.guess_edge(e0, None)
-            && let Ok(z) = self.db.atomic_number(&sym)
-        {
-            self.z = z;
-            self.edge = match edge.as_str() {
-                "L1" => EdgeSel::L1,
-                "L2" => EdgeSel::L2,
-                "L3" => EdgeSel::L3,
-                _ => EdgeSel::K,
-            };
-            self.seeded = true;
+        // A newly picked spectrum: the previous spectrum's result no longer
+        // describes what is shown, and the element / edge are re-guessed from
+        // the new e0 (keyed to the picked index, not a one-shot flag — a Mn
+        // seed kept across a switch to Pt ran MBACK with the wrong f″).
+        if self.seeded_for != self.target {
+            self.seeded_for = self.target;
+            self.result = None;
+            self.error = None;
+            self.dirty = true;
+            if let Some(e0) = self.target.and_then(|i| groups.get(i)).and_then(|g| g.e0)
+                && let Some((sym, edge)) = self.db.guess_edge(e0, None)
+                && let Ok(z) = self.db.atomic_number(&sym)
+            {
+                self.z = z;
+                self.edge = match edge.as_str() {
+                    "L1" => EdgeSel::L1,
+                    "L2" => EdgeSel::L2,
+                    "L3" => EdgeSel::L3,
+                    _ => EdgeSel::K,
+                };
+            }
         }
 
         ui.separator();
