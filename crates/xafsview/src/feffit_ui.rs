@@ -2104,26 +2104,31 @@ impl FeffitUi {
             }
         }
 
-        // --- Actions: Run / Send, then the file row (Open log / Load / Save) ---
-        ui.separator();
-        ui.horizontal(|ui| {
+        action
+    }
+
+    /// The action rows (Run / Send, then the file row), rendered by the app in
+    /// a panel pinned below the scrolling controls — like the Autobk tab's
+    /// Start row — so the primary Run stays visible however long the form is.
+    pub fn action_row(&mut self, ui: &mut egui::Ui) -> Option<FeffitAction> {
+        use crate::widgets::{self, ROW_BTN};
+        let mut action = None;
+        ui.horizontal_wrapped(|ui| {
             // "Only FT" transforms the data alone, so it needs no paths; the other
             // modes need at least one enabled path.
             let can_run = self.fit_mode == FitMode::OnlyFt || self.has_enabled_path();
-            if crate::widgets::primary(ui, "Run", crate::widgets::ROW_BTN, can_run).clicked() {
+            if widgets::primary(ui, "Run", ROW_BTN, can_run).clicked() {
                 action = Some(FeffitAction::Run);
             }
-            if ui
-                .add_enabled(self.plot.is_some(), egui::Button::new("Send to Plot Data"))
+            if widgets::action_enabled(ui, "Send to Plot Data", ROW_BTN, self.plot.is_some())
                 .on_hover_text("open the Plot Data overlay for this group")
                 .clicked()
             {
                 action = Some(FeffitAction::SendToPlotData);
             }
         });
-        ui.horizontal(|ui| {
-            if ui
-                .button("Open log")
+        ui.horizontal_wrapped(|ui| {
+            if widgets::action(ui, "Open log", ROW_BTN)
                 .on_hover_text("show the last fit's full report")
                 .clicked()
             {
@@ -2138,19 +2143,16 @@ impl FeffitUi {
                     },
                 ));
             }
-            if ui
-                .button("Load inp")
+            if widgets::action(ui, "Load inp", ROW_BTN)
                 .on_hover_text("import a UWXAFS feffit.inp (windows, variables, paths)")
                 .clicked()
             {
                 action = Some(FeffitAction::LoadInp);
             }
-            if ui.button("Load result").clicked() {
+            if widgets::action(ui, "Load result", ROW_BTN).clicked() {
                 action = Some(FeffitAction::LoadResult);
             }
-            if ui
-                .add_enabled(self.result.is_some(), egui::Button::new("Save result"))
-                .clicked()
+            if widgets::action_enabled(ui, "Save result", ROW_BTN, self.result.is_some()).clicked()
             {
                 action = Some(FeffitAction::SaveResult);
             }

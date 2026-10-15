@@ -2320,49 +2320,62 @@ impl XafsViewApp {
             .resizable(true)
             .default_size(380.0)
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    // `controls` hosts the Graph section's "Show all fits" checkbox
-                    // (shown only for >1 group); computing the group count up front
-                    // lets it gate that checkbox and this Data… row alike.
-                    let n_groups = self.session.groups.len();
-                    feffit_action =
-                        self.feffit
-                            .controls(ui, &mut self.feffit_show_all_fits, n_groups > 1);
-                    // Exit sits directly below the controls (그림 1-2-2-2), no gap.
-                    ui.add_space(6.0);
-                    // Run fits every checked group (shared with the Autobk tab); this
-                    // row shows and opens that selection.
-                    if n_groups > 0 {
+                // The action rows, pinned below the scrolling form so the
+                // primary Run stays visible however long the form is (the
+                // Autobk tab pins its Start row the same way).
+                egui::Panel::bottom("feffit_actions").show(ui, |ui| {
+                    ui.add_space(4.0);
+                    feffit_action = self.feffit.action_row(ui);
+                    ui.add_space(2.0);
+                });
+                egui::CentralPanel::default().show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // `controls` hosts the Graph section's "Show all fits" checkbox
+                        // (shown only for >1 group); computing the group count up front
+                        // lets it gate that checkbox and this Data… row alike.
+                        let n_groups = self.session.groups.len();
+                        // The pinned row rendered first; don't let a None from the
+                        // scrolling form overwrite its click.
+                        feffit_action = self
+                            .feffit
+                            .controls(ui, &mut self.feffit_show_all_fits, n_groups > 1)
+                            .or(feffit_action.take());
+                        // Exit sits directly below the controls (그림 1-2-2-2), no gap.
+                        ui.add_space(6.0);
+                        // Run fits every checked group (shared with the Autobk tab); this
+                        // row shows and opens that selection.
+                        if n_groups > 0 {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button("Data…")
+                                    .on_hover_text(
+                                        "Choose which groups Run fits (shared with the Autobk tab)",
+                                    )
+                                    .clicked()
+                                {
+                                    self.data_window_open = true;
+                                }
+                                ui.weak(format!(
+                                    "{}/{n_groups} checked for Run",
+                                    self.session.selected.len()
+                                ));
+                            });
+                        }
                         ui.horizontal(|ui| {
+                            // The batch — an occasional bulk op — opens in its own
+                            // window (data_manager-style) so the central plot keeps
+                            // the full width.
                             if ui
-                                .button("Data…")
+                                .button("Batch…")
                                 .on_hover_text(
-                                    "Choose which groups Run fits (shared with the Autobk tab)",
+                                    "Run this fit setup against several checked groups, \
+                                 in a detached window",
                                 )
                                 .clicked()
                             {
-                                self.data_window_open = true;
+                                self.feffit_batch_open = true;
                             }
-                            ui.weak(format!(
-                                "{}/{n_groups} checked for Run",
-                                self.session.selected.len()
-                            ));
                         });
-                    }
-                    ui.horizontal(|ui| {
-                        // The batch — an occasional bulk op — opens in its own
-                        // window (data_manager-style) so the central plot keeps
-                        // the full width.
-                        if ui
-                            .button("Batch…")
-                            .on_hover_text(
-                                "Run this fit setup against several checked groups, \
-                                 in a detached window",
-                            )
-                            .clicked()
-                        {
-                            self.feffit_batch_open = true;
-                        }
                     });
                 });
             });
