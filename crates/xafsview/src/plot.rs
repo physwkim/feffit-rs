@@ -243,6 +243,10 @@ pub struct Plot {
     /// deref'd `Plot1D::add_x_marker` are NOT tracked here — their caller owns
     /// their removal (the XANES tab clears its whole plot per rebuild).
     marker_handles: Vec<ItemHandle>,
+    /// Whether the editable X/Y limits row (rsplot's silx `LimitsToolBar`) is
+    /// drawn under the toolbar — typed limits for users who control the view
+    /// by hand. Toggled by the toolbar's "Limits" button; off by default.
+    limits_row: bool,
 }
 
 /// Emphasized-curve styling: the default curve width is 1.0; 3.0 reads as
@@ -296,6 +300,7 @@ impl Plot {
             declared: None,
             legend_folded: None,
             marker_handles: Vec::new(),
+            limits_row: false,
         }
     }
 
@@ -577,7 +582,17 @@ pub fn toolbar(plot: &mut Plot, ui: &mut egui::Ui) {
         plot.inner.show_toolbar(ui);
         crosshair_button(&mut plot.crosshair, ui);
         symbol_menu(&mut plot.inner, ui);
+        if ui
+            .selectable_label(plot.limits_row, "Limits")
+            .on_hover_text("Edit the axis limits numerically")
+            .clicked()
+        {
+            plot.limits_row = !plot.limits_row;
+        }
     });
+    if plot.limits_row {
+        plot.inner.show_limits_toolbar(ui);
+    }
 }
 
 /// Request the draggable FT-window band at `window` for this frame, drawn as a
