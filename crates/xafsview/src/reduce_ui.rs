@@ -92,6 +92,35 @@ pub struct TheoryStd {
     pub chi: Vec<f64>,
 }
 
+/// The parameter state a refit depends on, comparable so the app can skip a
+/// committed edit that changed nothing — entering a field and leaving fires
+/// the same commit events (`drag_stopped`/`lost_focus`) as a real edit. Built
+/// by [`ReductionUi::refit_key`]; display-only state (graph type, band
+/// visibility) is deliberately absent.
+#[derive(PartialEq, Clone)]
+pub struct RefitKey {
+    e0_auto: bool,
+    e0: f64,
+    rbkg: f64,
+    kweight: i32,
+    kmin: f64,
+    kmax: f64,
+    dk: f64,
+    window: Window,
+    rmin: f64,
+    rmax: f64,
+    dr: f64,
+    clamp_lo: f64,
+    clamp_hi: f64,
+    pre_norm_auto: bool,
+    pre1: f64,
+    pre2: f64,
+    norm1: f64,
+    norm2: f64,
+    nnorm: usize,
+    theory: Option<PathBuf>,
+}
+
 /// Editable reduction parameters plus the active graph type and the optional
 /// theory standard.
 pub struct ReductionUi {
@@ -221,6 +250,32 @@ impl ReductionUi {
             k_std: self.theory.as_ref().map(|t| t.k.clone()),
             chi_std: self.theory.as_ref().map(|t| t.chi.clone()),
             ..AutobkParams::default()
+        }
+    }
+
+    /// The comparable refit-relevant parameter state (see [`RefitKey`]).
+    pub fn refit_key(&self) -> RefitKey {
+        RefitKey {
+            e0_auto: self.e0_auto,
+            e0: self.e0,
+            rbkg: self.rbkg,
+            kweight: self.kweight,
+            kmin: self.kmin,
+            kmax: self.kmax,
+            dk: self.dk,
+            window: self.window,
+            rmin: self.rmin,
+            rmax: self.rmax,
+            dr: self.dr,
+            clamp_lo: self.clamp_lo,
+            clamp_hi: self.clamp_hi,
+            pre_norm_auto: self.pre_norm_auto,
+            pre1: self.pre1,
+            pre2: self.pre2,
+            norm1: self.norm1,
+            norm2: self.norm2,
+            nnorm: self.nnorm,
+            theory: self.theory.as_ref().map(|t| t.path.clone()),
         }
     }
 

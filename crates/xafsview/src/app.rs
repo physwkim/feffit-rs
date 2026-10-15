@@ -17,7 +17,7 @@ use crate::mback_ui::MbackWindow;
 use crate::mcp;
 use crate::open_data::OpenDataBrowser;
 use crate::plot_data::PlotDataWindow;
-use crate::reduce_ui::{ControlsChange, GraphType, ReductionUi, TheoryStd};
+use crate::reduce_ui::{ControlsChange, GraphType, ReductionUi, RefitKey, TheoryStd};
 use crate::timeres_ui::TimeResolvedWindow;
 use crate::wavelet::{WaveletAction, WaveletWindow, morlet_cwt};
 use crate::xanes_ui::XanesWindow;
@@ -172,6 +172,10 @@ pub struct XafsViewApp {
     feff_inp: String,
     /// Pre-edit group snapshots for undoing cleanup edits (most recent last).
     clean_undo: Vec<XasGroup>,
+    /// The `(current group, parameters)` the last committed-edit refit ran
+    /// with, so a commit that changed nothing (field entered and left) skips
+    /// the recompute. `None` until the first such refit.
+    last_refit_key: Option<(Option<usize>, RefitKey)>,
     /// The tab shown on the previous frame, to detect tab switches for replot.
     last_tab: Tab,
     /// The status strip's line plus the cumulative session message log — every
@@ -319,6 +323,7 @@ impl XafsViewApp {
             plot_sites,
             feff_inp: String::new(),
             clean_undo: Vec::new(),
+            last_refit_key: None,
             last_tab: Tab::Atoms,
             status: Default::default(),
             jobs: Default::default(),
@@ -3575,6 +3580,7 @@ impl XafsViewApp {
         // preview — recompute + replot only, no file write — so the graph tracks
         // the new value the moment the drag/edit ends. A bare graph-type switch is
         // the cheap replot. Start wins when it and an edit land on the same frame.
+        let refit_key = (self.session.current, self.reduction.refit_key());
         if start_clicked {
             // No μ(E) for the current group but a file is open → build it first
             // (the original requires a separate Calc XMU click), then run the
@@ -3583,8 +3589,15 @@ impl XafsViewApp {
                 self.calc_xmu();
             }
             self.run_reduction();
+            self.last_refit_key = Some(refit_key);
         } else if has_mu && change.refit {
-            self.recompute_reduction();
+            // Skip the recompute when the committed edit changed nothing —
+            // entering a field and leaving fires the same commit events as a
+            // real edit. The explicit Start above always runs.
+            if self.last_refit_key.as_ref() != Some(&refit_key) {
+                self.recompute_reduction();
+                self.last_refit_key = Some(refit_key);
+            }
         } else if change.replot {
             self.replot_graph();
         }
