@@ -3547,6 +3547,47 @@ impl XafsViewApp {
                                      (|χ(R)| graph) FT-window band to set the range",
                                 );
                         });
+
+                        // --- Analysis: openers for the windows that consume this
+                        // tab's products (χ(k) → wavelet; the reduced scan series →
+                        // in-situ map; the raw-file series → measured time), so the
+                        // next pipeline stage is reachable where its input appears.
+                        // The same entries stay in the Tools menu.
+                        rsplot::widget::form::group(ui, |ui| {
+                            ui.strong("Analysis");
+                            ui.horizontal_wrapped(|ui| {
+                                if ui
+                                    .button("Wavelet |W(k,R)|…")
+                                    .on_hover_text(
+                                        "Morlet wavelet transform of the current \
+                                         group's χ(k)",
+                                    )
+                                    .clicked()
+                                {
+                                    self.wavelet.open = true;
+                                }
+                                if ui
+                                    .button("In-situ map…")
+                                    .on_hover_text(
+                                        "Scan-series heatmap (XANES μ(E) or RDF \
+                                         |χ(R)|) over the loaded groups",
+                                    )
+                                    .clicked()
+                                {
+                                    self.insitu.open = true;
+                                }
+                                if ui
+                                    .button("Measured time…")
+                                    .on_hover_text(
+                                        "Extract each scan's measured time from a \
+                                         raw-file series (time-resolved XAS)",
+                                    )
+                                    .clicked()
+                                {
+                                    self.time_resolved.open = true;
+                                }
+                            });
+                        });
                     });
                 });
             });
