@@ -2057,8 +2057,12 @@ impl XafsViewApp {
         let kweight = self.reduction.kweight;
         let show_bkg = self.show_bkg;
         let Some(g) = self.session.current_group() else {
+            self.plot.set_graph_title("XAFSView");
             return;
         };
+        // Title the graph with the scan it shows: with tens of groups loaded,
+        // the axis labels say *what* is plotted but not *which* scan.
+        self.plot.set_graph_title(g.label.as_str());
 
         // Derivative w.r.t. x the way the engine computes dμ/dE
         // (`np.gradient(y)/np.gradient(x)`), shared by the derivative graph types.
@@ -2760,8 +2764,12 @@ impl XafsViewApp {
 
         let (space, part) = self.feffit.plot_selection();
         let Some(p) = self.feffit.plot() else {
+            self.plot.set_graph_title("XAFSView");
             return;
         };
+        // Same orientation rule as the Autobk graph: name the focused fit.
+        self.plot
+            .set_graph_title(self.feffit_fit_group.as_deref().unwrap_or("Feffit"));
         let has_model = p.has_model;
 
         // K+Q: kʷ·χ(k) and χ(q) overlaid on the shared Å⁻¹ axis (four curves).
