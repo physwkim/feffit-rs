@@ -357,6 +357,8 @@ pub struct InsituWindow {
     vmin: f64,
     vmax: f64,
     profile: ProfileMode,
+    /// Draw the white selection line on the map.
+    show_marker: bool,
     /// The clicked map cell `(row, col)` the profile follows.
     sel: Option<(usize, usize)>,
     plot: crate::plot::Plot,
@@ -370,7 +372,7 @@ impl InsituWindow {
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 8);
         plot.set_graph_title("Profile");
-        plot.set_empty_hint("Click the map to extract a profile.");
+        plot.set_empty_hint("Click or drag the map to extract a profile.");
         Self {
             open: false,
             map: None,
@@ -383,6 +385,7 @@ impl InsituWindow {
             vmin: 0.0,
             vmax: 1.0,
             profile: ProfileMode::Scan,
+            show_marker: true,
             sel: None,
             plot,
             plot_dirty: false,
@@ -686,6 +689,8 @@ impl InsituWindow {
             if self.profile != before {
                 self.plot_dirty = true;
             }
+            ui.checkbox(&mut self.show_marker, "Marker")
+                .on_hover_text("Show the profiled line on the map");
         });
 
         ui.separator();
@@ -769,16 +774,20 @@ impl InsituWindow {
             egui::Image::new(tex)
                 .fit_to_exact_size(egui::vec2(w, img_h))
                 .maintain_aspect_ratio(false)
-                .sense(egui::Sense::click()),
+                .sense(egui::Sense::click_and_drag()),
         );
 
-        // Map the pointer to a (row, col) cell for the readout and the click.
-        let cell = resp.hover_pos().map(|pos| {
-            let rel = pos - resp.rect.min;
-            let col = ((rel.x / resp.rect.width()) * map.x.len() as f32) as usize;
-            let row = ((rel.y / resp.rect.height()) * map.rows.len() as f32) as usize;
-            (row.min(map.rows.len() - 1), col.min(map.x.len() - 1))
-        });
+        // Map a pointer position to the nearest (row, col) cell. A drag can
+        // leave the image, so both axes clamp (a negative cast saturates to 0).
+        let rect = resp.rect;
+        let (nrows, ncols) = (map.rows.len(), map.x.len());
+        let cell_at = move |pos: egui::Pos2| {
+            let rel = pos - rect.min;
+            let col = ((rel.x / rect.width()) * ncols as f32) as usize;
+            let row = ((rel.y / rect.height()) * nrows as f32) as usize;
+            (row.min(nrows - 1), col.min(ncols - 1))
+        };
+        let cell = resp.hover_pos().map(cell_at);
         match cell {
             Some((i, j)) => ui.weak(format!(
                 "{axis}   |   scan {} ({}), x = {:.4}, value = {:.5}",
@@ -789,11 +798,39 @@ impl InsituWindow {
             )),
             None => ui.weak(axis),
         };
-        if resp.clicked()
-            && let Some(c) = cell
+        // drag_stopped so the release position wins even when the final
+        // motion and the release arrive in the same frame.
+        if (resp.clicked() || resp.dragged() || resp.drag_stopped())
+            && let Some(pos) = resp.interact_pointer_pos()
         {
-            self.sel = Some(c);
-            self.plot_dirty = true;
+            let c = cell_at(pos);
+            if self.sel != Some(c) {
+                self.sel = Some(c);
+                self.plot_dirty = true;
+            }
+        }
+
+        // Mark the profiled line on the map (on a dark underlay so it reads on
+        // bright cells), so the plot below is tied to a visible, draggable
+        // position: the selected scan row, or the selected x column in Trace.
+        if self.show_marker
+            && let Some((i, j)) = self.sel
+        {
+            let p = ui.painter_at(rect);
+            let under = egui::Stroke::new(3.0, egui::Color32::from_black_alpha(140));
+            let over = egui::Stroke::new(1.0, egui::Color32::WHITE);
+            match self.profile {
+                ProfileMode::Scan => {
+                    let y = rect.top() + (i as f32 + 0.5) / nrows as f32 * rect.height();
+                    p.hline(rect.x_range(), y, under);
+                    p.hline(rect.x_range(), y, over);
+                }
+                ProfileMode::Trace => {
+                    let x = rect.left() + (j as f32 + 0.5) / ncols as f32 * rect.width();
+                    p.vline(x, rect.y_range(), under);
+                    p.vline(x, rect.y_range(), over);
+                }
+            }
         }
 
         ui.separator();
