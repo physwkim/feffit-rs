@@ -423,7 +423,9 @@ impl ReductionUi {
                             .show_ui(ui, |ui| {
                                 for w in [
                                     Window::Hanning,
+                                    Window::Fha,
                                     Window::Kaiser,
+                                    Window::Bes,
                                     Window::Parzen,
                                     Window::Welch,
                                     Window::Sine,
