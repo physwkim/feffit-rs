@@ -766,11 +766,17 @@ fn pick_part(
             &model.chiq_pha,
         )
     };
-    match part {
-        PlotPart::Mag => (dmag.clone(), mmag.clone(), "|χ|"),
-        PlotPart::Re => (dre.clone(), mre.clone(), "Re χ"),
-        PlotPart::Im => (dim.clone(), mim.clone(), "Im χ"),
-        PlotPart::Pha => (dpha.clone(), mpha.clone(), "Phase χ"),
+    // Name the space in the label: rotated vertically, a bare "|χ|" reads as a
+    // single odd glyph, and the Autobk graph already says "|χ(R)|".
+    match (part, r_space) {
+        (PlotPart::Mag, true) => (dmag.clone(), mmag.clone(), "|χ(R)|"),
+        (PlotPart::Mag, false) => (dmag.clone(), mmag.clone(), "|χ(q)|"),
+        (PlotPart::Re, true) => (dre.clone(), mre.clone(), "Re χ(R)"),
+        (PlotPart::Re, false) => (dre.clone(), mre.clone(), "Re χ(q)"),
+        (PlotPart::Im, true) => (dim.clone(), mim.clone(), "Im χ(R)"),
+        (PlotPart::Im, false) => (dim.clone(), mim.clone(), "Im χ(q)"),
+        (PlotPart::Pha, true) => (dpha.clone(), mpha.clone(), "Phase χ(R)"),
+        (PlotPart::Pha, false) => (dpha.clone(), mpha.clone(), "Phase χ(q)"),
     }
 }
 
