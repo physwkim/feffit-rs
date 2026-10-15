@@ -17,7 +17,7 @@ use xraydb::XrayDb;
 use crate::plot::{BLUE, ORANGE, RED};
 
 /// Selectable absorption edges (those MBACK handles).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EdgeSel {
     K,
     L1,
@@ -51,6 +51,43 @@ impl EdgeSel {
             EdgeSel::K | EdgeSel::L1 => None,
         }
     }
+    /// From xraydb's IUPAC edge label; anything MBACK does not handle (M5)
+    /// falls back to K.
+    fn from_label(label: &str) -> Self {
+        match label {
+            "L1" => EdgeSel::L1,
+            "L2" => EdgeSel::L2,
+            "L3" => EdgeSel::L3,
+            _ => EdgeSel::K,
+        }
+    }
+}
+
+/// Element / edge guess for an absorption-edge energy `e0`, as the window's
+/// default: the nearest K edge within [`EDGE_TOL`] eV, else the nearest L3 edge
+/// within it, else xraydb's nearest edge of any kind. A measured e0 (the
+/// derivative maximum) sits a few eV *above* its tabulated edge, so the plain
+/// nearest-of-any rule picked whichever other element's edge happened to lie
+/// there: Mn K data at 6551 eV came back as Ce L1 (6549 eV) over Mn K
+/// (6539 eV). K then L3 is the order in which those edges are measured.
+fn guess_element_edge(db: &XrayDb, e0: f64) -> Option<(u16, EdgeSel)> {
+    /// Chemical shift + calibration offset of a measured e0 from its tabulated
+    /// edge stays well inside this; the nearest K edge of another element is
+    /// hundreds of eV away, and the one close K/L3 pair (Ni K 8333 / Er L3
+    /// 8358 eV) still resolves for an Er e0 above its edge.
+    const EDGE_TOL: f64 = 25.0;
+    for edge in ["K", "L3"] {
+        if let Some((sym, label)) = db.guess_edge(e0, Some(&[edge]))
+            && let Ok(x) = db.xray_edge(&sym, &label)
+            && (x.energy - e0).abs() <= EDGE_TOL
+            && let Ok(z) = db.atomic_number(&sym)
+        {
+            return Some((z, EdgeSel::from_label(&label)));
+        }
+    }
+    let (sym, label) = db.guess_edge(e0, None)?;
+    let z = db.atomic_number(&sym).ok()?;
+    Some((z, EdgeSel::from_label(&label)))
 }
 
 /// One MBACK result on the (deduplicated) energy grid, ready to plot.
@@ -163,16 +200,10 @@ impl MbackWindow {
             self.error = None;
             self.dirty = true;
             if let Some(e0) = self.target.and_then(|i| groups.get(i)).and_then(|g| g.e0)
-                && let Some((sym, edge)) = self.db.guess_edge(e0, None)
-                && let Ok(z) = self.db.atomic_number(&sym)
+                && let Some((z, edge)) = guess_element_edge(&self.db, e0)
             {
                 self.z = z;
-                self.edge = match edge.as_str() {
-                    "L1" => EdgeSel::L1,
-                    "L2" => EdgeSel::L2,
-                    "L3" => EdgeSel::L3,
-                    _ => EdgeSel::K,
-                };
+                self.edge = edge;
             }
         }
 
@@ -283,5 +314,22 @@ impl MbackWindow {
             ui.monospace(format!("{:.5}", r.edge_step_poly));
             ui.end_row();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// K wins within tolerance even when another element's L edge is nearer
+    /// (Mn K 6539 vs Ce L1 6549 for an e0 of 6551); an L3 e0 with no K edge in
+    /// range resolves to L3, including the close Ni K / Er L3 pair.
+    #[test]
+    fn edge_guess_prefers_k_then_l3() {
+        let db = XrayDb::new();
+        assert_eq!(guess_element_edge(&db, 6551.0), Some((25, EdgeSel::K)));
+        assert_eq!(guess_element_edge(&db, 11566.0), Some((78, EdgeSel::L3)));
+        assert_eq!(guess_element_edge(&db, 8362.0), Some((68, EdgeSel::L3)));
+        assert_eq!(guess_element_edge(&db, 8340.0), Some((28, EdgeSel::K)));
     }
 }
