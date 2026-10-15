@@ -2030,8 +2030,11 @@ impl XafsViewApp {
         // the AUTOBK spline can hook sharply at the data end (parity with the
         // original tool), and fitting y to the hook squashes the oscillations
         // the analysis actually uses. Only on a content change, so a no-op
-        // replot preserves the user's zoom like the declare diff does.
+        // replot preserves the user's zoom like the declare diff does — and
+        // only while the toolbar's Y-autoscale toggle is on, like rsplot's own
+        // content-change refit (an off axis keeps the user's manual limits).
         if changed
+            && self.plot.plot().y_autoscale()
             && matches!(self.reduction.graph, GraphType::KChi | GraphType::ChiQ)
             && let Some((lo, hi)) = self
                 .plot
