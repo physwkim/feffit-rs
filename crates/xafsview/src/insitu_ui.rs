@@ -237,14 +237,16 @@ pub fn parse_series_dat(text: &str) -> Result<SeriesMap, String> {
 }
 
 /// Build the XANES map from the loaded groups: each group's normalized μ(E)
-/// (flattened if available, else normalized, else raw μ) interpolated onto
-/// `steps` points over `[start, stop]` eV. Returns the map and the labels of
-/// groups skipped for having no spectrum.
+/// (with `use_flat`, the flattened spectrum when available, else normalized;
+/// without it the plain normalized spectrum; raw μ when neither exists)
+/// interpolated onto `steps` points over `[start, stop]` eV. Returns the map
+/// and the labels of groups skipped for having no spectrum.
 pub fn map_from_groups_xanes(
     groups: &[XasGroup],
     start: f64,
     stop: f64,
     steps: usize,
+    use_flat: bool,
 ) -> Result<(SeriesMap, Vec<String>), String> {
     if stop <= start || steps < 2 {
         return Err("energy grid needs stop > start and at least 2 steps".into());
@@ -254,7 +256,12 @@ pub fn map_from_groups_xanes(
     let mut rows = Vec::new();
     let mut skipped = Vec::new();
     for g in groups {
-        let y = g.flat.as_ref().or(g.norm.as_ref()).unwrap_or(&g.mu);
+        let normed = if use_flat {
+            g.flat.as_ref().or(g.norm.as_ref())
+        } else {
+            g.norm.as_ref()
+        };
+        let y = normed.unwrap_or(&g.mu);
         if g.energy.len() < 2 || y.len() != g.energy.len() {
             skipped.push(g.label.clone());
             continue;
@@ -355,6 +362,10 @@ pub struct InsituWindow {
     map: Option<SeriesMap>,
     /// Channel for "Build from loaded groups".
     channel: SeriesKind,
+    /// XANES rows from the flattened spectrum (`flat`, falling back to `norm`)
+    /// rather than the plain normalized one. The legacy BL10C XANES.dat export
+    /// is plain `norm`; the XANES tool offers the same norm/flat choice.
+    xanes_flat: bool,
     /// XANES common-grid fields; `e_steps == 0` means "seed from the data".
     e_start: f64,
     e_stop: f64,
@@ -385,6 +396,7 @@ impl InsituWindow {
             open: false,
             map: None,
             channel: SeriesKind::Rdf,
+            xanes_flat: true,
             e_start: 0.0,
             e_stop: 0.0,
             e_steps: 0,
@@ -433,6 +445,9 @@ impl InsituWindow {
                 other => return Err(format!("unknown channel '{other}' (rdf or xanes)")),
             }
             if self.channel == SeriesKind::Xanes {
+                if let Some(v) = args.flat {
+                    self.xanes_flat = v;
+                }
                 if let Some(v) = args.e_start {
                     self.e_start = v;
                 }
@@ -526,9 +541,13 @@ impl InsituWindow {
     /// Build the map from the loaded groups with the current channel settings.
     pub(crate) fn build_from_groups(&mut self, groups: &[XasGroup]) {
         let built = match self.channel {
-            SeriesKind::Xanes => {
-                map_from_groups_xanes(groups, self.e_start, self.e_stop, self.e_steps)
-            }
+            SeriesKind::Xanes => map_from_groups_xanes(
+                groups,
+                self.e_start,
+                self.e_stop,
+                self.e_steps,
+                self.xanes_flat,
+            ),
             SeriesKind::Rdf => map_from_groups_rdf(groups),
         };
         match built {
@@ -589,6 +608,19 @@ impl InsituWindow {
             if self.e_steps == 0 && !groups.is_empty() {
                 self.seed_grid(groups);
             }
+            // The same norm/flat choice as the XANES tool's "Array"; the legacy
+            // BL10C XANES.dat was plain norm, so a comparison against it wants
+            // "norm".
+            ui.horizontal(|ui| {
+                ui.label("Array:");
+                ui.selectable_value(&mut self.xanes_flat, false, "norm");
+                ui.selectable_value(&mut self.xanes_flat, true, "flat");
+            })
+            .response
+            .on_hover_text(
+                "norm: edge-step normalized μ(E); flat: the flattened spectrum \
+                 (post-edge curvature removed), falling back to norm",
+            );
             ui.horizontal(|ui| {
                 ui.label("Start [eV]");
                 ui.add(egui::DragValue::new(&mut self.e_start).speed(1.0));
@@ -1004,12 +1036,27 @@ mod tests {
         let mut g1 = XasGroup::from_mu("g1", vec![0.0, 2.0], vec![4.0, 0.0]);
         g1.norm = Some(vec![1.0, 3.0]);
         let empty = XasGroup::from_mu("none", vec![], vec![]);
-        let (m, skipped) = map_from_groups_xanes(&[g0, g1, empty], 0.0, 2.0, 3).expect("xanes map");
+        let (m, skipped) =
+            map_from_groups_xanes(&[g0, g1, empty], 0.0, 2.0, 3, true).expect("xanes map");
         assert_eq!(m.labels, vec!["g0", "g1"]);
         assert_eq!(skipped, vec!["none"]);
         // g0 uses μ directly; g1 prefers its normalized spectrum.
         assert_eq!(m.rows[0], vec![0.0, 1.0, 2.0]);
         assert_eq!(m.rows[1], vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn groups_xanes_map_array_choice_picks_flat_or_norm() {
+        let mut g = XasGroup::from_mu("g", vec![0.0, 2.0], vec![4.0, 0.0]);
+        g.norm = Some(vec![1.0, 3.0]);
+        g.flat = Some(vec![5.0, 7.0]);
+        let groups = [g];
+        // "flat": the flattened spectrum when the group has one …
+        let (m, _) = map_from_groups_xanes(&groups, 0.0, 2.0, 2, true).expect("flat");
+        assert_eq!(m.rows[0], vec![5.0, 7.0]);
+        // … "norm": the plain normalized one even though flat exists.
+        let (m, _) = map_from_groups_xanes(&groups, 0.0, 2.0, 2, false).expect("norm");
+        assert_eq!(m.rows[0], vec![1.0, 3.0]);
     }
 
     #[test]
