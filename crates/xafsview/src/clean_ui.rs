@@ -11,6 +11,13 @@ use feffit::xasdata::{RangeSide, SmoothForm};
 
 /// What the dialog is asking the app to do to the current group this frame.
 pub enum CleanAction {
+    /// Mark automatic glitch candidates (threshold in robust σ) on the graph
+    /// without removing anything.
+    AutoFind(f64),
+    /// Remove the automatic glitch candidates from the current group.
+    AutoDeglitch(f64),
+    /// Remove the automatic glitch candidates from every group checked for Run.
+    AutoDeglitchChecked(f64),
     /// Remove the single point nearest this energy (eV).
     DeglitchPoint(f64),
     /// Remove a range relative to the reference energies (eV); the second value
@@ -28,6 +35,8 @@ pub enum CleanAction {
 pub struct EditXmuState {
     /// Whether the window is shown.
     pub open: bool,
+    /// Automatic spike-detection threshold, in robust σ of the rolling window.
+    auto_nsig: f64,
     deglitch_e: f64,
     range_side: RangeSide,
     range1: f64,
@@ -44,6 +53,7 @@ impl Default for EditXmuState {
     fn default() -> Self {
         Self {
             open: false,
+            auto_nsig: 10.0,
             deglitch_e: 0.0,
             range_side: RangeSide::Above,
             range1: 0.0,
@@ -79,14 +89,16 @@ impl EditXmuState {
     }
 
     /// Render the window. Returns a [`CleanAction`] when an action button is
-    /// pressed. `npts` is the current group's point count and `can_undo`
-    /// enables the undo button.
+    /// pressed. `npts` is the current group's point count, `can_undo` enables
+    /// the undo button, and `n_checked` (groups checked for Run) enables the
+    /// batch auto-deglitch.
     pub fn show(
         &mut self,
         ctx: &egui::Context,
         has_group: bool,
         npts: usize,
         can_undo: bool,
+        n_checked: usize,
     ) -> Option<CleanAction> {
         let mut action = None;
         let mut open = self.open;
@@ -104,8 +116,51 @@ impl EditXmuState {
                 ui.label(format!("{npts} points"));
                 ui.separator();
 
-                // --- Deglitch (point / range removal) ------------------------
+                // --- Deglitch: automatic spike detection ----------------------
                 ui.heading("Deglitch");
+                ui.horizontal(|ui| {
+                    ui.label("auto");
+                    ui.add(
+                        egui::DragValue::new(&mut self.auto_nsig)
+                            .speed(0.5)
+                            .range(2.0..=100.0)
+                            .suffix(" σ"),
+                    )
+                    .on_hover_text(
+                        "Spike threshold: points deviating from their rolling \
+                         median by more than this many robust σ are glitches",
+                    );
+                    if ui
+                        .button("Find")
+                        .on_hover_text("Mark the candidates on the graph without removing them")
+                        .clicked()
+                    {
+                        action = Some(CleanAction::AutoFind(self.auto_nsig));
+                    }
+                    if ui
+                        .button("Remove")
+                        .on_hover_text("Remove the candidates from this group")
+                        .clicked()
+                    {
+                        action = Some(CleanAction::AutoDeglitch(self.auto_nsig));
+                    }
+                });
+                if ui
+                    .add_enabled(
+                        n_checked > 1,
+                        egui::Button::new(format!("Remove in {n_checked} checked groups")),
+                    )
+                    .on_hover_text(
+                        "Auto-deglitch every group checked for Run — a whole scan \
+                         series in one pass (undo unavailable for a batch edit)",
+                    )
+                    .clicked()
+                {
+                    action = Some(CleanAction::AutoDeglitchChecked(self.auto_nsig));
+                }
+
+                ui.separator();
+                // --- Deglitch (manual point / range removal) ------------------
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::DragValue::new(&mut self.deglitch_e)

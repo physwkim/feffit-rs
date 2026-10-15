@@ -229,6 +229,10 @@ fn apply_form_density(ctx: &egui::Context) {
 /// taken ([`crate::jobs::JobRunner::start`] returned `false`).
 const JOB_BUSY: &str = "A background job is already running — wait for it to finish.";
 
+/// Colour of the auto-deglitch candidate markers on the main plot (orange, so
+/// they read as "flagged" rather than as data).
+const GLITCH_MARKER: egui::Color32 = egui::Color32::from_rgb(0xff, 0x8c, 0x00);
+
 /// One Feffit-job target's outcome, from worker to apply: the group's index and
 /// label, with `Ok((run summary, the fitted config clone))` or `Err(message)`.
 type FeffitJobFit = (usize, String, Result<(String, FeffitUi), String>);
@@ -1712,6 +1716,7 @@ impl XafsViewApp {
                 (Some(prev), Some(idx)) if idx < self.session.groups.len() => {
                     self.session.groups[idx] = prev;
                     self.status.info("Undid last edit.");
+                    self.plot.set_x_markers(&[], GLITCH_MARKER);
                     self.plot_data.mark_dirty();
                     self.replot_graph();
                 }
@@ -1728,6 +1733,14 @@ impl XafsViewApp {
         }
         let snapshot = g.clone();
         let (changed, msg) = match action {
+            CleanAction::AutoDeglitch(nsig) => {
+                let n = feffit::xasdata::auto_deglitch(g, nsig);
+                if n > 0 {
+                    (true, format!("Auto deglitch: removed {n} point(s)"))
+                } else {
+                    (false, format!("Auto deglitch: no candidates at {nsig:.0}σ"))
+                }
+            }
             CleanAction::DeglitchPoint(e) => {
                 let n = feffit::xasdata::deglitch_point(g, e);
                 (n > 0, format!("Deglitch: removed {n} point(s)"))
@@ -1750,6 +1763,9 @@ impl XafsViewApp {
                 (ok, m)
             }
             CleanAction::Undo => unreachable!("handled above"),
+            CleanAction::AutoFind(_) | CleanAction::AutoDeglitchChecked(_) => {
+                unreachable!("handled by the caller")
+            }
         };
 
         // `changed = false` means the edit did not apply (e.g. grid too short) —
@@ -1764,9 +1780,88 @@ impl XafsViewApp {
             if self.clean_undo.len() > UNDO_CAP {
                 self.clean_undo.remove(0);
             }
+            // Any edit moves the data the candidate markers pointed at.
+            self.plot.set_x_markers(&[], GLITCH_MARKER);
             self.plot_data.mark_dirty();
             self.replot_graph();
         }
+    }
+
+    /// Preview automatic glitch candidates on the current group: switch the
+    /// graph to the E-space view, mark each candidate energy, and report the
+    /// count. Removes nothing — "Remove" (or the batch button) does that.
+    fn auto_deglitch_find(&mut self, nsig: f64) {
+        let Some(g) = self.session.current_group() else {
+            return;
+        };
+        if g.mu.is_empty() {
+            return;
+        }
+        let energies = feffit::xasdata::find_glitches(g, nsig);
+        if energies.is_empty() {
+            self.plot.set_x_markers(&[], GLITCH_MARKER);
+            self.status
+                .info(format!("Auto deglitch: no candidates at {nsig:.0}σ."));
+            return;
+        }
+        // The markers are energies — show them on the E-space graph.
+        self.reduction.graph = GraphType::MuBkg;
+        self.replot_graph();
+        self.plot.set_x_markers(&energies, GLITCH_MARKER);
+        let shown: Vec<String> = energies.iter().take(6).map(|e| format!("{e:.1}")).collect();
+        let more = if energies.len() > shown.len() {
+            ", …"
+        } else {
+            ""
+        };
+        self.status.info(format!(
+            "Auto deglitch: {} candidate(s) at {} eV{more} — Remove drops them.",
+            energies.len(),
+            shown.join(", "),
+        ));
+    }
+
+    /// Auto-deglitch every group checked for Run (the batch counterpart of
+    /// [`CleanAction::AutoDeglitch`], for a whole scan series in one pass).
+    /// A mass edit invalidates the single-group undo snapshots, so the undo
+    /// stack is cleared and the status says so.
+    fn auto_deglitch_checked(&mut self, nsig: f64) {
+        let targets = self.session.run_targets();
+        if targets.is_empty() {
+            self.status.error("No data to deglitch.");
+            return;
+        }
+        let mut total = 0usize;
+        let mut groups = 0usize;
+        for &idx in &targets {
+            let Some(g) = self.session.groups.get_mut(idx) else {
+                continue;
+            };
+            if g.mu.is_empty() {
+                continue;
+            }
+            let n = feffit::xasdata::auto_deglitch(g, nsig);
+            if n > 0 {
+                total += n;
+                groups += 1;
+            }
+        }
+        if total == 0 {
+            self.status.info(format!(
+                "Auto deglitch: no candidates at {nsig:.0}σ in {} group(s).",
+                targets.len()
+            ));
+            return;
+        }
+        self.clean_undo.clear();
+        self.plot.set_x_markers(&[], GLITCH_MARKER);
+        self.plot_data.mark_dirty();
+        self.replot_graph();
+        self.status.info(format!(
+            "Auto deglitch: removed {total} point(s) across {groups}/{} group(s) — \
+             re-run Autobk. Undo unavailable after a batch edit.",
+            targets.len()
+        ));
     }
 
     /// Redraw the shared plot for the active group according to the selected
@@ -3735,8 +3830,19 @@ impl eframe::App for XafsViewApp {
             .is_some_and(|g| !g.mu.is_empty());
         let npts = self.session.current_group().map_or(0, |g| g.len());
         let can_undo = !self.clean_undo.is_empty();
-        if let Some(action) = self.edit_xmu.show(ui.ctx(), has_group, npts, can_undo) {
-            self.apply_clean_action(action);
+        let n_checked = self.session.selected.len();
+        if let Some(action) = self
+            .edit_xmu
+            .show(ui.ctx(), has_group, npts, can_undo, n_checked)
+        {
+            match action {
+                // The auto actions that reach beyond the current group (preview
+                // markers, batch over checked groups) are handled here; the
+                // single-group edits go through the undo-snapshot path.
+                CleanAction::AutoFind(nsig) => self.auto_deglitch_find(nsig),
+                CleanAction::AutoDeglitchChecked(nsig) => self.auto_deglitch_checked(nsig),
+                other => self.apply_clean_action(other),
+            }
         }
 
         // The wavelet-transform window floats above the panels; Compute reads the
