@@ -781,8 +781,14 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                         // and would otherwise sense the drag and scroll instead of
                         // letting the movable Area move. Scrollbar + wheel still scroll
                         // an overflowing legend (only the `drag` source is turned off).
+                        // Snap the viewport down to whole rows: an arbitrary
+                        // height cap slices the bottom row in half, which reads
+                        // as a broken label rather than as an overflow.
+                        let (row_h, row_gap) = legend_row_metrics(ui);
+                        let cap_h = (area.height() * 0.4).max(80.0);
+                        let rows = (((cap_h + row_gap) / (row_h + row_gap)).floor()).max(1.0);
                         egui::ScrollArea::vertical()
-                            .max_height((area.height() * 0.4).max(80.0))
+                            .max_height(rows * row_h + (rows - 1.0) * row_gap)
                             .scroll_source(egui::scroll_area::ScrollSource {
                                 drag: egui::scroll_area::DragScroll::Never,
                                 ..Default::default()
@@ -872,6 +878,18 @@ fn draw_legend_header(
 /// Width of the legend rows' line-swatch column (shared by the width estimate
 /// and the row renderer).
 const SWATCH_W: f32 = 22.0;
+/// Height of a legend row's colour swatch (see [`draw_legend`]).
+const SWATCH_H: f32 = 12.0;
+
+/// Height of one legend row and the gap between rows, as [`draw_legend`] lays
+/// them out: a row is the swatch/label line plus the row frame's 1px top and
+/// bottom margins, and rows are separated by the 2px `item_spacing` the legend
+/// sets. [`show`] snaps the unfolded legend's scroll viewport to a whole number
+/// of rows with these, so the cap never slices the bottom row in half.
+fn legend_row_metrics(ui: &egui::Ui) -> (f32, f32) {
+    let text_h = ui.text_style_height(&egui::TextStyle::Body);
+    (text_h.max(SWATCH_H) + 2.0, 2.0)
+}
 
 /// The width the legend's widest row wants: swatch + spacing + the widest
 /// label laid out un-wrapped, plus row margins and scrollbar room. The rows'
@@ -934,7 +952,6 @@ fn draw_legend(
     entries: &[(String, egui::Color32, bool)],
     data_bg: egui::Color32,
 ) -> Option<String> {
-    const SWATCH_H: f32 = 12.0;
     // Pick a label colour that contrasts with the data-area background (dark
     // text on a light canvas, light text on a dark one) rather than inheriting
     // the egui theme's text colour, which need not match the canvas.
