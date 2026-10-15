@@ -251,6 +251,16 @@ impl PathRow {
     }
 }
 
+/// The guess state "Use fit as guess" rewrites — the variable table and every
+/// path's locals — captured whole so "Undo" restores both together. `locals`
+/// is aligned with the path list at capture time; [`FeffitUi::paths_mut`]
+/// drops the snapshot when that list changes.
+#[derive(Clone)]
+struct GuessSnapshot {
+    params: Vec<ParamRow>,
+    locals: Vec<[PathLocal; 4]>,
+}
+
 /// A spec field is a constant when it parses as a number, else an expression.
 fn parse_spec(s: &str) -> Spec {
     let t = s.trim();
@@ -901,9 +911,10 @@ pub struct FeffitUi {
     report_view: Option<ReportKind>,
     /// An ad-hoc `(title, body)` text pop-up — a loaded result file or the log.
     text_view: Option<(String, String)>,
-    /// Snapshot of the variable table taken before "Use fit as guess", so that
-    /// the adopt can be reverted with "Undo".
-    param_undo: Option<Vec<ParamRow>>,
+    /// Snapshot of the guess state taken before "Use fit as guess", so that
+    /// the adopt can be reverted with "Undo". Dropped by
+    /// [`paths_mut`](Self::paths_mut) when the path list changes.
+    guess_undo: Option<GuessSnapshot>,
     result: Option<FeffitResult>,
     /// The inputs snapshot taken when `result` was produced; `None` while no
     /// fit has run. Compared against the live inputs to show the stale badge.
@@ -936,7 +947,7 @@ impl Default for FeffitUi {
             fit_mode: FitMode::OnlyFt,
             report_view: None,
             text_view: None,
-            param_undo: None,
+            guess_undo: None,
             result: None,
             fitted_inputs: None,
             plot: None,
@@ -962,7 +973,7 @@ impl FeffitUi {
             fit_mode: self.fit_mode,
             report_view: None,
             text_view: None,
-            param_undo: None,
+            guess_undo: None,
             result: None,
             fitted_inputs: None,
             plot: None,
@@ -1337,7 +1348,7 @@ impl FeffitUi {
                 expr: String::new(),
             })
             .collect();
-        self.paths.clear();
+        self.paths_mut().clear();
         self.selected_path = 0;
         self.result = None;
         self.fitted_inputs = None;
@@ -1382,21 +1393,25 @@ impl FeffitUi {
                 };
             }
         }
-        self.paths.push(row);
+        self.paths_mut().push(row);
     }
 
     /// Adopt the last fit's best-fit values as the new starting guesses for the
-    /// matching `vary` variables (the EXAFS iterate-the-fit workflow, and how
-    /// the path parameters — being expressions over these variables — pick up
-    /// the new guesses too). Snapshots the previous values first so
-    /// [`undo_guess`](Self::undo_guess) can revert. Returns how many variables
-    /// were updated.
+    /// matching `vary` variables — the global table and the per-path locals,
+    /// which register their own auto-named variables at fit time (the EXAFS
+    /// iterate-the-fit workflow; the path parameters, being expressions over
+    /// these variables, pick up the new guesses too). Snapshots the previous
+    /// values first so [`undo_guess`](Self::undo_guess) can revert. Returns
+    /// how many variables were updated.
     pub fn adopt_fit_as_guess(&mut self) -> usize {
         let best: Vec<(String, f64)> = match &self.result {
             Some(res) => res.best.iter().map(|b| (b.name.clone(), b.value)).collect(),
             None => return 0,
         };
-        let snapshot = self.params.clone();
+        let snapshot = GuessSnapshot {
+            params: self.params.clone(),
+            locals: self.paths.iter().map(|p| p.locals.clone()).collect(),
+        };
         let mut updated = 0;
         for row in self.params.iter_mut().filter(|r| r.kind == ParamKind::Vary) {
             if let Some((_, v)) = best.iter().find(|(n, _)| *n == row.name) {
@@ -1404,8 +1419,22 @@ impl FeffitUi {
                 updated += 1;
             }
         }
+        // A local's variable is named by its path's position (`sig1`, …) the
+        // same way `run` registered it, so a disabled path's locals (never
+        // registered) find no best-fit value and stay put.
+        for (idx, row) in self.paths.iter_mut().enumerate() {
+            for (li, (base, _)) in PATH_LOCALS.iter().enumerate() {
+                let local = &mut row.locals[li];
+                if let Some((name, ParamKind::Vary, _)) = local.var(base, idx)
+                    && let Some((_, v)) = best.iter().find(|(n, _)| *n == name)
+                {
+                    local.value = *v;
+                    updated += 1;
+                }
+            }
+        }
         if updated > 0 {
-            self.param_undo = Some(snapshot);
+            self.guess_undo = Some(snapshot);
         }
         updated
     }
@@ -1413,18 +1442,30 @@ impl FeffitUi {
     /// Revert the most recent "Use fit as guess" snapshot. Returns `true` if a
     /// snapshot was restored.
     pub fn undo_guess(&mut self) -> bool {
-        match self.param_undo.take() {
+        match self.guess_undo.take() {
             Some(prev) => {
-                self.params = prev;
+                self.params = prev.params;
+                for (row, locals) in self.paths.iter_mut().zip(prev.locals) {
+                    row.locals = locals;
+                }
                 true
             }
             None => false,
         }
     }
 
+    /// The path list, for a change to the list itself (add, remove, replace).
+    /// Every such change goes through here because a guess snapshot is aligned
+    /// with the list it was taken against: once the list differs, "Undo" has
+    /// nothing it can revert onto, so the snapshot is dropped.
+    fn paths_mut(&mut self) -> &mut Vec<PathRow> {
+        self.guess_undo = None;
+        &mut self.paths
+    }
+
     /// Add a path file the app picked from a dialog.
     pub fn add_path(&mut self, label: String, path: FeffPath) {
-        self.paths.push(PathRow::new(label, path));
+        self.paths_mut().push(PathRow::new(label, path));
     }
 
     /// Number of Feff paths in the fit list.
@@ -1440,7 +1481,7 @@ impl FeffitUi {
         if idx >= self.paths.len() {
             return None;
         }
-        let row = self.paths.remove(idx);
+        let row = self.paths_mut().remove(idx);
         if self.selected_path >= self.paths.len() {
             self.selected_path = self.paths.len().saturating_sub(1);
         }
@@ -1481,7 +1522,7 @@ impl FeffitUi {
                 };
             }
         }
-        self.paths.push(row);
+        self.paths_mut().push(row);
     }
 
     /// Whether any enabled path is loaded (the fit needs at least one).
@@ -1910,7 +1951,7 @@ impl FeffitUi {
                     adopt = true;
                 }
                 if ui
-                    .add_enabled(self.param_undo.is_some(), egui::Button::new("Undo"))
+                    .add_enabled(self.guess_undo.is_some(), egui::Button::new("Undo"))
                     .on_hover_text("revert the last guess update")
                     .clicked()
                 {
@@ -2874,6 +2915,41 @@ mod tests {
             "undo brings back the starting guesses"
         );
         assert!(!ui.undo_guess(), "no snapshot left after undo");
+    }
+
+    #[test]
+    fn adopt_fit_as_guess_updates_per_path_locals_and_undo_reverts() {
+        // The seeded σ² local registers `sig1` at fit time; adopting the fit
+        // must write its best-fit value onto the local, not only onto the
+        // global table, and Undo must bring the local back too.
+        let (k, chi) = cu_kchi();
+        let mut ui = feffit_ui_with_paths();
+        let before = ui.paths[0].locals[LOC_SIG].value;
+        ui.run(&k, &chi).expect("fit");
+        let best_sig1 = ui
+            .result
+            .as_ref()
+            .and_then(|r| r.best.iter().find(|b| b.name == "sig1"))
+            .map(|b| b.value)
+            .expect("sig1 is a fitted variable");
+        assert_ne!(before, best_sig1, "the fit moved σ² off its seed");
+
+        ui.adopt_fit_as_guess();
+        assert_eq!(ui.paths[0].locals[LOC_SIG].value, best_sig1);
+        assert!(ui.undo_guess());
+        assert_eq!(ui.paths[0].locals[LOC_SIG].value, before);
+    }
+
+    #[test]
+    fn path_list_change_drops_the_guess_snapshot() {
+        // The snapshot's locals are aligned by path position, so once a path is
+        // removed there is nothing it can be reverted onto: Undo is withdrawn.
+        let (k, chi) = cu_kchi();
+        let mut ui = feffit_ui_with_paths();
+        ui.run(&k, &chi).expect("fit");
+        assert!(ui.adopt_fit_as_guess() > 0);
+        ui.remove_path(0);
+        assert!(!ui.undo_guess(), "no snapshot survives a path removal");
     }
 
     #[test]
