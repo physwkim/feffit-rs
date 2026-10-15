@@ -2359,6 +2359,8 @@ impl XafsViewApp {
             let (min, max) = self.feffit.range_window();
             crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
         }
+        self.plot
+            .set_empty_hint("No fit yet — add Feff paths and press Run.");
         egui::CentralPanel::default().show(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });
@@ -3546,6 +3548,8 @@ impl XafsViewApp {
         if let Some((min, max)) = active_window {
             crate::plot::set_window(&mut self.plot, crate::plot::AxisWindow { min, max });
         }
+        self.plot
+            .set_empty_hint("No data yet — load scans with Open New file, then Autobk Start.");
         egui::CentralPanel::default().show(ui, |ui| {
             crate::plot::show(&mut self.plot, ui);
         });

@@ -141,8 +141,10 @@ impl PlotDataWindow {
     /// Build the window state with its own plot (id 7, distinct from the main
     /// plot's 0 and the other windows' ids). Closed until opened from the top bar.
     pub fn new(render_state: &RenderState) -> Self {
+        let mut plot = crate::plot::Plot::new(render_state, 7);
+        plot.set_empty_hint("Add data files to overlay them.");
         Self {
-            plot: crate::plot::Plot::new(render_state, 7),
+            plot,
             open: false,
             kweight: 2,
             stack: 0.0,

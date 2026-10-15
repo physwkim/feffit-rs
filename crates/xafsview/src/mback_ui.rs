@@ -79,6 +79,7 @@ impl MbackWindow {
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 6);
         plot.set_graph_title("MBACK");
+        plot.set_empty_hint("Pick a group to normalize and plot.");
         Self {
             open: false,
             db: XrayDb::new(),

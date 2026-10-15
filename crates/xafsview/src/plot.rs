@@ -247,6 +247,10 @@ pub struct Plot {
     /// drawn under the toolbar — typed limits for users who control the view
     /// by hand. Toggled by the toolbar's "Limits" button; off by default.
     limits_row: bool,
+    /// Hint drawn centered over the data area while the plot has no curves, so
+    /// an empty canvas says what fills it instead of looking like missing data.
+    /// Set by the owning tab each frame ([`set_empty_hint`](Self::set_empty_hint)).
+    empty_hint: Option<String>,
 }
 
 /// Emphasized-curve styling: the default curve width is 1.0; 3.0 reads as
@@ -301,7 +305,14 @@ impl Plot {
             legend_folded: None,
             marker_handles: Vec::new(),
             limits_row: false,
+            empty_hint: None,
         }
+    }
+
+    /// Set the hint [`show`] draws over the data area while no curve is on the
+    /// plot. Tabs sharing one `Plot` set their own hint before drawing it.
+    pub fn set_empty_hint(&mut self, text: impl Into<String>) {
+        self.empty_hint = Some(text.into());
     }
 
     /// Draw x-position markers as a managed set: remove the markers from the
@@ -759,8 +770,28 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
         draw_pick_readout(ui, area, pick, data_bg);
     }
 
-    // No labelled curve — nothing to put in the legend, so skip the overlay.
+    // No labelled curve — draw the empty-state hint (what fills this plot)
+    // instead of leaving a bare grid that reads as missing data, and skip the
+    // legend overlay. Text colour contrasts with the data-area background, like
+    // the readout/legend text.
     if plot.legend.is_empty() {
+        if let Some(hint) = &plot.empty_hint {
+            let luma = 0.299 * data_bg.r() as f32
+                + 0.587 * data_bg.g() as f32
+                + 0.114 * data_bg.b() as f32;
+            let color = if luma > 128.0 {
+                egui::Color32::from_gray(0x60)
+            } else {
+                egui::Color32::from_gray(0x90)
+            };
+            ui.painter().text(
+                area.center(),
+                egui::Align2::CENTER_CENTER,
+                hint,
+                egui::FontId::proportional(15.0),
+                color,
+            );
+        }
         return;
     }
 

@@ -97,6 +97,7 @@ impl LcfWindow {
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 3);
         plot.set_graph_title("LCF");
+        plot.set_empty_hint("Pick a target group and component spectra to plot the fit.");
         Self {
             open: false,
             plot,
@@ -372,6 +373,7 @@ impl PcaWindow {
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 4);
         plot.set_graph_title("PCA");
+        plot.set_empty_hint("Pick training spectra to plot the components.");
         Self {
             open: false,
             plot,

@@ -504,6 +504,7 @@ impl FeffTab {
                 ui.add(
                     egui::TextEdit::multiline(feff_inp)
                         .code_editor()
+                        .hint_text("Load a feff.inp, or build one on the Atoms tab.")
                         .desired_width(f32::INFINITY)
                         .desired_rows(22),
                 );

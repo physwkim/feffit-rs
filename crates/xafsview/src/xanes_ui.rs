@@ -56,6 +56,7 @@ impl XanesWindow {
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 5);
         plot.set_graph_title("XANES");
+        plot.set_empty_hint("Pick a group to plot its XANES region.");
         Self {
             open: false,
             plot,
