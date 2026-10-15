@@ -8,10 +8,8 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Response, Vec2};
 
-/// Uniform button size for a bottom action row (Feffit / Feff / Atoms forms).
+/// Uniform button size for a form's action row (Autobk / Feffit / Feff / Atoms).
 pub const ROW_BTN: Vec2 = Vec2::new(112.0, 28.0);
-/// Chunky button size for the Autobk 2×2 cluster (그림 1-2-1-1).
-pub const CHUNKY_BTN: Vec2 = Vec2::new(124.0, 40.0);
 /// "Browse…" button size for the Folders rows (그림 1-2-6 labelled these "push";
 /// relabelled to the conventional Browse verb so the action reads clearly).
 pub const BROWSE_BTN: Vec2 = Vec2::new(76.0, 22.0);

@@ -1029,7 +1029,7 @@ impl XafsViewApp {
                 let start = crate::widgets::primary(
                     ui,
                     "Autobk Start",
-                    crate::widgets::CHUNKY_BTN,
+                    crate::widgets::ROW_BTN,
                     self.open_data.has_staged(),
                 )
                 .on_hover_text("Build μ(E) from every staged file, then run AUTOBK");
@@ -3480,11 +3480,12 @@ impl XafsViewApp {
                                 );
                         });
 
-                        // The 2×2 action block (그림 1-2-1-1) sits below the boxes.
+                        // The action row below the boxes: the primary Start with
+                        // its supporting actions, one uniform row.
                         ui.add_space(8.0);
-                        use crate::widgets::{self, CHUNKY_BTN};
+                        use crate::widgets::{self, ROW_BTN};
                         ui.horizontal(|ui| {
-                            if widgets::action(ui, "Open New file", CHUNKY_BTN)
+                            if widgets::action(ui, "Open New file", ROW_BTN)
                                 .on_hover_text(
                                     "Open the raw-scan loader: stage files, set columns, \
                                      then Autobk Start builds μ(E) for each and reduces.",
@@ -3493,7 +3494,7 @@ impl XafsViewApp {
                             {
                                 open_clicked = true;
                             }
-                            let start = widgets::primary(ui, "Autobk Start", CHUNKY_BTN, can_start);
+                            let start = widgets::primary(ui, "Autobk Start", ROW_BTN, can_start);
                             let start = if start_autocalc {
                                 start.on_hover_text("No μ(E) yet — builds it, then AUTOBK")
                             } else {
@@ -3502,10 +3503,7 @@ impl XafsViewApp {
                             if start.clicked() {
                                 start_clicked = true;
                             }
-                        });
-                        ui.horizontal(|ui| {
-                            if widgets::action_enabled(ui, "Edit μ(E)", CHUNKY_BTN, has_mu)
-                                .clicked()
+                            if widgets::action_enabled(ui, "Edit μ(E)", ROW_BTN, has_mu).clicked()
                             {
                                 edit_clicked = true;
                             }
@@ -3513,7 +3511,7 @@ impl XafsViewApp {
                             // group and save each χ(k)/χ(R) (moved here from the
                             // former "Multiple_data" menu).
                             let many = self.session.groups.len() > 1;
-                            if widgets::action_enabled(ui, "Multiple AUTOBK", CHUNKY_BTN, many)
+                            if widgets::action_enabled(ui, "Multiple AUTOBK", ROW_BTN, many)
                                 .on_hover_text(
                                     "Reduce every loaded group and save each \
                                      χ(k)/χ(R) file",

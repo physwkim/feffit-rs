@@ -110,160 +110,174 @@ impl AtomsTab {
 
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                // Title grows with the window, capped so a maximized window
-                // doesn't sprawl the field across the whole central panel.
-                ui.scope(|ui| {
-                    ui.set_max_width(520.0);
-                    ui.horizontal(|ui| {
-                        rsplot::widget::form::label(ui, 36.0, "Title");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.title)
-                                .desired_width(ui.available_width()),
-                        );
+                // Two balanced columns — the cell inputs left, the FEFF target
+                // settings and the build action right — instead of one narrow
+                // stack leaving the rest of the tab empty.
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(460.0);
+                        self.cell_column(ui);
+                    });
+                    ui.separator();
+                    ui.vertical(|ui| {
+                        ui.set_width(360.0);
+                        action = self.feff_column(ui, feff_inp);
                     });
                 });
-
-                ui.add_space(4.0);
-                ui.strong("Lattice (Å, degrees)");
-                egui::Grid::new("atoms_lattice")
-                    .striped(true)
-                    .show(ui, |ui| {
-                        crate::widgets::uniform_num_fields(ui);
-                        ui.label("a");
-                        ui.add(
-                            egui::DragValue::new(&mut self.a)
-                                .speed(0.01)
-                                .range(0.1..=100.0),
-                        );
-                        ui.label("b");
-                        ui.add(
-                            egui::DragValue::new(&mut self.b)
-                                .speed(0.01)
-                                .range(0.1..=100.0),
-                        );
-                        ui.label("c");
-                        ui.add(
-                            egui::DragValue::new(&mut self.c)
-                                .speed(0.01)
-                                .range(0.1..=100.0),
-                        );
-                        ui.end_row();
-                        ui.label("α");
-                        ui.add(
-                            egui::DragValue::new(&mut self.alpha)
-                                .speed(0.1)
-                                .range(1.0..=179.0),
-                        );
-                        ui.label("β");
-                        ui.add(
-                            egui::DragValue::new(&mut self.beta)
-                                .speed(0.1)
-                                .range(1.0..=179.0),
-                        );
-                        ui.label("γ");
-                        ui.add(
-                            egui::DragValue::new(&mut self.gamma)
-                                .speed(0.1)
-                                .range(1.0..=179.0),
-                        );
-                        ui.end_row();
-                    });
-
-                ui.add_space(6.0);
-                ui.strong("Sites (fractional coordinates)");
-                let mut remove: Option<usize> = None;
-                egui::Grid::new("atoms_sites").striped(true).show(ui, |ui| {
-                    ui.label("abs");
-                    ui.label("element");
-                    ui.label("x");
-                    ui.label("y");
-                    ui.label("z");
-                    ui.label("");
-                    ui.end_row();
-                    for (i, row) in self.sites.iter_mut().enumerate() {
-                        ui.radio_value(&mut self.absorber, i, "");
-                        ui.add(egui::TextEdit::singleline(&mut row.element).desired_width(44.0));
-                        ui.add(
-                            egui::DragValue::new(&mut row.x)
-                                .speed(0.001)
-                                .range(-1.0..=2.0),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut row.y)
-                                .speed(0.001)
-                                .range(-1.0..=2.0),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut row.z)
-                                .speed(0.001)
-                                .range(-1.0..=2.0),
-                        );
-                        if crate::widgets::delete_box(ui).clicked() {
-                            remove = Some(i);
-                        }
-                        ui.end_row();
-                    }
-                });
-                if let Some(i) = remove {
-                    self.sites.remove(i);
-                    if self.absorber >= self.sites.len() {
-                        self.absorber = 0;
-                    }
-                }
-                if ui.button("➕ Add site").clicked() {
-                    self.sites.push(SiteRow {
-                        element: "O".into(),
-                        x: 0.0,
-                        y: 0.0,
-                        z: 0.0,
-                    });
-                }
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label("Space group (No.)");
-                    ui.add(egui::DragValue::new(&mut self.space_group).range(1..=230))
-                        .on_hover_text("International number 1–230; 1 = P1 (no expansion)");
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Edge");
-                    for (e, lbl) in EDGES {
-                        ui.selectable_value(&mut self.edge, e, lbl);
-                    }
-                    ui.add_space(12.0);
-                    ui.label("Cluster size (Å)");
-                    ui.add(
-                        egui::DragValue::new(&mut self.cluster_size)
-                            .speed(0.1)
-                            .range(1.0..=12.0),
-                    );
-                });
-
-                // Build row + build status, directly below the cell inputs
-                // (그림 1-2-4) — no pinned-bottom gap. The original labels this
-                // "Execute"; renamed to say what it does. Reload (re-read
-                // atoms.inp from disk) has no file source for the structured
-                // builder, so it is omitted per the functional-only field rule.
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if crate::widgets::primary(ui, "Build feff.inp", crate::widgets::ROW_BTN, true)
-                        .on_hover_text("Build feff.inp from the cell")
-                        .clicked()
-                    {
-                        action = self.build(feff_inp);
-                    }
-                });
-                match &self.status {
-                    Some(Ok(msg)) => {
-                        ui.colored_label(GREEN, msg);
-                    }
-                    Some(Err(e)) => {
-                        ui.colored_label(RED, e);
-                    }
-                    None => {}
-                }
             });
         });
+        action
+    }
+
+    /// Left column: the crystal cell — title, lattice, and the asymmetric-unit
+    /// sites.
+    fn cell_column(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            rsplot::widget::form::label(ui, 36.0, "Title");
+            ui.add(egui::TextEdit::singleline(&mut self.title).desired_width(ui.available_width()));
+        });
+
+        ui.add_space(4.0);
+        ui.strong("Lattice (Å, degrees)");
+        egui::Grid::new("atoms_lattice")
+            .striped(true)
+            .show(ui, |ui| {
+                crate::widgets::uniform_num_fields(ui);
+                ui.label("a");
+                ui.add(
+                    egui::DragValue::new(&mut self.a)
+                        .speed(0.01)
+                        .range(0.1..=100.0),
+                );
+                ui.label("b");
+                ui.add(
+                    egui::DragValue::new(&mut self.b)
+                        .speed(0.01)
+                        .range(0.1..=100.0),
+                );
+                ui.label("c");
+                ui.add(
+                    egui::DragValue::new(&mut self.c)
+                        .speed(0.01)
+                        .range(0.1..=100.0),
+                );
+                ui.end_row();
+                ui.label("α");
+                ui.add(
+                    egui::DragValue::new(&mut self.alpha)
+                        .speed(0.1)
+                        .range(1.0..=179.0),
+                );
+                ui.label("β");
+                ui.add(
+                    egui::DragValue::new(&mut self.beta)
+                        .speed(0.1)
+                        .range(1.0..=179.0),
+                );
+                ui.label("γ");
+                ui.add(
+                    egui::DragValue::new(&mut self.gamma)
+                        .speed(0.1)
+                        .range(1.0..=179.0),
+                );
+                ui.end_row();
+            });
+
+        ui.add_space(6.0);
+        ui.strong("Sites (fractional coordinates)");
+        let mut remove: Option<usize> = None;
+        egui::Grid::new("atoms_sites").striped(true).show(ui, |ui| {
+            ui.label("abs");
+            ui.label("element");
+            ui.label("x");
+            ui.label("y");
+            ui.label("z");
+            ui.label("");
+            ui.end_row();
+            for (i, row) in self.sites.iter_mut().enumerate() {
+                ui.radio_value(&mut self.absorber, i, "");
+                ui.add(egui::TextEdit::singleline(&mut row.element).desired_width(44.0));
+                ui.add(
+                    egui::DragValue::new(&mut row.x)
+                        .speed(0.001)
+                        .range(-1.0..=2.0),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut row.y)
+                        .speed(0.001)
+                        .range(-1.0..=2.0),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut row.z)
+                        .speed(0.001)
+                        .range(-1.0..=2.0),
+                );
+                if crate::widgets::delete_box(ui).clicked() {
+                    remove = Some(i);
+                }
+                ui.end_row();
+            }
+        });
+        if let Some(i) = remove {
+            self.sites.remove(i);
+            if self.absorber >= self.sites.len() {
+                self.absorber = 0;
+            }
+        }
+        if ui.button("➕ Add site").clicked() {
+            self.sites.push(SiteRow {
+                element: "O".into(),
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            });
+        }
+    }
+
+    /// Right column: the FEFF target — space group, edge, cluster size — and
+    /// the build action with its status. The original labels the build
+    /// "Execute"; renamed to say what it does. Reload (re-read atoms.inp from
+    /// disk) has no file source for the structured builder, so it is omitted
+    /// per the functional-only field rule.
+    fn feff_column(&mut self, ui: &mut egui::Ui, feff_inp: &mut String) -> Option<AtomsAction> {
+        let mut action = None;
+        ui.horizontal(|ui| {
+            ui.label("Space group (No.)");
+            ui.add(egui::DragValue::new(&mut self.space_group).range(1..=230))
+                .on_hover_text("International number 1–230; 1 = P1 (no expansion)");
+        });
+        ui.horizontal(|ui| {
+            ui.label("Edge");
+            for (e, lbl) in EDGES {
+                ui.selectable_value(&mut self.edge, e, lbl);
+            }
+            ui.add_space(12.0);
+            ui.label("Cluster size (Å)");
+            ui.add(
+                egui::DragValue::new(&mut self.cluster_size)
+                    .speed(0.1)
+                    .range(1.0..=12.0),
+            );
+        });
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if crate::widgets::primary(ui, "Build feff.inp", crate::widgets::ROW_BTN, true)
+                .on_hover_text("Build feff.inp from the cell")
+                .clicked()
+            {
+                action = self.build(feff_inp);
+            }
+        });
+        match &self.status {
+            Some(Ok(msg)) => {
+                ui.colored_label(GREEN, msg);
+            }
+            Some(Err(e)) => {
+                ui.colored_label(RED, e);
+            }
+            None => {}
+        }
         action
     }
 
