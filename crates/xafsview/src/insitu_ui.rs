@@ -134,7 +134,12 @@ pub fn parse_series_dat(text: &str) -> Result<SeriesMap, String> {
         .by_ref()
         .find(|(_, l)| !l.trim().is_empty())
         .ok_or("empty file")?;
-    let header: Vec<&str> = header.split('\t').map(str::trim).collect();
+    let mut header: Vec<&str> = header.split('\t').map(str::trim).collect();
+    // The 10C app writes a tab after the last column name (Results/RDF.dat);
+    // drop trailing empty cells so they don't count as a scan column.
+    while header.last().is_some_and(|c| c.is_empty()) {
+        header.pop();
+    }
     if header.len() < 2 {
         return Err("header has no scan columns (expected tab-separated names)".into());
     }
@@ -849,6 +854,17 @@ mod tests {
         assert_eq!(m.x, vec![0.0, 0.5, 1.0]);
         assert_eq!(m.rows[0], vec![0.1, 0.3, 0.5]);
         assert_eq!(m.rows[1], vec![0.2, 0.4, 0.6]);
+    }
+
+    #[test]
+    fn parses_header_with_trailing_tab_and_crlf() {
+        // The 10C app's Results/RDF.dat ends the header with "\t\r\n".
+        let text = "R (angstrom)\ta_000\ta_001\t\r\n\
+                    0\t0.1\t0.2\r\n\
+                    0.5\t0.3\t0.4\r\n";
+        let m = parse_series_dat(text).expect("trailing tab header");
+        assert_eq!(m.labels, vec!["a_000", "a_001"]);
+        assert_eq!(m.rows[1], vec![0.2, 0.4]);
     }
 
     #[test]
