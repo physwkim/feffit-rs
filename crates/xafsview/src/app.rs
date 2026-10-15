@@ -3807,12 +3807,27 @@ impl XafsViewApp {
                                 change.replot = true;
                             }
                             // Reveal the draggable FT-window band on the kʷ·χ(k)
-                            // (kmin/kmax) and |χ(R)| (rmin/rmax) graphs.
-                            ui.checkbox(&mut self.reduction.show_range, "Show k/R range")
-                                .on_hover_text(
-                                    "Drag the kmin/kmax (kʷ·χ(k) graph) or rmin/rmax \
-                                     (|χ(R)| graph) FT-window band to set the range",
-                                );
+                            // (kmin/kmax) and |χ(R)| (rmin/rmax) graphs — the only
+                            // two that draw it (see `active_window` below), so the
+                            // toggle is disabled elsewhere rather than silently
+                            // doing nothing.
+                            let band_graph =
+                                matches!(self.reduction.graph, GraphType::KChi | GraphType::ChiR);
+                            ui.add_enabled(
+                                band_graph,
+                                egui::Checkbox::new(
+                                    &mut self.reduction.show_range,
+                                    "Show k/R range",
+                                ),
+                            )
+                            .on_hover_text(
+                                "Drag the kmin/kmax (kʷ·χ(k) graph) or rmin/rmax \
+                                 (|χ(R)| graph) FT-window band to set the range",
+                            )
+                            .on_disabled_hover_text(
+                                "The FT-window band is drawn on the *K.CHI and *R.CHI \
+                                 graphs only",
+                            );
                         });
 
                         // --- Analysis: openers for the windows that consume this
