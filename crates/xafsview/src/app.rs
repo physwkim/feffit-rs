@@ -3956,15 +3956,10 @@ impl eframe::App for XafsViewApp {
         // The common error/status strip, shown on every tab. At the bottom of
         // the window — where users scan for status by convention.
         egui::Panel::bottom("status").show(ui, |ui| {
+            // Right-to-left so the Log button and group count claim their width
+            // first; the status line then truncates into whatever remains and
+            // cannot run under them on a narrow window.
             ui.horizontal(|ui| {
-                // A running background job shows its spinner + progress ahead
-                // of the status line.
-                if let Some((label, done, total)) = self.jobs.status() {
-                    ui.spinner();
-                    ui.label(format!("{label}: {done}/{total}"));
-                    ui.separator();
-                }
-                ui.label(self.status.line());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // The strip shows only the latest line; the Log window keeps
                     // the whole session's messages (its error count stays on the
@@ -3983,6 +3978,16 @@ impl eframe::App for XafsViewApp {
                         self.status.open = true;
                     }
                     ui.weak(format!("{} group(s) loaded", self.session.groups.len()));
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        // A running background job shows its spinner + progress
+                        // ahead of the status line.
+                        if let Some((label, done, total)) = self.jobs.status() {
+                            ui.spinner();
+                            ui.label(format!("{label}: {done}/{total}"));
+                            ui.separator();
+                        }
+                        ui.add(egui::Label::new(self.status.line()).truncate());
+                    });
                 });
             });
         });
