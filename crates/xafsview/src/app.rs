@@ -3321,6 +3321,51 @@ impl XafsViewApp {
             .resizable(true)
             .default_size(360.0)
             .show(ui, |ui| {
+                // The action row, pinned below the scrolling form so the
+                // primary Start stays visible however long the form is.
+                // Wrapped: at a narrow panel width the buttons flow onto a
+                // second row instead of clipping.
+                egui::Panel::bottom("autobk_actions").show(ui, |ui| {
+                    ui.add_space(4.0);
+                    use crate::widgets::{self, ROW_BTN};
+                    ui.horizontal_wrapped(|ui| {
+                        if widgets::action(ui, "Open New file", ROW_BTN)
+                            .on_hover_text(
+                                "Open the raw-scan loader: stage files, set columns, \
+                                 then Autobk Start builds μ(E) for each and reduces.",
+                            )
+                            .clicked()
+                        {
+                            open_clicked = true;
+                        }
+                        let start = widgets::primary(ui, "Autobk Start", ROW_BTN, can_start);
+                        let start = if start_autocalc {
+                            start.on_hover_text("No μ(E) yet — builds it, then AUTOBK")
+                        } else {
+                            start
+                        };
+                        if start.clicked() {
+                            start_clicked = true;
+                        }
+                        if widgets::action_enabled(ui, "Edit μ(E)", ROW_BTN, has_mu).clicked() {
+                            edit_clicked = true;
+                        }
+                        // Batch reduce: normalize → AUTOBK → FT every loaded
+                        // group and save each χ(k)/χ(R) (moved here from the
+                        // former "Multiple_data" menu).
+                        let many = self.session.groups.len() > 1;
+                        if widgets::action_enabled(ui, "Multiple AUTOBK", ROW_BTN, many)
+                            .on_hover_text(
+                                "Reduce every loaded group and save each \
+                                 χ(k)/χ(R) file",
+                            )
+                            .clicked()
+                        {
+                            multi_autobk_clicked = true;
+                        }
+                    });
+                    ui.add_space(2.0);
+                });
                 egui::CentralPanel::default().show(ui, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.heading("Autobk");
@@ -3488,48 +3533,6 @@ impl XafsViewApp {
                                     "Drag the kmin/kmax (kʷ·χ(k) graph) or rmin/rmax \
                                      (|χ(R)| graph) FT-window band to set the range",
                                 );
-                        });
-
-                        // The action row below the boxes: the primary Start with
-                        // its supporting actions, one uniform row.
-                        ui.add_space(8.0);
-                        use crate::widgets::{self, ROW_BTN};
-                        ui.horizontal(|ui| {
-                            if widgets::action(ui, "Open New file", ROW_BTN)
-                                .on_hover_text(
-                                    "Open the raw-scan loader: stage files, set columns, \
-                                     then Autobk Start builds μ(E) for each and reduces.",
-                                )
-                                .clicked()
-                            {
-                                open_clicked = true;
-                            }
-                            let start = widgets::primary(ui, "Autobk Start", ROW_BTN, can_start);
-                            let start = if start_autocalc {
-                                start.on_hover_text("No μ(E) yet — builds it, then AUTOBK")
-                            } else {
-                                start
-                            };
-                            if start.clicked() {
-                                start_clicked = true;
-                            }
-                            if widgets::action_enabled(ui, "Edit μ(E)", ROW_BTN, has_mu).clicked()
-                            {
-                                edit_clicked = true;
-                            }
-                            // Batch reduce: normalize → AUTOBK → FT every loaded
-                            // group and save each χ(k)/χ(R) (moved here from the
-                            // former "Multiple_data" menu).
-                            let many = self.session.groups.len() > 1;
-                            if widgets::action_enabled(ui, "Multiple AUTOBK", ROW_BTN, many)
-                                .on_hover_text(
-                                    "Reduce every loaded group and save each \
-                                     χ(k)/χ(R) file",
-                                )
-                                .clicked()
-                            {
-                                multi_autobk_clicked = true;
-                            }
                         });
                     });
                 });
