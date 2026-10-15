@@ -40,22 +40,19 @@ enum Tab {
     Atoms,
     /// Edit feff.inp / run FEFF (P9) — only when FEFF paths must be (re)generated.
     Feff,
-    /// Program/version information (mirrors XAFSView's About tab).
-    About,
 }
 
 impl Tab {
     /// All tabs in strip order — the EXAFS analysis flow, left to right:
     /// set up folders → reduce data → fit; the structure-building tabs
     /// (Atoms/Feff), used only when FEFF paths must be regenerated, follow the fit.
-    const ALL: [Tab; 7] = [
+    const ALL: [Tab; 6] = [
         Tab::Folders,
         Tab::Autobk,
         Tab::Feffit,
         Tab::FeffitTxt,
         Tab::Atoms,
         Tab::Feff,
-        Tab::About,
     ];
 
     /// The label shown on the tab button.
@@ -67,7 +64,6 @@ impl Tab {
             Tab::Atoms => "Atoms",
             Tab::Feff => "Feff",
             Tab::Folders => "Folders",
-            Tab::About => "About",
         }
     }
 }
@@ -178,6 +174,8 @@ pub struct XafsViewApp {
     last_refit_key: Option<(Option<usize>, RefitKey)>,
     /// The tab shown on the previous frame, to detect tab switches for replot.
     last_tab: Tab,
+    /// Whether the About window (Help menu) is open.
+    about_open: bool,
     /// The status strip's line plus the cumulative session message log — every
     /// user-visible outcome funnels through it (see [`crate::status_log`]).
     status: crate::status_log::StatusLog,
@@ -325,6 +323,7 @@ impl XafsViewApp {
             clean_undo: Vec::new(),
             last_refit_key: None,
             last_tab: Tab::Atoms,
+            about_open: false,
             status: Default::default(),
             jobs: Default::default(),
             ui_scale: DEFAULT_UI_SCALE,
@@ -2440,22 +2439,28 @@ impl XafsViewApp {
         });
     }
 
-    /// The About tab: program/version information, mirroring XAFSView's About.
-    fn about_tab(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.add_space(8.0);
-            ui.heading("XAFSView");
-            ui.label(format!(
-                "feffit-rs port · version {}",
-                env!("CARGO_PKG_VERSION")
-            ));
-            ui.separator();
-            ui.label(
-                "A Rust reimplementation of the XAFSView GUI on the feffit-rs engines \
-                 (pre-edge / normalize, AUTOBK, FEFFIT, LCF / PCA, FEFF8L / FEFF10), \
-                 with larch-parity math.",
-            );
-        });
+    /// The About window (Help menu): program/version information.
+    fn about_window(&mut self, ctx: &egui::Context) {
+        crate::window::detached(
+            ctx,
+            "about",
+            "About XAFSView",
+            &mut self.about_open,
+            [440.0, 200.0],
+            |ui| {
+                ui.heading("XAFSView");
+                ui.label(format!(
+                    "feffit-rs port · version {}",
+                    env!("CARGO_PKG_VERSION")
+                ));
+                ui.separator();
+                ui.label(
+                    "A Rust reimplementation of the XAFSView GUI on the feffit-rs engines \
+                     (pre-edge / normalize, AUTOBK, FEFFIT, LCF / PCA, FEFF8L / FEFF10), \
+                     with larch-parity math.",
+                );
+            },
+        );
     }
 
     /// Open a dialog and add the chosen Feff path file(s) to the fit.
@@ -3622,26 +3627,21 @@ impl XafsViewApp {
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             let mut edit_clicked = false;
-            ui.menu_button("Smoothing", |ui| {
-                if ui.button("Edit μ(E) (deglitch / trim / smooth)…").clicked() {
-                    edit_clicked = true;
-                    ui.close();
-                }
-            });
-            if edit_clicked {
-                self.tab = Tab::Autobk;
-                self.open_edit_xmu();
-            }
             ui.menu_button("Periodic table", |ui| {
                 if ui.button("Periodic table + atom data…").clicked() {
                     self.periodic.open = true;
                     ui.close();
                 }
             });
-            // Grouped by analysis stage, following the data flow: experiment /
-            // sample prep → XANES (energy) → EXAFS (k/R) → multi-spectrum →
-            // structure.
+            // Grouped by analysis stage, following the data flow: edit μ(E) /
+            // experiment / sample prep → XANES (energy) → EXAFS (k/R) →
+            // multi-spectrum → structure.
             ui.menu_button("Tools", |ui| {
+                if ui.button("Edit μ(E) (deglitch / trim / smooth)…").clicked() {
+                    edit_clicked = true;
+                    ui.close();
+                }
+                ui.separator();
                 // Experiment & sample preparation.
                 if ui.button("Ion chamber / gas absorption…").clicked() {
                     self.ion_chamber.open = true;
@@ -3751,6 +3751,16 @@ impl XafsViewApp {
                     }
                 }
             });
+            ui.menu_button("Help", |ui| {
+                if ui.button("About XAFSView…").clicked() {
+                    self.about_open = true;
+                    ui.close();
+                }
+            });
+            if edit_clicked {
+                self.tab = Tab::Autobk;
+                self.open_edit_xmu();
+            }
         });
     }
 
@@ -3902,7 +3912,7 @@ impl eframe::App for XafsViewApp {
         });
 
         // Horizontal tab strip directly under the menu bar, in analysis-flow
-        // order (Folders … About) rather than a vertical side list.
+        // order (Folders … Feff) rather than a vertical side list.
         egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
@@ -3910,11 +3920,11 @@ impl eframe::App for XafsViewApp {
                     ui.selectable_value(&mut self.tab, tab, tab.label());
                 }
                 // Plot Data is a detached viewer, not a tab: set it off past a
-                // separator after the last tab (About) so it reads as a persistent
-                // window opener rather than another tab selection.
+                // separator after the last tab, with the window-opening ellipsis,
+                // so it reads as a window opener rather than another tab.
                 ui.separator();
                 if ui
-                    .button("Plot Data")
+                    .button("Plot Data…")
                     .on_hover_text("Open the Plot Data file-overlay window")
                     .clicked()
                 {
@@ -3935,9 +3945,9 @@ impl eframe::App for XafsViewApp {
             self.last_tab = self.tab;
         }
 
-        // The common error/status strip at the top of the body (below the tabs),
-        // matching XAFSView's shared text line shown on every tab.
-        egui::Panel::top("status").show(ui, |ui| {
+        // The common error/status strip, shown on every tab. At the bottom of
+        // the window — where users scan for status by convention.
+        egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // A running background job shows its spinner + progress ahead
                 // of the status line.
@@ -3996,11 +4006,13 @@ impl eframe::App for XafsViewApp {
                     None => {}
                 }
             }
-            Tab::About => self.about_tab(ui),
         });
 
+        // The About window (Help menu).
+        self.about_window(ui.ctx());
+
         // The Edit-μ(E) window floats above the panels and is driven from the
-        // Autobk tab button / Smoothing menu. Seed its energy widgets for the
+        // Autobk tab button / Tools menu. Seed its energy widgets for the
         // group they will edit — a group switch while the window is open
         // re-seeds, so another scan's stale energies never target this one.
         if self.edit_xmu.open

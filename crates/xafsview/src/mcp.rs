@@ -192,7 +192,7 @@ pub struct DeglitchArgs {
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct SetTabArgs {
     /// Tab by its strip label (case-insensitive): "Folders", "Autobk",
-    /// "Feffit", "Feffit_txt", "Atoms", "Feff", or "About".
+    /// "Feffit", "Feffit_txt", "Atoms", or "Feff".
     pub tab: String,
 }
 
@@ -444,7 +444,7 @@ impl XafsMcp {
     }
 
     #[tool(
-        description = "Switch the main window's active tab (Folders, Autobk, Feffit, Feffit_txt, Atoms, Feff, About) — what screenshot then shows."
+        description = "Switch the main window's active tab (Folders, Autobk, Feffit, Feffit_txt, Atoms, Feff) — what screenshot then shows."
     )]
     async fn set_tab(
         &self,
