@@ -489,19 +489,27 @@ impl XafsViewApp {
                     Ok(line)
                 });
             }
-            mcp::McpRequest::RunFit { reply } => {
+            mcp::McpRequest::RunFit { mode, reply } => {
                 if self.jobs.busy() {
                     let _ = reply.send(Err(JOB_BUSY.to_owned()));
                 } else {
-                    self.run_feffit();
-                    if self.jobs.busy() {
-                        // Started: park the reply for finish_feffit (or the
-                        // job-failure path in the frame hook).
-                        self.mcp_job_reply = Some(reply);
-                    } else {
-                        // run_feffit refused synchronously; the status line
-                        // carries its reason.
-                        let _ = reply.send(Err(self.status.line().to_owned()));
+                    match Self::parse_fit_mode(&mode) {
+                        Err(e) => {
+                            let _ = reply.send(Err(e));
+                        }
+                        Ok(m) => {
+                            self.feffit.set_fit_mode(m);
+                            self.run_feffit();
+                            if self.jobs.busy() {
+                                // Started: park the reply for finish_feffit (or
+                                // the job-failure path in the frame hook).
+                                self.mcp_job_reply = Some(reply);
+                            } else {
+                                // run_feffit refused synchronously; the status
+                                // line carries its reason.
+                                let _ = reply.send(Err(self.status.line().to_owned()));
+                            }
+                        }
                     }
                 }
             }
@@ -842,17 +850,7 @@ impl XafsViewApp {
                 }
             }
             if let Some(s) = f.fit_mode {
-                let mode = match s.as_str() {
-                    "fit" => FitMode::Fit,
-                    "nofit" => FitMode::NoFit,
-                    "only_ft" => FitMode::OnlyFt,
-                    other => {
-                        return Err(format!(
-                            "unknown fit_mode \"{other}\" (fit, nofit, or only_ft)"
-                        ));
-                    }
-                };
-                self.feffit.set_fit_mode(mode);
+                self.feffit.set_fit_mode(Self::parse_fit_mode(&s)?);
                 set.push(format!("fit_mode={s}"));
             }
         }
@@ -860,6 +858,19 @@ impl XafsViewApp {
             return Ok("nothing to set (empty patch)".to_owned());
         }
         Ok(format!("set: {}", set.join(", ")))
+    }
+
+    /// Parse an MCP fit-mode string — the one mapping shared by `set_params`
+    /// and `run_fit`.
+    fn parse_fit_mode(s: &str) -> Result<FitMode, String> {
+        match s {
+            "fit" => Ok(FitMode::Fit),
+            "nofit" => Ok(FitMode::NoFit),
+            "only_ft" => Ok(FitMode::OnlyFt),
+            other => Err(format!(
+                "unknown fit_mode \"{other}\" (fit, nofit, or only_ft)"
+            )),
+        }
     }
 
     /// The MCP `get_results` report: the loaded groups, the current group, and

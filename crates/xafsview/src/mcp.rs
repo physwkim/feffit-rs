@@ -80,6 +80,7 @@ pub enum McpRequest {
         reply: TextReply,
     },
     RunFit {
+        mode: String,
         reply: TextReply,
     },
     GetResults {
@@ -176,6 +177,14 @@ pub struct SetTabArgs {
     /// Tab by its strip label (case-insensitive): "Folders", "Autobk",
     /// "Feffit", "Feffit_txt", "Atoms", "Feff", or "About".
     pub tab: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct RunFitArgs {
+    /// Fit mode for this run, set on the Feffit tab before running: "fit"
+    /// (default — the full least-squares fit), "nofit" (evaluate the model
+    /// without varying), or "only_ft" (Fourier transforms only, no model).
+    pub mode: Option<String>,
 }
 
 /// Parameters for `set_params`. Every field is optional; only the given ones
@@ -440,10 +449,17 @@ impl XafsMcp {
     }
 
     #[tool(
-        description = "Run the Feffit tab's configured fit against the current group's χ(k) and return the fit report. Requires χ(k) (run_autobk first) and, for fit_mode \"fit\"/\"nofit\", at least one loaded Feff path."
+        description = "Run a Feffit fit against the current group's χ(k) and return the fit report. Requires χ(k) (run_autobk first) and, for mode \"fit\"/\"nofit\" (default \"fit\"), at least one loaded Feff path; mode \"only_ft\" transforms without a model."
     )]
-    async fn run_fit(&self) -> Result<CallToolResult, ErrorData> {
-        self.roundtrip(|reply| McpRequest::RunFit { reply }).await
+    async fn run_fit(
+        &self,
+        Parameters(a): Parameters<RunFitArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::RunFit {
+            mode: a.mode.unwrap_or_else(|| "fit".to_owned()),
+            reply,
+        })
+        .await
     }
 
     #[tool(
