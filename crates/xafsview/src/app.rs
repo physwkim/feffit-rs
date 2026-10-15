@@ -1188,7 +1188,7 @@ impl XafsViewApp {
     /// first-shell amplitude. Entry point is the "Theory" row in the Autobk tab's
     /// Data box.
     fn open_theory_file(&mut self) {
-        let mut dlg = rfd::FileDialog::new();
+        let mut dlg = rfd::FileDialog::new().add_filter("FEFF chi.dat", &["dat"]);
         if let Some(dir) = &self.session.folders.data_dir {
             dlg = dlg.set_directory(dir);
         }
@@ -2695,7 +2695,7 @@ impl XafsViewApp {
 
     /// Open a dialog and add the chosen Feff path file(s) to the fit.
     fn add_feff_path(&mut self) {
-        let mut dlg = rfd::FileDialog::new();
+        let mut dlg = rfd::FileDialog::new().add_filter("FEFF path (feffNNNN.dat)", &["dat"]);
         if let Some(dir) = &self.session.folders.atoms_dir {
             dlg = dlg.set_directory(dir);
         }
