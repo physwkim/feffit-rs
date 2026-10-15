@@ -128,6 +128,10 @@ pub struct XafsViewApp {
     /// "Add data files…", and "Clear all") is shown. The Autobk sidebar keeps
     /// only a compact current-group combo; the full list lives here.
     data_window_open: bool,
+    /// Scroll the Data window's list to the current group's row: set whenever
+    /// the window is opened, cleared once that row has been brought into view
+    /// (a 66-scan list opened on scan 40 otherwise showed scans 1–12).
+    data_window_reveal: bool,
     /// Last plain-clicked Run-checkbox row in the Data window: the anchor a
     /// shift-click extends from ([`widgets::select_index_list`]'s convention).
     /// Cleared when rows are removed, which would shift the indices under it.
@@ -382,6 +386,7 @@ impl XafsViewApp {
             feffit_batch: FeffitBatch::default(),
             open_data: OpenDataBrowser::default(),
             data_window_open: false,
+            data_window_reveal: false,
             data_check_anchor: None,
             feffit_batch_open: false,
             edit_xmu: EditXmuState::default(),
@@ -2549,6 +2554,7 @@ impl XafsViewApp {
                                     .clicked()
                                 {
                                     self.data_window_open = true;
+                                    self.data_window_reveal = true;
                                 }
                                 ui.weak(format!(
                                     "{}/{n_groups} checked for Run",
@@ -3374,6 +3380,7 @@ impl XafsViewApp {
                 .clicked()
             {
                 self.data_window_open = true;
+                self.data_window_reveal = true;
             }
         });
         // The shared Run scope, so it is visible without opening the Data window.
@@ -3403,6 +3410,7 @@ impl XafsViewApp {
         let mut keep_open = true;
         let mut changed = false;
         let mut add_clicked = false;
+        let reveal = self.data_window_reveal;
         // Own panel layout: the group list fills the window, so Add + the
         // checked-count row go in a top panel and "Clear all" in a pinned footer
         // (in one flow the list pushed "Clear all" past the viewport edge).
@@ -3425,6 +3433,7 @@ impl XafsViewApp {
                 let mut select_all = false;
                 let mut clear_sel = false;
                 let mut clear_all = false;
+                let mut revealed = false;
                 egui::Panel::top("data_manager_header").show(ui, |ui| {
                     // ADD opens the Plot Data-style staging picker (needs an open
                     // import for the column mapping); same affordance as Plot Data.
@@ -3492,10 +3501,13 @@ impl XafsViewApp {
                                             {
                                                 toggle = Some((i, on));
                                             }
-                                            if ui
-                                                .selectable_label(current == Some(i), &g.label)
-                                                .clicked()
-                                            {
+                                            let row =
+                                                ui.selectable_label(current == Some(i), &g.label);
+                                            if reveal && current == Some(i) {
+                                                row.scroll_to_me(Some(egui::Align::Center));
+                                                revealed = true;
+                                            }
+                                            if row.clicked() {
                                                 select = Some(i);
                                             }
                                         });
@@ -3504,6 +3516,9 @@ impl XafsViewApp {
                             });
                     },
                 );
+                if revealed {
+                    self.data_window_reveal = false;
+                }
                 if clear_all {
                     self.session.groups.clear();
                     self.session.current = None;
