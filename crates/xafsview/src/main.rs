@@ -18,6 +18,7 @@ mod fonts;
 mod import;
 mod jobs;
 mod mback_ui;
+mod mcp;
 mod open_data;
 mod plot;
 mod plot_data;
@@ -40,7 +41,25 @@ use app::XafsViewApp;
 /// Windows/Linux — which is where a distributed build needs it.)
 static ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
+/// Parse `--mcp [PORT]` / `--mcp=PORT` from the command line: start the
+/// embedded MCP server on that port ([`mcp::DEFAULT_PORT`] when none is given).
+/// Other arguments are ignored, as before.
+fn mcp_port_arg() -> Option<u16> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    for (i, a) in args.iter().enumerate() {
+        if a == "--mcp" {
+            let port = args.get(i + 1).and_then(|p| p.parse().ok());
+            return Some(port.unwrap_or(mcp::DEFAULT_PORT));
+        }
+        if let Some(p) = a.strip_prefix("--mcp=") {
+            return Some(p.parse().unwrap_or(mcp::DEFAULT_PORT));
+        }
+    }
+    None
+}
+
 fn main() -> eframe::Result {
+    let mcp_port = mcp_port_arg();
     let icon =
         eframe::icon_data::from_png_bytes(ICON_PNG).expect("bundled icon.png is a valid PNG");
 
@@ -58,6 +77,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "XAFSView",
         options,
-        Box::new(|cc| Ok(Box::new(XafsViewApp::new(cc)) as Box<dyn eframe::App>)),
+        Box::new(move |cc| Ok(Box::new(XafsViewApp::new(cc, mcp_port)) as Box<dyn eframe::App>)),
     )
 }

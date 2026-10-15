@@ -462,19 +462,21 @@ pub fn parse_feffit_inp(text: &str) -> FeffitInp {
     inp
 }
 
-/// Fit-transform (k/R window) settings for the FEFFIT fit.
+/// Fit-transform (k/R window) settings for the FEFFIT fit. Public (with its
+/// fields) so the MCP `set_params` handler can patch it through
+/// [`FeffitUi::ft_mut`] exactly as the Transform box edits it.
 #[derive(Clone, PartialEq)]
-struct FtSettings {
-    kmin: f64,
-    kmax: f64,
-    kweight: i32,
-    dk: f64,
-    kwindow: Window,
-    rmin: f64,
-    rmax: f64,
-    dr: f64,
-    rwindow: Window,
-    fitspace: FitSpace,
+pub struct FtSettings {
+    pub kmin: f64,
+    pub kmax: f64,
+    pub kweight: i32,
+    pub dk: f64,
+    pub kwindow: Window,
+    pub rmin: f64,
+    pub rmax: f64,
+    pub dr: f64,
+    pub rwindow: Window,
+    pub fitspace: FitSpace,
 }
 
 impl Default for FtSettings {
@@ -1003,6 +1005,51 @@ impl FeffitUi {
     /// The last fit result, if a fit has been run (for the batch result table).
     pub fn result(&self) -> Option<&FeffitResult> {
         self.result.as_ref()
+    }
+
+    /// MCP `set_params`: add or update the global parameter `name`. `kind` is
+    /// "vary" or "fixed" (using `value`), or "expr" (using `expr`) — the same
+    /// three states as the parameter table's kind selector.
+    pub fn set_global_param(
+        &mut self,
+        name: &str,
+        kind: &str,
+        value: f64,
+        expr: &str,
+    ) -> Result<(), String> {
+        let kind = match kind {
+            "vary" => ParamKind::Vary,
+            "fixed" => ParamKind::Fixed,
+            "expr" => ParamKind::Expr,
+            other => return Err(format!("unknown parameter kind \"{other}\" for \"{name}\"")),
+        };
+        if kind == ParamKind::Expr && expr.trim().is_empty() {
+            return Err(format!(
+                "parameter \"{name}\": kind \"expr\" needs an expression"
+            ));
+        }
+        let row = ParamRow {
+            name: name.to_owned(),
+            kind,
+            value,
+            expr: expr.to_owned(),
+        };
+        match self.params.iter_mut().find(|p| p.name == name) {
+            Some(existing) => *existing = row,
+            None => self.params.push(row),
+        }
+        Ok(())
+    }
+
+    /// MCP `set_params`: the fit-transform settings, mutable — the Transform
+    /// box edits the same struct field by field.
+    pub fn ft_mut(&mut self) -> &mut FtSettings {
+        &mut self.ft
+    }
+
+    /// MCP `set_params`: what "Run" does (fit / no-fit / only FT).
+    pub fn set_fit_mode(&mut self, mode: FitMode) {
+        self.fit_mode = mode;
     }
 
     /// Per-path fitted data for the batch "Save Items", in the order the paths

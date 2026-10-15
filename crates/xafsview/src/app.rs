@@ -11,9 +11,10 @@ use crate::atoms_ui::{AtomsAction, AtomsTab, FeffAction, FeffTab, PlotSitesWindo
 use crate::calc_ui::{IonChamberWindow, KeConvertWindow, PeriodicTableWindow, PowderWindow};
 use crate::clean_ui::{CleanAction, EditXmuState};
 use crate::feffit_batch::{BatchAction, FeffitBatch};
-use crate::feffit_ui::{FeffitAction, FeffitPlot, FeffitUi};
+use crate::feffit_ui::{FeffitAction, FeffitPlot, FeffitUi, FitMode};
 use crate::import::ImportState;
 use crate::mback_ui::MbackWindow;
+use crate::mcp;
 use crate::open_data::OpenDataBrowser;
 use crate::plot_data::PlotDataWindow;
 use crate::reduce_ui::{ControlsChange, GraphType, ReductionUi, TheoryStd};
@@ -183,6 +184,18 @@ pub struct XafsViewApp {
     /// The slider edits this freely; the live zoom is applied only when the drag
     /// ends, so the UI doesn't reflow under the cursor on every drag tick.
     ui_scale: f32,
+    /// The embedded MCP server when enabled (`--mcp` or the Settings toggle):
+    /// the listener handle plus the channel its tool requests arrive on.
+    /// Dropping it (toggle off) stops the server. See [`crate::mcp`].
+    mcp: Option<(mcp::McpServer, std::sync::mpsc::Receiver<mcp::McpRequest>)>,
+    /// Port the Settings toggle (re)starts the MCP server on: the `--mcp` port
+    /// when one was given, else [`mcp::DEFAULT_PORT`].
+    mcp_port: u16,
+    /// An MCP `run_fit` reply parked while its Feffit job runs; answered by
+    /// [`finish_feffit`](Self::finish_feffit) or the job-failure path.
+    mcp_fit_reply: Option<mcp::TextReply>,
+    /// MCP `screenshot` replies awaiting the next [`egui::Event::Screenshot`].
+    mcp_shot_replies: Vec<mcp::PngReply>,
 }
 
 /// Default overall UI zoom (scales text *and* spacing together). Set >1.0 so
@@ -220,7 +233,8 @@ type FeffitJobFit = (usize, String, Result<(String, FeffitUi), String>);
 
 impl XafsViewApp {
     /// Build the app. Requires the wgpu render state (see [`main`](crate::main)).
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    /// `mcp_port` starts the embedded MCP server (`--mcp [port]`).
+    pub fn new(cc: &eframe::CreationContext<'_>, mcp_port: Option<u16>) -> Self {
         // Install the glyph-fallback font before anything draws, so both the egui
         // UI and rsplot axis labels can render the superscript/subscript math
         // glyphs the default font lacks (Å⁻¹, kʷ, χ²ᵣ).
@@ -263,7 +277,7 @@ impl XafsViewApp {
         let powder = PowderWindow::default();
         let plot_sites = PlotSitesWindow::new(render_state);
 
-        Self {
+        let mut app = Self {
             session: Session::new(),
             // Open on Folders — the flow entry point where the working
             // directories are set before any data is loaded.
@@ -303,7 +317,319 @@ impl XafsViewApp {
             status: Default::default(),
             jobs: Default::default(),
             ui_scale: DEFAULT_UI_SCALE,
+            mcp: None,
+            mcp_port: mcp_port.unwrap_or(mcp::DEFAULT_PORT),
+            mcp_fit_reply: None,
+            mcp_shot_replies: Vec::new(),
+        };
+        if mcp_port.is_some() {
+            app.start_mcp(&cc.egui_ctx);
         }
+        app
+    }
+
+    /// Start the embedded MCP server on [`mcp_port`](Self::mcp_port), reporting
+    /// the endpoint (or the bind failure) on the status line.
+    fn start_mcp(&mut self, ctx: &egui::Context) {
+        match mcp::start(self.mcp_port, ctx.clone()) {
+            Ok((server, rx)) => {
+                self.status.info(format!(
+                    "MCP server listening on http://127.0.0.1:{}/mcp",
+                    server.port
+                ));
+                self.mcp = Some((server, rx));
+            }
+            Err(e) => self.status.error(format!(
+                "MCP server failed to start on port {}: {e}",
+                self.mcp_port
+            )),
+        }
+    }
+
+    /// Resolve parked MCP screenshot requests when the capture event arrives,
+    /// then handle every queued tool request. Runs at the top of each frame.
+    fn poll_mcp(&mut self, ctx: &egui::Context) {
+        if !self.mcp_shot_replies.is_empty() {
+            let image = ctx.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    _ => None,
+                })
+            });
+            if let Some(image) = image {
+                let png = mcp::encode_png(&image);
+                for reply in self.mcp_shot_replies.drain(..) {
+                    let _ = reply.send(png.clone());
+                }
+            }
+        }
+        let Some((_, rx)) = &self.mcp else { return };
+        let requests: Vec<mcp::McpRequest> = rx.try_iter().collect();
+        for req in requests {
+            self.handle_mcp_request(req, ctx);
+        }
+    }
+
+    /// Handle one MCP tool request against the live state — through the same
+    /// methods the GUI buttons call, so an agent and a user produce identical
+    /// sessions (including the written output files).
+    fn handle_mcp_request(&mut self, req: mcp::McpRequest, ctx: &egui::Context) {
+        match req {
+            mcp::McpRequest::LoadData { path, reply } => {
+                let before = self.session.groups.len();
+                match ColumnFile::from_path(&path) {
+                    Ok(cf) => {
+                        // The Open-data flow with this file as representative:
+                        // the import seeds the column mapping from the header,
+                        // calc_xmu builds μ(E), adds the group (making it
+                        // current), and writes the .xmu.
+                        self.import = Some(ImportState::new(cf));
+                        self.set_data_dir_from(&path);
+                        self.calc_xmu();
+                        let line = self.status.line().to_owned();
+                        let _ = reply.send(if self.session.groups.len() > before {
+                            Ok(line)
+                        } else {
+                            Err(line)
+                        });
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(format!("Open failed: {e}")));
+                    }
+                }
+            }
+            mcp::McpRequest::SetParams { args, reply } => {
+                let _ = reply.send(self.apply_mcp_params(*args));
+            }
+            mcp::McpRequest::RunAutobk { reply } => {
+                let errors = self.status.error_count();
+                self.run_reduction();
+                let line = self.status.line().to_owned();
+                let _ = reply.send(if self.status.error_count() > errors {
+                    Err(line)
+                } else {
+                    Ok(line)
+                });
+            }
+            mcp::McpRequest::RunFit { reply } => {
+                if self.jobs.busy() {
+                    let _ = reply.send(Err(JOB_BUSY.to_owned()));
+                } else {
+                    self.run_feffit();
+                    if self.jobs.busy() {
+                        // Started: park the reply for finish_feffit (or the
+                        // job-failure path in the frame hook).
+                        self.mcp_fit_reply = Some(reply);
+                    } else {
+                        // run_feffit refused synchronously; the status line
+                        // carries its reason.
+                        let _ = reply.send(Err(self.status.line().to_owned()));
+                    }
+                }
+            }
+            mcp::McpRequest::GetResults { reply } => {
+                let _ = reply.send(Ok(self.mcp_results_text()));
+            }
+            mcp::McpRequest::Screenshot { reply } => {
+                self.mcp_shot_replies.push(reply);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            }
+        }
+    }
+
+    /// Apply an MCP `set_params` patch to the Autobk and Feffit configuration.
+    /// Returns a summary naming every field set; on a bad field the error names
+    /// it (fields listed before it in the patch are already applied).
+    fn apply_mcp_params(&mut self, args: mcp::SetParamsArgs) -> Result<String, String> {
+        let mut set: Vec<String> = Vec::new();
+        if let Some(a) = args.autobk {
+            let r = &mut self.reduction;
+            if let Some(v) = a.e0 {
+                r.e0 = v;
+                r.e0_auto = false;
+                set.push(format!("e0={v}"));
+            }
+            if let Some(v) = a.e0_auto {
+                r.e0_auto = v;
+                set.push(format!("e0_auto={v}"));
+            }
+            if let Some(v) = a.rbkg {
+                r.rbkg = v;
+                set.push(format!("rbkg={v}"));
+            }
+            if let Some(v) = a.kweight {
+                r.kweight = v;
+                set.push(format!("kweight={v}"));
+            }
+            if let Some(v) = a.kmin {
+                r.kmin = v;
+                set.push(format!("kmin={v}"));
+            }
+            if let Some(v) = a.kmax {
+                r.kmax = v;
+                set.push(format!("kmax={v}"));
+            }
+            if let Some(v) = a.dk {
+                r.dk = v;
+                set.push(format!("dk={v}"));
+            }
+            if let Some(v) = a.rmin {
+                r.rmin = v;
+                set.push(format!("rmin={v}"));
+            }
+            if let Some(v) = a.rmax {
+                r.rmax = v;
+                set.push(format!("rmax={v}"));
+            }
+            if let Some(v) = a.dr {
+                r.dr = v;
+                set.push(format!("dr={v}"));
+            }
+            // Any explicit pre/norm range turns auto-ranging off, like typing
+            // in the GUI fields would take effect only with Auto unchecked.
+            let manual_prenorm =
+                a.pre1.is_some() || a.pre2.is_some() || a.norm1.is_some() || a.norm2.is_some();
+            if let Some(v) = a.pre1 {
+                r.pre1 = v;
+                set.push(format!("pre1={v}"));
+            }
+            if let Some(v) = a.pre2 {
+                r.pre2 = v;
+                set.push(format!("pre2={v}"));
+            }
+            if let Some(v) = a.norm1 {
+                r.norm1 = v;
+                set.push(format!("norm1={v}"));
+            }
+            if let Some(v) = a.norm2 {
+                r.norm2 = v;
+                set.push(format!("norm2={v}"));
+            }
+            if let Some(v) = a.nnorm {
+                if v > 3 {
+                    return Err(format!("nnorm={v} out of range (0–3)"));
+                }
+                r.nnorm = v;
+                set.push(format!("nnorm={v}"));
+            }
+            if manual_prenorm || a.nnorm.is_some() {
+                r.pre_norm_auto = false;
+            }
+            if let Some(v) = a.pre_norm_auto {
+                r.pre_norm_auto = v;
+                set.push(format!("pre_norm_auto={v}"));
+            }
+        }
+        if let Some(f) = args.feffit {
+            if let Some(params) = f.params {
+                for p in params {
+                    self.feffit.set_global_param(
+                        &p.name,
+                        &p.kind,
+                        p.value.unwrap_or(0.0),
+                        p.expr.as_deref().unwrap_or(""),
+                    )?;
+                    set.push(format!("param {}={}", p.name, p.kind));
+                }
+            }
+            {
+                let ft = self.feffit.ft_mut();
+                if let Some(v) = f.kmin {
+                    ft.kmin = v;
+                    set.push(format!("fit kmin={v}"));
+                }
+                if let Some(v) = f.kmax {
+                    ft.kmax = v;
+                    set.push(format!("fit kmax={v}"));
+                }
+                if let Some(v) = f.kweight {
+                    ft.kweight = v;
+                    set.push(format!("fit kweight={v}"));
+                }
+                if let Some(v) = f.dk {
+                    ft.dk = v;
+                    set.push(format!("fit dk={v}"));
+                }
+                if let Some(v) = f.rmin {
+                    ft.rmin = v;
+                    set.push(format!("fit rmin={v}"));
+                }
+                if let Some(v) = f.rmax {
+                    ft.rmax = v;
+                    set.push(format!("fit rmax={v}"));
+                }
+                if let Some(v) = f.dr {
+                    ft.dr = v;
+                    set.push(format!("fit dr={v}"));
+                }
+                if let Some(s) = f.fitspace {
+                    ft.fitspace = match s.as_str() {
+                        "R" | "r" => feffit::FitSpace::R,
+                        "k" | "K" => feffit::FitSpace::K,
+                        "q" | "Q" => feffit::FitSpace::Q,
+                        other => return Err(format!("unknown fitspace \"{other}\" (R, k, or q)")),
+                    };
+                    set.push(format!("fitspace={s}"));
+                }
+            }
+            if let Some(s) = f.fit_mode {
+                let mode = match s.as_str() {
+                    "fit" => FitMode::Fit,
+                    "nofit" => FitMode::NoFit,
+                    "only_ft" => FitMode::OnlyFt,
+                    other => {
+                        return Err(format!(
+                            "unknown fit_mode \"{other}\" (fit, nofit, or only_ft)"
+                        ));
+                    }
+                };
+                self.feffit.set_fit_mode(mode);
+                set.push(format!("fit_mode={s}"));
+            }
+        }
+        if set.is_empty() {
+            return Ok("nothing to set (empty patch)".to_owned());
+        }
+        Ok(format!("set: {}", set.join(", ")))
+    }
+
+    /// The MCP `get_results` report: the loaded groups, the current group, and
+    /// the last Feffit report (the same text as "View fit").
+    fn mcp_results_text(&self) -> String {
+        let mut out = String::from("=== Groups ===\n");
+        if self.session.groups.is_empty() {
+            out.push_str("  (none loaded)\n");
+        }
+        for (i, g) in self.session.groups.iter().enumerate() {
+            let cur = if Some(i) == self.session.current {
+                '*'
+            } else {
+                ' '
+            };
+            let e0 =
+                g.e0.map_or_else(|| "-".to_owned(), |e| format!("{e:.2} eV"));
+            let chi = if g.k.is_some() && g.chi.is_some() {
+                "yes"
+            } else {
+                "no"
+            };
+            out.push_str(&format!(
+                "{cur} [{i}] {}: {} points, E0 = {e0}, chi(k): {chi}\n",
+                g.label,
+                g.len()
+            ));
+        }
+        match self.feffit.result() {
+            Some(_) => {
+                out.push('\n');
+                out.push_str(&self.feffit.report_text());
+                if self.feffit.result_is_stale() {
+                    out.push_str("\n(parameters changed since this fit — run_fit again)\n");
+                }
+            }
+            None => out.push_str("\nNo Feffit result yet.\n"),
+        }
+        out
     }
 
     /// Open a beamline column file via a native dialog and start an import.
@@ -1892,6 +2218,20 @@ impl XafsViewApp {
             }
             m
         };
+        // Answer a parked MCP run_fit with the summary line plus, when a fit
+        // produced one, the full report.
+        if let Some(reply) = self.mcp_fit_reply.take() {
+            let _ = reply.send(if failed || fit_ok == 0 {
+                Err(msg.clone())
+            } else {
+                let report = self.feffit.report_text();
+                Ok(if report.is_empty() {
+                    msg.clone()
+                } else {
+                    format!("{msg}\n\n{report}")
+                })
+            });
+        }
         if failed || fit_ok == 0 {
             self.status.error(msg);
         } else {
@@ -2897,6 +3237,31 @@ impl XafsViewApp {
                         egui::Visuals::dark()
                     });
                 }
+                ui.separator();
+                // The embedded MCP server (also startable with `--mcp [port]`),
+                // for driving the app from an MCP client (Claude Code, Codex…).
+                let mut mcp_on = self.mcp.is_some();
+                if ui
+                    .checkbox(
+                        &mut mcp_on,
+                        format!("MCP server (localhost:{})", self.mcp_port),
+                    )
+                    .on_hover_text(
+                        "Expose load/params/autobk/fit/results/screenshot as MCP \
+                         tools over streamable HTTP, for AI-agent control",
+                    )
+                    .changed()
+                {
+                    if mcp_on {
+                        let ctx = ui.ctx().clone();
+                        self.start_mcp(&ctx);
+                    } else {
+                        // Dropping the handle cancels the sessions and joins
+                        // the listener thread.
+                        self.mcp = None;
+                        self.status.info("MCP server stopped.");
+                    }
+                }
             });
         });
     }
@@ -3022,9 +3387,15 @@ impl eframe::App for XafsViewApp {
         // place shared state is mutated).
         match self.jobs.poll() {
             Some(crate::jobs::Polled::Apply(apply)) => apply(self),
-            Some(crate::jobs::Polled::Failed(label)) => self.status.error(format!(
-                "{label}: the background job died unexpectedly — results lost."
-            )),
+            Some(crate::jobs::Polled::Failed(label)) => {
+                let msg = format!("{label}: the background job died unexpectedly — results lost.");
+                // The single job slot means a parked MCP run_fit reply belongs
+                // to this job — answer it so the client is not left hanging.
+                if let Some(reply) = self.mcp_fit_reply.take() {
+                    let _ = reply.send(Err(msg.clone()));
+                }
+                self.status.error(msg);
+            }
             None => {}
         }
         // While a job runs, keep repainting so its progress ticks show without
@@ -3033,6 +3404,10 @@ impl eframe::App for XafsViewApp {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
+
+        // Handle MCP tool requests after the job poll, so a just-finished job
+        // is applied before a new request checks the job slot.
+        self.poll_mcp(ui.ctx());
 
         egui::Panel::top("menubar").show(ui, |ui| {
             self.menu_bar(ui);

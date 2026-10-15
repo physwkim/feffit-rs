@@ -53,6 +53,19 @@ xraydb = { workspace = true }
 # Run the per-group Feffit batch fits in parallel (each fit is independent).
 rayon = { workspace = true }
 
+# The GUI-embedded MCP server (see src/mcp.rs): rmcp provides the protocol +
+# streamable-HTTP session layer as a plain `tower` service, so the HTTP stack
+# is ours — hyper serves it on a tokio runtime in a background thread.
+rmcp = { version = "3.5.1", features = ["transport-streamable-http-server", "transport-worker"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "sync", "macros", "net", "time"] }
+tokio-util = "0.7"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+base64 = "0.23"
+png = "0.18.1"
+
 # Embed assets/icon.ico into the .exe as its Windows Explorer/taskbar file icon
 # (see build.rs). Gated to a Windows host: the resource compile needs the MSVC
 # (or GNU) resource compiler, and only a Windows build emits a .exe to carry it,
