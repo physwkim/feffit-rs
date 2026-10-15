@@ -1052,6 +1052,12 @@ impl XafsViewApp {
         match self.feffit.result() {
             Some(_) => {
                 out.push('\n');
+                // The report describes the group the fit ran on, which the
+                // current-group marker above no longer identifies once the
+                // current group has been switched.
+                if let Some(g) = &self.feffit_fit_group {
+                    out.push_str(&format!("Feffit result for group: {g}\n"));
+                }
                 out.push_str(&self.feffit.report_text());
                 if self.feffit.result_is_stale() {
                     out.push_str("\n(parameters changed since this fit — run_fit again)\n");
@@ -2538,7 +2544,13 @@ impl XafsViewApp {
                         // scrolling form overwrite its click.
                         feffit_action = self
                             .feffit
-                            .controls(ui, &mut self.feffit_show_all_fits, n_groups > 1)
+                            .controls(
+                                ui,
+                                &mut self.feffit_show_all_fits,
+                                n_groups > 1,
+                                self.feffit_fit_group.as_deref(),
+                                self.session.current_group().map(|g| g.label.as_str()),
+                            )
                             .or(feffit_action.take());
                         // Exit sits directly below the controls (그림 1-2-2-2), no gap.
                         ui.add_space(6.0);

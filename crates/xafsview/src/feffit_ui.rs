@@ -1673,6 +1673,8 @@ impl FeffitUi {
         ui: &mut egui::Ui,
         show_all_fits: &mut bool,
         show_all_enabled: bool,
+        fitted_group: Option<&str>,
+        current_group: Option<&str>,
     ) -> Option<FeffitAction> {
         let mut action = None;
 
@@ -2086,7 +2088,27 @@ impl FeffitUi {
 
         // --- Results (fit statistics + report pop-ups) --------------------
         rsplot::widget::form::group(ui, |ui| {
-            ui.strong("Results");
+            // The results name the group they were fitted on: the box outlives
+            // a switch of the current group (the form's inputs are per-session,
+            // so no input changes and the parameter badge below stays quiet).
+            ui.horizontal(|ui| {
+                ui.strong("Results");
+                if let (Some(_), Some(g)) = (&self.result, fitted_group) {
+                    ui.weak(format!("— {g}"));
+                }
+            });
+            if self.result.is_some()
+                && let Some(g) = fitted_group
+                && fitted_group != current_group
+            {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!(
+                        "⚠ Fitted on {g}; the current group is {} — Run to fit it.",
+                        current_group.unwrap_or("none")
+                    ),
+                );
+            }
             // Freshness: the numbers below describe the *last* fit; warn when
             // the inputs were edited since, so stale statistics are not read as
             // the current parameters' outcome.
