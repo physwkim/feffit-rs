@@ -4,10 +4,9 @@
 //! All three share one `feff.inp` text buffer owned by the app: Atoms *writes*
 //! it, Feff *edits and runs* it, Plot Sites *reads* it. The crystal/cluster math
 //! and `feff.inp` parsing live in the headless [`feffinp`] crate; running FEFF is
-//! [`feffrun`] (the external FEFF8.5L pipeline by default — its `feff8l_*`
-//! binaries ship bundled under `assets/feff8l/<platform>/`; the in-process FEFF10
-//! backend is kept but disabled in the UI, being broken on Linux/Windows
-//! upstream); the 3D scene is `rsplot`'s [`SceneWidget`].
+//! [`feffrun`] (the in-process FEFF10 pipeline by default; the external FEFF8.5L
+//! pipeline stays selectable — its `feff8l_*` binaries ship bundled under
+//! `assets/feff8l/<platform>/`); the 3D scene is `rsplot`'s [`SceneWidget`].
 //!
 //! **Scope note.** The Atoms tab *does* apply space-group symmetry: enter the
 //! asymmetric unit plus the space-group number, and [`AtomsUi::build`] expands
@@ -350,12 +349,13 @@ fn wrap01(x: f64) -> f64 {
 /// Which FEFF backend to run.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BackendSel {
-    /// In-process FEFF10 (no external executables). Broken on Linux/Windows in
-    /// the upstream prebuilt (`Ameyanagi/feff10-rs#1`), so disabled in the UI —
-    /// kept for when the upstream prebuilt is fixed.
+    /// In-process FEFF10 (no external executables). The default. (The old
+    /// `Ameyanagi/feff10-rs#1` Linux/Windows breakage that kept this disabled
+    /// is gone in the `feff10 0.2.3` dep — the `feff10_pipeline_*` integration
+    /// test covers it.)
     Feff10,
-    /// External FEFF8.5L subprocess pipeline. The default; its `feff8l_*`
-    /// binaries ship bundled (see [`bundled_feff8l_bindir`]).
+    /// External FEFF8.5L subprocess pipeline; its `feff8l_*` binaries ship
+    /// bundled (see [`bundled_feff8l_bindir`]).
     Feff8l,
 }
 
@@ -451,7 +451,7 @@ pub struct FeffTab {
 impl Default for FeffTab {
     fn default() -> Self {
         Self {
-            backend: BackendSel::Feff8l,
+            backend: BackendSel::Feff10,
             running: false,
             rx: None,
             last: None,
@@ -492,18 +492,8 @@ impl FeffTab {
             }
             ui.separator();
             ui.label("Select Feff Version");
+            ui.selectable_value(&mut self.backend, BackendSel::Feff10, "FEFF10 (in-process)");
             ui.selectable_value(&mut self.backend, BackendSel::Feff8l, "FEFF8L (external)");
-            // FEFF10 is kept in the tree but disabled: its prebuilt is broken off
-            // macOS (Ameyanagi/feff10-rs#1), so it must not be selectable. Drawn
-            // greyed with the reason on hover; re-enable by restoring the
-            // selectable_value once the upstream prebuilt is fixed.
-            ui.add_enabled(
-                false,
-                egui::Button::selectable(self.backend == BackendSel::Feff10, "FEFF10 (in-process)"),
-            )
-            .on_disabled_hover_text(
-                "FEFF10 is disabled: its prebuilt is broken on Linux/Windows (Ameyanagi/feff10-rs#1).",
-            );
         });
 
         ui.separator();
