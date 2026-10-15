@@ -9,7 +9,8 @@
 //! [`XasGroup::clear_derived`].
 
 use crate::xasproc::clean::{
-    deglitch_point_mask, deglitch_range_mask, removed_count, select, trim_mask,
+    deglitch_point_mask, deglitch_range_mask, drop_indices_mask, glitch_indices, removed_count,
+    select, trim_mask,
 };
 use crate::xasproc::mathutils::smooth;
 
@@ -54,6 +55,34 @@ pub fn deglitch_point(group: &mut XasGroup, e: f64) -> usize {
 /// number of points removed.
 pub fn deglitch_range(group: &mut XasGroup, side: RangeSide, e1: f64, e2: f64) -> usize {
     let mask = deglitch_range_mask(&group.energy, side, e1, e2);
+    apply_keep_mask(group, &mask)
+}
+
+/// The rolling-median window [`find_glitches`] / [`auto_deglitch`] detect with:
+/// wide enough that a 1–3 point monochromator glitch cannot drag its own
+/// baseline, narrow enough to track the edge.
+const GLITCH_WINDOW: usize = 7;
+
+/// Energies of automatic glitch candidates in `group` — points deviating from
+/// their rolling median by more than `nsig` robust σ (see
+/// [`crate::xasproc::clean::glitch_indices`]). A dry run for [`auto_deglitch`]:
+/// callers preview these (plot markers, a count) before removing anything.
+pub fn find_glitches(group: &XasGroup, nsig: f64) -> Vec<f64> {
+    glitch_indices(&group.mu, nsig, GLITCH_WINDOW)
+        .into_iter()
+        .map(|i| group.energy[i])
+        .collect()
+}
+
+/// Remove every automatic glitch candidate (the points [`find_glitches`]
+/// reports at the same `nsig`) from `group`. Returns the number of points
+/// removed; 0 leaves the group untouched.
+pub fn auto_deglitch(group: &mut XasGroup, nsig: f64) -> usize {
+    let drop = glitch_indices(&group.mu, nsig, GLITCH_WINDOW);
+    if drop.is_empty() {
+        return 0;
+    }
+    let mask = drop_indices_mask(group.energy.len(), &drop);
     apply_keep_mask(group, &mask)
 }
 
@@ -154,5 +183,46 @@ mod tests {
     fn smooth_bails_on_too_short_grid() {
         let mut g = XasGroup::from_mu("s", vec![1.0], vec![0.5]);
         assert!(!smooth_mu(&mut g, 1.0, SmoothForm::Lorentzian));
+    }
+
+    // A smooth spectrum with pseudo-noise and a spike at index 20.
+    fn spiked_group() -> XasGroup {
+        let energy: Vec<f64> = (0..60).map(|i| 7000.0 + i as f64).collect();
+        let mut mu: Vec<f64> = (0..60)
+            .map(|i| (0.05 * i as f64).sin() * 0.5 + (1.7 * i as f64).sin() * 0.01)
+            .collect();
+        mu[20] += 5.0;
+        let mut g = XasGroup::from_mu("g", energy, mu);
+        g.i0 = Some((0..60).map(|i| 100.0 + i as f64).collect());
+        g.e0 = Some(7010.0);
+        g
+    }
+
+    #[test]
+    fn find_glitches_reports_energies_without_mutating() {
+        let g = spiked_group();
+        assert_eq!(find_glitches(&g, 10.0), vec![7020.0]);
+        assert_eq!(g.energy.len(), 60, "find must not mutate");
+        assert_eq!(g.e0, Some(7010.0));
+    }
+
+    #[test]
+    fn auto_deglitch_removes_candidates_and_clears_derived() {
+        let mut g = spiked_group();
+        assert_eq!(auto_deglitch(&mut g, 10.0), 1);
+        assert_eq!(g.energy.len(), 59);
+        assert!(!g.energy.contains(&7020.0));
+        assert_eq!(g.i0.as_ref().unwrap().len(), 59);
+        assert_eq!(g.e0, None, "derived e0 must be cleared");
+        // The spike is gone: a second pass finds nothing.
+        assert_eq!(auto_deglitch(&mut g, 10.0), 0);
+    }
+
+    #[test]
+    fn auto_deglitch_clean_spectrum_is_noop() {
+        let mut g = spiked_group();
+        g.mu[20] -= 5.0; // un-spike
+        assert_eq!(auto_deglitch(&mut g, 10.0), 0);
+        assert_eq!(g.e0, Some(7010.0), "no-op must not wipe derived results");
     }
 }

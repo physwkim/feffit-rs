@@ -69,6 +69,62 @@ pub fn trim_mask(energy: &[f64], lo: f64, hi: f64) -> Vec<bool> {
     energy.iter().map(|&e| e >= lo && e <= hi).collect()
 }
 
+/// Indices of spike ("glitch") points in `mu`: points whose deviation from the
+/// rolling median exceeds `nsig` robust standard deviations of their window.
+///
+/// For each point, a `window`-wide (odd, clamped to ≥ 3, index-based) slice
+/// centred on it gives a local median and MAD; the point is flagged when
+/// `|mu[i] - median| > nsig · max(1.4826·MAD, floor)`. The MAD is robust to up
+/// to `window/2` outliers, so short spike bursts (the usual monochromator
+/// glitch, 1–3 points) are caught without the spike dragging its own baseline.
+/// The floor (10⁻⁹ of the spectrum's absolute scale) keeps a noiseless region
+/// (MAD = 0) from flagging every point. Inputs shorter than the window return
+/// no indices.
+pub fn glitch_indices(mu: &[f64], nsig: f64, window: usize) -> Vec<usize> {
+    let n = mu.len();
+    let w = (window.max(3)) | 1;
+    if n < w {
+        return Vec::new();
+    }
+    let scale = mu.iter().fold(0.0f64, |a, &v| a.max(v.abs()));
+    let floor = 1e-9 * scale + f64::MIN_POSITIVE;
+    let half = w / 2;
+    let median = |buf: &mut Vec<f64>| -> f64 {
+        buf.sort_by(|a, b| a.partial_cmp(b).expect("non-NaN mu"));
+        buf[buf.len() / 2]
+    };
+    let mut out = Vec::new();
+    let mut buf: Vec<f64> = Vec::with_capacity(w);
+    for i in 0..n {
+        // Clamp the window inside the array: edge points use the first/last
+        // full window rather than a shrunken one.
+        let lo = i.saturating_sub(half).min(n - w);
+        let s = &mu[lo..lo + w];
+        buf.clear();
+        buf.extend_from_slice(s);
+        let med = median(&mut buf);
+        buf.clear();
+        buf.extend(s.iter().map(|v| (v - med).abs()));
+        let mad = median(&mut buf);
+        if (mu[i] - med).abs() > nsig * (1.4826 * mad).max(floor) {
+            out.push(i);
+        }
+    }
+    out
+}
+
+/// Keep-mask dropping the given indices (from [`glitch_indices`]); out-of-range
+/// indices are ignored.
+pub fn drop_indices_mask(len: usize, drop: &[usize]) -> Vec<bool> {
+    let mut mask = vec![true; len];
+    for &i in drop {
+        if i < len {
+            mask[i] = false;
+        }
+    }
+    mask
+}
+
 /// Number of points a keep-mask discards (its `false` entries).
 pub fn removed_count(mask: &[bool]) -> usize {
     mask.iter().filter(|&&keep| !keep).count()
@@ -163,5 +219,64 @@ mod tests {
         assert!(deglitch_point_mask(&[], 1.0).is_empty());
         assert!(deglitch_range_mask(&[], RangeSide::Above, 1.0, 2.0).is_empty());
         assert!(trim_mask(&[], 1.0, 2.0).is_empty());
+    }
+
+    // A slowly varying curve with deterministic pseudo-noise, so the rolling
+    // MAD is non-zero and noise-dominated (like a dense XAFS grid), not
+    // trend-dominated.
+    fn wiggle(n: usize) -> Vec<f64> {
+        (0..n)
+            .map(|i| (0.05 * i as f64).sin() * 0.5 + (1.7 * i as f64).sin() * 0.01)
+            .collect()
+    }
+
+    #[test]
+    fn glitch_single_interior_spike() {
+        let mut mu = wiggle(60);
+        mu[25] += 5.0;
+        assert_eq!(glitch_indices(&mu, 10.0, 7), vec![25]);
+    }
+
+    #[test]
+    fn glitch_spikes_at_both_array_edges() {
+        let mut mu = wiggle(60);
+        mu[0] += 5.0;
+        mu[59] -= 5.0;
+        assert_eq!(glitch_indices(&mu, 10.0, 7), vec![0, 59]);
+    }
+
+    #[test]
+    fn glitch_adjacent_double_spike() {
+        let mut mu = wiggle(60);
+        mu[30] += 4.0;
+        mu[31] += 4.5;
+        assert_eq!(glitch_indices(&mu, 10.0, 7), vec![30, 31]);
+    }
+
+    #[test]
+    fn glitch_none_on_monotone_ramp() {
+        // A clean edge jump: steep but smooth — no point deviates from its
+        // local median by more than the window's own spread.
+        let mu: Vec<f64> = (0..60).map(|i| (0.2 * (i as f64 - 30.0)).tanh()).collect();
+        assert_eq!(glitch_indices(&mu, 10.0, 7), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn glitch_threshold_scales_with_nsig() {
+        let mut mu = wiggle(60);
+        mu[25] += 0.2; // a mild bump: caught at a tight threshold, not a loose one
+        assert!(glitch_indices(&mu, 30.0, 7).is_empty());
+        assert!(glitch_indices(&mu, 3.0, 7).contains(&25));
+    }
+
+    #[test]
+    fn glitch_short_input_returns_nothing() {
+        assert!(glitch_indices(&[1.0, 2.0, 50.0], 5.0, 7).is_empty());
+    }
+
+    #[test]
+    fn drop_indices_mask_ignores_out_of_range() {
+        let mask = drop_indices_mask(5, &[1, 3, 9]);
+        assert_eq!(mask, vec![true, false, true, false, true]);
     }
 }
