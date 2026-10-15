@@ -1111,7 +1111,7 @@ impl PlotDataWindow {
         // did not change (e.g. a highlight toggle touching two of sixty traces)
         // keep their GPU buffers instead of being recreated.
         self.plot.begin_declare();
-        crate::plot::set_theme(&mut self.plot, !dark);
+        self.plot.set_light(!dark);
         self.plot.set_graph_x_label(xlabel.as_str());
         self.plot
             .set_graph_y_label(ylabel.as_str(), rsplot::YAxis::Left);

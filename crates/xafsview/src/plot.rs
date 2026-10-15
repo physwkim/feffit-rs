@@ -256,6 +256,14 @@ pub struct Plot {
     /// an empty canvas says what fills it instead of looking like missing data.
     /// Set by the owning tab each frame ([`set_empty_hint`](Self::set_empty_hint)).
     empty_hint: Option<String>,
+    /// The egui `dark_mode` the canvas palette was last synced to by [`show`].
+    /// `None` until first shown, so a saved light preference re-themes the
+    /// plot on its first frame.
+    theme_synced: Option<bool>,
+    /// `Some(light)` once the owner chose the canvas itself
+    /// ([`set_light`](Self::set_light), Plot Data's "Change BG color"); such a
+    /// plot no longer follows the egui theme.
+    theme_override: Option<bool>,
 }
 
 /// Emphasized-curve styling: the default curve width is 1.0; 3.0 reads as
@@ -312,6 +320,8 @@ impl Plot {
             marker_handles: Vec::new(),
             limits_row: false,
             empty_hint: None,
+            theme_synced: None,
+            theme_override: None,
         }
     }
 
@@ -319,6 +329,15 @@ impl Plot {
     /// plot. Tabs sharing one `Plot` set their own hint before drawing it.
     pub fn set_empty_hint(&mut self, text: impl Into<String>) {
         self.empty_hint = Some(text.into());
+    }
+
+    /// Choose this plot's canvas explicitly ([`set_theme`]) and stop it from
+    /// following the egui theme: for an owner with its own light/dark toggle
+    /// (Plot Data's "Change BG color"), whose choice would otherwise be
+    /// overridden on the next UI theme change.
+    pub fn set_light(&mut self, light: bool) {
+        set_theme(&mut self.inner, light);
+        self.theme_override = Some(light);
     }
 
     /// Draw x-position markers as a managed set: remove the markers from the
@@ -685,6 +704,17 @@ pub fn take_legend_click(plot: &mut Plot) -> Option<String> {
 /// the curve names never appear. The legend floats over the canvas (an egui
 /// `Area`) instead of taking a separate column, so it no longer steals width.
 pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
+    // Follow the egui theme: Settings → "Toggle dark / light" (and a saved light
+    // preference) only switch the egui visuals, so a plot themed once at
+    // construction kept light-grey tick labels and titles on the now-white
+    // panel. Re-apply the house palette whenever the UI theme changes, unless
+    // the owner picked the canvas itself ([`Plot::set_light`]).
+    let dark = ui.visuals().dark_mode;
+    if plot.theme_override.is_none() && plot.theme_synced != Some(dark) {
+        set_theme(&mut plot.inner, !dark);
+        plot.theme_synced = Some(dark);
+    }
+
     toolbar(plot, ui);
 
     // rsplot fuses the crosshair guide lines and the coordinate readout behind a
