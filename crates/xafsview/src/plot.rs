@@ -924,18 +924,13 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                         let row_h = plot.legend_row_h.unwrap_or(est_row_h);
                         let cap_h = (area.height() * 0.4).max(80.0);
                         let rows = (((cap_h + row_gap) / (row_h + row_gap)).floor()).max(1.0);
+                        // Pinned from both sides (`fixed_viewport_scroll`):
+                        // the floating `Area` feeds its own last size back as
+                        // the available height, and a viewport taking that
+                        // sat at the 64 pt min_scrolled floor for good — two
+                        // rows of three.
                         let viewport_h = rows * row_h + (rows - 1.0) * row_gap;
-                        // The viewport height is pinned to `viewport_h` from
-                        // both sides (it still shrinks to a shorter legend):
-                        // an `Area` hands its content *last frame's* min size
-                        // as this frame's max rect, so a viewport that took
-                        // the available height could never grow past what it
-                        // was first laid out as — a legend first drawn on a
-                        // degenerate frame sat at the ScrollArea's 64 pt
-                        // min_scrolled floor for good, two rows of three.
-                        let out = egui::ScrollArea::vertical()
-                            .min_scrolled_height(viewport_h)
-                            .max_height(viewport_h)
+                        let out = crate::window::fixed_viewport_scroll(viewport_h)
                             .scroll_source(egui::scroll_area::ScrollSource {
                                 drag: egui::scroll_area::DragScroll::Never,
                                 ..Default::default()

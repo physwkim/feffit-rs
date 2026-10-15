@@ -104,12 +104,26 @@ pub fn fill_with_footer<S>(
 ) {
     let cap = (ui.available_height() * 0.4).max(60.0);
     egui::Panel::bottom(egui::Id::new((id_source, "footer"))).show(ui, |ui| {
-        egui::ScrollArea::vertical()
+        fixed_viewport_scroll(cap)
             .id_salt((id_source, "footer_scroll"))
-            .max_height(cap)
             .show(ui, |ui| footer(state, ui));
     });
     egui::CentralPanel::default().show(ui, |ui| fill(state, ui));
+}
+
+/// A vertical `ScrollArea` whose viewport is exactly `height` tall, or shorter
+/// when its content is. Required wherever the enclosing container sizes itself
+/// from its own content — a floating `egui::Area`, a non-resizable
+/// `egui::Panel` — because such a container hands its content *last frame's*
+/// size as this frame's max rect: a viewport that took the available height
+/// (`max_height` alone) could never grow past what it was first laid out as,
+/// and settled at egui's 64 pt `min_scrolled` floor for good. Pinning the
+/// minimum too takes the available height out of the equation; auto-shrink
+/// still fits shorter content.
+pub fn fixed_viewport_scroll(height: f32) -> egui::ScrollArea {
+    egui::ScrollArea::vertical()
+        .min_scrolled_height(height)
+        .max_height(height)
 }
 
 /// [`detached`] without the [`egui::CentralPanel`] wrap, for windows whose body
