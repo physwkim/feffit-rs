@@ -3447,6 +3447,7 @@ impl XafsViewApp {
                 let mut clear_sel = false;
                 let mut clear_all = false;
                 let mut revealed = false;
+                let mut move_up = None;
                 egui::Panel::top("data_manager_header").show(ui, |ui| {
                     // ADD opens the Plot Data-style staging picker (needs an open
                     // import for the column mapping); same affordance as Plot Data.
@@ -3469,6 +3470,30 @@ impl XafsViewApp {
                             }
                             if ui.small_button("None").clicked() {
                                 clear_sel = true;
+                            }
+                        });
+                        // Series order — the in-situ map's row order and the
+                        // order batches run in (the BL10C file list's Up /
+                        // Down): moves the highlighted (current) group.
+                        ui.horizontal(|ui| {
+                            ui.label("Move current");
+                            let cur = current.filter(|&c| c < n);
+                            if ui
+                                .add_enabled(cur.is_some_and(|c| c > 0), egui::Button::new("▲ Up"))
+                                .on_hover_text("Move the current group one row up")
+                                .clicked()
+                            {
+                                move_up = Some(true);
+                            }
+                            if ui
+                                .add_enabled(
+                                    cur.is_some_and(|c| c + 1 < n),
+                                    egui::Button::new("▼ Down"),
+                                )
+                                .on_hover_text("Move the current group one row down")
+                                .clicked()
+                            {
+                                move_up = Some(false);
                             }
                         });
                     }
@@ -3577,6 +3602,16 @@ impl XafsViewApp {
                     // would range over the wrong rows.
                     self.data_check_anchor = None;
                     self.plot_data.mark_dirty();
+                    changed = true;
+                }
+                if let (Some(up), Some(c)) = (move_up, self.session.current)
+                    && self.session.move_group(c, up)
+                {
+                    // Same index shift as a removal for the anchor and the
+                    // Plot Data traces; keep the moved row in view.
+                    self.data_check_anchor = None;
+                    self.plot_data.mark_dirty();
+                    self.data_window_reveal = true;
                     changed = true;
                 }
             },

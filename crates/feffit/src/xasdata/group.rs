@@ -278,6 +278,34 @@ impl Session {
         Some(removed)
     }
 
+    /// Swap the group at `idx` with its neighbour (`up` = towards index 0),
+    /// carrying `current` and the Run check along with each group, so the
+    /// series order — the in-situ map's row order, the order batches run in —
+    /// can be rearranged after loading (the BL10C file list's Up / Down).
+    /// Returns `false`, changing nothing, when `idx` is out of range or
+    /// already at that end.
+    pub fn move_group(&mut self, idx: usize, up: bool) -> bool {
+        let n = self.groups.len();
+        let dst = if up {
+            idx.checked_sub(1)
+        } else {
+            Some(idx + 1)
+        };
+        let Some(dst) = dst.filter(|&d| idx < n && d < n) else {
+            return false;
+        };
+        self.groups.swap(idx, dst);
+        self.current = self.current.map(|c| match c {
+            c if c == idx => dst,
+            c if c == dst => idx,
+            c => c,
+        });
+        let (at_idx, at_dst) = (self.is_selected(idx), self.is_selected(dst));
+        self.set_selected(idx, at_dst);
+        self.set_selected(dst, at_idx);
+        true
+    }
+
     /// Whether the group at `idx` is checked for Run.
     pub fn is_selected(&self, idx: usize) -> bool {
         self.selected.contains(&idx)
@@ -410,6 +438,43 @@ mod tests {
         s.remove_group(0);
         assert!(s.groups.is_empty());
         assert_eq!(s.current, None);
+    }
+
+    #[test]
+    fn move_group_carries_current_and_checks_and_stops_at_the_ends() {
+        let mk = |n: &str| XasGroup::from_mu(n, vec![1.0], vec![0.1]);
+        let mut s = Session::new();
+        s.add_group(mk("a")); // 0
+        s.add_group(mk("b")); // 1
+        s.add_group(mk("c")); // 2
+        s.selected = HashSet::from([1]);
+        s.current = Some(1);
+
+        // Up: b goes first, taking its check and the current mark along.
+        assert!(s.move_group(1, true));
+        let labels =
+            |s: &Session| -> Vec<String> { s.groups.iter().map(|g| g.label.clone()).collect() };
+        assert_eq!(labels(&s), ["b", "a", "c"]);
+        assert_eq!(s.current, Some(0));
+        assert_eq!(s.run_targets(), vec![0]);
+
+        // At the top already: nothing moves.
+        assert!(!s.move_group(0, true));
+        assert_eq!(labels(&s), ["b", "a", "c"]);
+
+        // Down twice from the top: b ends last; the current group that was NOT
+        // moved keeps pointing at the same group.
+        s.current = Some(2); // c
+        assert!(s.move_group(0, false));
+        assert!(s.move_group(1, false));
+        assert_eq!(labels(&s), ["a", "c", "b"]);
+        assert_eq!(s.current_group().unwrap().label, "c");
+        assert_eq!(s.run_targets(), vec![2]);
+
+        // At the bottom already, and out of range: nothing moves.
+        assert!(!s.move_group(2, false));
+        assert!(!s.move_group(7, true));
+        assert_eq!(labels(&s), ["a", "c", "b"]);
     }
 
     #[test]
