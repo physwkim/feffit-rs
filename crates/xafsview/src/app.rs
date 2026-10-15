@@ -2612,9 +2612,12 @@ impl XafsViewApp {
             &mut keep_open,
             [360.0, 520.0],
             |ui| {
-                action = self
-                    .feffit_batch
-                    .panel(ui, &self.session.groups, &self.feffit);
+                action = self.feffit_batch.panel(
+                    ui,
+                    &self.session.groups,
+                    &mut self.session.selected,
+                    &self.feffit,
+                );
             },
         );
         self.feffit_batch_open = keep_open;
@@ -2941,7 +2944,10 @@ impl XafsViewApp {
     ///
     /// [`feffit_batch::compute_runs`]: crate::feffit_batch::compute_runs
     fn start_feffit_batch(&mut self) {
-        let idxs = self.feffit_batch.member_idxs();
+        // The batch is the session's checked-for-Run set; "Run all" is disabled
+        // while it is empty, so the current-group fallback of run_targets never
+        // widens it here.
+        let idxs = self.session.run_targets();
         if idxs.is_empty() {
             return;
         }

@@ -102,14 +102,16 @@ pub(crate) fn compute_runs(
     runs
 }
 
-/// The Feffit batch panel: a group-membership checklist, "Run all", a results
-/// table, and the two batch save actions. Shares the Feffit tab's editor as the
-/// fit configuration (passed to [`panel`](Self::panel) as the template).
+/// The Feffit batch panel: the session's checked-for-Run groups as a toggle
+/// list, "Run all", a results table, and the two batch save actions. Shares the
+/// Feffit tab's editor as the fit configuration (passed to
+/// [`panel`](Self::panel) as the template). Membership is the session's own
+/// checked set — the one the Data window, Multiple AUTOBK and the batch
+/// deglitch act on — so a freshly loaded series is already in the batch.
 pub struct FeffitBatch {
-    /// Session group indices included in "Run all".
-    members: HashSet<usize>,
-    /// Anchor row for shift-range selection of `members` (the last plain-clicked
-    /// row); `None` until a row is clicked. Stales if the group list changes.
+    /// Anchor row for shift-range selection in the checked list (the last
+    /// plain-clicked row); `None` until a row is clicked. Stales if the group
+    /// list changes.
     anchor: Option<usize>,
     /// Results of the last "Run all" (one per member that existed at run time),
     /// in ascending group order.
@@ -131,7 +133,6 @@ pub struct FeffitBatch {
 impl Default for FeffitBatch {
     fn default() -> Self {
         Self {
-            members: HashSet::new(),
             anchor: None,
             runs: Vec::new(),
             // Default to the most-used items (N and the bond distance reff+Δr).
@@ -145,12 +146,15 @@ impl Default for FeffitBatch {
 }
 
 impl FeffitBatch {
-    /// Render the panel over `groups`, fitting with `template` (the Feffit tab's
-    /// current config). Returns a [`BatchAction`] for app-owned disk writes.
+    /// Render the panel over `groups`, whose checked-for-Run set is `checked`
+    /// (toggled here as well as in the Data window), fitting with `template`
+    /// (the Feffit tab's current config). Returns a [`BatchAction`] for
+    /// app-owned disk writes.
     pub fn panel(
         &mut self,
         ui: &mut egui::Ui,
         groups: &[XasGroup],
+        checked: &mut HashSet<usize>,
         template: &FeffitUi,
     ) -> Option<BatchAction> {
         let mut bubble = None;
@@ -161,7 +165,11 @@ impl FeffitBatch {
         ui.separator();
         ui.horizontal(|ui| {
             ui.strong("Groups in batch");
-            ui.weak(format!("({} selected)", self.members.len()));
+            ui.weak(format!(
+                "({} of {} checked for Run)",
+                checked.len(),
+                groups.len()
+            ));
         });
         if groups.is_empty() {
             ui.weak("No groups loaded.");
@@ -177,7 +185,7 @@ impl FeffitBatch {
                     crate::widgets::select_index_list(
                         ui,
                         groups.iter().map(|g| g.label.as_str()),
-                        &mut self.members,
+                        checked,
                         &mut self.anchor,
                     );
                 });
@@ -186,7 +194,7 @@ impl FeffitBatch {
         ui.separator();
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!self.members.is_empty(), egui::Button::new("Run all"))
+                .add_enabled(!checked.is_empty(), egui::Button::new("Run all"))
                 .on_hover_text("Fit each checked group with the Feffit tab's current config")
                 .clicked()
             {
@@ -295,14 +303,6 @@ impl FeffitBatch {
         self.runs
             .iter()
             .filter_map(|r| r.ui.plot().map(|p| (r.label.as_str(), p)))
-    }
-
-    /// The checked members in ascending group order — the work list a "Run all"
-    /// job fits ([`compute_runs`]).
-    pub(crate) fn member_idxs(&self) -> Vec<usize> {
-        let mut idxs: Vec<usize> = self.members.iter().copied().collect();
-        idxs.sort_unstable();
-        idxs
     }
 
     /// Adopt a finished "Run all" job's runs. Returns `(total, errors)` for the
@@ -488,12 +488,11 @@ mod tests {
             XasGroup::from_chi("B", k.clone(), chi.clone()),
         ];
         let mut b = FeffitBatch::default();
-        b.members.insert(0);
-        b.members.insert(1);
-        // The app's "Run all" flow: worker half (compute_runs, with a progress
-        // tick per fit) then the apply half (set_runs).
+        // The app's "Run all" flow: worker half (compute_runs over the session's
+        // checked groups, with a progress tick per fit) then the apply half
+        // (set_runs).
         let ticks = std::sync::atomic::AtomicUsize::new(0);
-        let runs = compute_runs(b.member_idxs(), &groups, &FeffitUi::default(), &|_| {
+        let runs = compute_runs(vec![0, 1], &groups, &FeffitUi::default(), &|_| {
             ticks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
         assert_eq!(ticks.into_inner(), 2, "one progress tick per fitted group");
