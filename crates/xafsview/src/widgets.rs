@@ -1,13 +1,12 @@
-//! Shared action-button styling, so buttons match the original XAFSView (LabVIEW)
-//! forms instead of being default-sized and scattered: a group of action buttons
-//! is uniform width and the form's main verb is an amber *primary* button — the
-//! colour/size language visible in 그림 1-2-1-1 (Autobk), 그림 1-2-2-2 (Feffit),
-//! 그림 1-2-4 (Atoms), 그림 1-2-5 (Feff), 그림 1-2-6 (Folders).
+//! Shared action-button styling: a group of action buttons is uniform width and
+//! the form's main verb is a *primary* button filled with the theme's selection
+//! colour — the same accent that marks the selected tab and toggles, so the UI
+//! has one accent language instead of a second competing one.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, Color32, Response, Vec2};
+use eframe::egui::{self, Response, Vec2};
 
 /// Uniform button size for a bottom action row (Feffit / Feff / Atoms forms).
 pub const ROW_BTN: Vec2 = Vec2::new(112.0, 28.0);
@@ -16,9 +15,6 @@ pub const CHUNKY_BTN: Vec2 = Vec2::new(124.0, 40.0);
 /// "Browse…" button size for the Folders rows (그림 1-2-6 labelled these "push";
 /// relabelled to the conventional Browse verb so the action reads clearly).
 pub const BROWSE_BTN: Vec2 = Vec2::new(76.0, 22.0);
-
-/// Amber primary-action fill (Autobk Start / Run / Execute / OK in the originals).
-const PRIMARY_FILL: Color32 = Color32::from_rgb(0x9a, 0x7d, 0x2e);
 
 /// Uniform numeric-field width for the parameter form grids. Qt spin boxes in
 /// a form are equal-width; egui's `DragValue` hugs its text, so a column of
@@ -43,12 +39,12 @@ pub fn action_enabled(ui: &mut egui::Ui, text: &str, size: Vec2, enabled: bool) 
     ui.add_enabled(enabled, egui::Button::new(text).min_size(size))
 }
 
-/// The amber primary-action button (the form's main verb), enabled-gated.
+/// The primary-action button (the form's main verb), enabled-gated. Filled with
+/// the theme's selection colour so the one accent marks tabs, toggles, and the
+/// main verb alike — and tracks the dark/light toggle for free.
 pub fn primary(ui: &mut egui::Ui, text: &str, size: Vec2, enabled: bool) -> Response {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(text).fill(PRIMARY_FILL).min_size(size),
-    )
+    let fill = ui.visuals().selection.bg_fill;
+    ui.add_enabled(enabled, egui::Button::new(text).fill(fill).min_size(size))
 }
 
 /// The bare file name of `path`, for picker lists and legends.
