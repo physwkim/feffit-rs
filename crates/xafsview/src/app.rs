@@ -1739,17 +1739,9 @@ impl XafsViewApp {
         }
     }
 
-    /// Open the Edit-μ(E) window, seeding its energy widgets from the current
-    /// group's span the first time it is shown against fresh data.
+    /// Open the Edit-μ(E) window; its energy widgets are seeded per frame
+    /// against the current group right before the window is shown.
     fn open_edit_xmu(&mut self) {
-        if let Some((lo, hi)) = self
-            .session
-            .current_group()
-            .filter(|g| !g.energy.is_empty())
-            .map(|g| (g.energy[0], *g.energy.last().unwrap()))
-        {
-            self.edit_xmu.seed_span(lo, hi);
-        }
         self.edit_xmu.open = true;
     }
 
@@ -3993,7 +3985,16 @@ impl eframe::App for XafsViewApp {
         });
 
         // The Edit-μ(E) window floats above the panels and is driven from the
-        // Autobk tab button / Smoothing menu.
+        // Autobk tab button / Smoothing menu. Seed its energy widgets for the
+        // group they will edit — a group switch while the window is open
+        // re-seeds, so another scan's stale energies never target this one.
+        if self.edit_xmu.open
+            && let Some(g) = self.session.current_group()
+            && !g.energy.is_empty()
+        {
+            self.edit_xmu
+                .seed_span(&g.label, g.energy[0], *g.energy.last().unwrap());
+        }
         let has_group = self
             .session
             .current_group()

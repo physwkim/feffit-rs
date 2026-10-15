@@ -45,8 +45,8 @@ pub struct EditXmuState {
     trim_hi: f64,
     smooth_sigma: f64,
     smooth_form: SmoothForm,
-    /// True once the energy widgets have been seeded from a group's span.
-    seeded: bool,
+    /// The label of the group the energy widgets were seeded from, once seeded.
+    seeded: Option<String>,
 }
 
 impl Default for EditXmuState {
@@ -62,16 +62,20 @@ impl Default for EditXmuState {
             trim_hi: 0.0,
             smooth_sigma: 1.0,
             smooth_form: SmoothForm::Lorentzian,
-            seeded: false,
+            seeded: None,
         }
     }
 }
 
 impl EditXmuState {
-    /// Seed the energy-valued widgets from a group's `[lo, hi]` span the first
-    /// time the dialog opens against fresh data (no-op once seeded).
-    pub fn seed_span(&mut self, lo: f64, hi: f64) {
-        if self.seeded {
+    /// Seed the energy-valued widgets from `label`'s `[lo, hi]` span, unless
+    /// already seeded for that group. Called every frame the window is shown:
+    /// repeated calls for the same group keep the user's typed values, while a
+    /// group switch re-seeds — stale energies from another scan would
+    /// otherwise silently target the wrong points (the deglitch/trim actions
+    /// snap to the *nearest* point, so they never error out of range).
+    pub fn seed_span(&mut self, label: &str, lo: f64, hi: f64) {
+        if self.seeded.as_deref() == Some(label) {
             return;
         }
         let mid = 0.5 * (lo + hi);
@@ -80,12 +84,13 @@ impl EditXmuState {
         self.range2 = mid + (hi - mid) * 0.25;
         self.trim_lo = lo;
         self.trim_hi = hi;
-        self.seeded = true;
+        self.seeded = Some(label.to_owned());
     }
 
-    /// Allow the next open to re-seed (call after loading/switching data).
+    /// Allow the next seed to re-seed even for the same group (call after
+    /// loading/reloading data, whose span may have changed).
     pub fn reset_seed(&mut self) {
-        self.seeded = false;
+        self.seeded = None;
     }
 
     /// Render the window. Returns a [`CleanAction`] when an action button is
