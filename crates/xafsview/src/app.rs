@@ -2598,6 +2598,9 @@ impl XafsViewApp {
         let report = self.feffit.report_text();
         if report.is_empty() {
             ui.weak("Run a fit on the Feffit tab to see the report.");
+            if ui.button("Go to Feffit").clicked() {
+                self.tab = Tab::Feffit;
+            }
             return;
         }
         egui::ScrollArea::both().show(ui, |ui| {
