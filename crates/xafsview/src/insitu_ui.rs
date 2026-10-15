@@ -28,7 +28,7 @@ use feffit::xasdata::XasGroup;
 use feffit::xasproc::mathutils::interp_linear;
 use rsplot::YAxis;
 
-use crate::plot::BLUE;
+use crate::plot::{BLUE, RED};
 use crate::wavelet::plasma;
 
 /// Which physical axis a series map lives on.
@@ -348,6 +348,17 @@ enum ProfileMode {
     Trace,
 }
 
+/// A peak fit of one extracted profile, keyed on the profile it was made for
+/// (mode, map cell, reference): it is drawn and listed only while that exact
+/// profile is the one shown, so a stale fit can never overlay another curve.
+struct ProfileFit {
+    mode: ProfileMode,
+    sel: (usize, usize),
+    reference: Option<usize>,
+    x: Vec<f64>,
+    fit: crate::peakfit::PeakFit,
+}
+
 /// What the In-situ window needs the app to do this frame.
 pub enum InsituAction {
     /// Re-run AUTOBK with the current Autobk-tab parameters (the same run
@@ -380,6 +391,10 @@ pub struct InsituWindow {
     show_marker: bool,
     /// The clicked map cell `(row, col)` the profile follows.
     sel: Option<(usize, usize)>,
+    /// The last "Fit peaks" result, see [`ProfileFit`].
+    fit: Option<ProfileFit>,
+    /// Upper bound on the Gaussians "Fit peaks" estimates.
+    fit_max_peaks: usize,
     plot: crate::plot::Plot,
     plot_dirty: bool,
     texture: Option<egui::TextureHandle>,
@@ -407,6 +422,8 @@ impl InsituWindow {
             profile: ProfileMode::Scan,
             show_marker: true,
             sel: None,
+            fit: None,
+            fit_max_peaks: 5,
             plot,
             plot_dirty: false,
             texture: None,
@@ -419,6 +436,7 @@ impl InsituWindow {
         self.map = Some(map);
         self.reference = None;
         self.sel = None;
+        self.fit = None;
         self.texture = None;
         self.plot_dirty = true;
         self.status = status;
@@ -754,6 +772,44 @@ impl InsituWindow {
             ui.checkbox(&mut self.show_marker, "Marker")
                 .on_hover_text("Show the profiled line on the map");
         });
+        // The BL10C ScanWindow "Simple Fit" on the profile: Gaussians (area
+        // form) on a linear background, peaks estimated from the curve.
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(self.sel.is_some(), egui::Button::new("Fit peaks"))
+                .on_hover_text(
+                    "Fit the profile with up to this many Gaussians on a linear \
+                     background (PyMca Simple Fit: Area Gaussians + Linear)",
+                )
+                .clicked()
+            {
+                self.fit_profile();
+            }
+            ui.add(egui::DragValue::new(&mut self.fit_max_peaks).range(1..=10));
+            ui.label("peaks max");
+        });
+        if let Some(f) = self.current_fit() {
+            let mut text = String::new();
+            for (i, p) in f.fit.peaks.iter().enumerate() {
+                let _ = writeln!(
+                    text,
+                    "{}: x = {:.4} ± {:.4}\n   FWHM = {:.4} ± {:.4}\n   area = {:.4} ± {:.4}",
+                    i + 1,
+                    p.center,
+                    p.center_err,
+                    p.fwhm,
+                    p.fwhm_err,
+                    p.area,
+                    p.area_err
+                );
+            }
+            let _ = write!(
+                text,
+                "background = {:.4} + {:.4}·x\nred. χ² = {:.3e}",
+                f.fit.offset, f.fit.slope, f.fit.chi2_reduced
+            );
+            ui.monospace(text);
+        }
 
         ui.separator();
         if ui
@@ -767,6 +823,7 @@ impl InsituWindow {
             && let Some(path) = rfd::FileDialog::new()
                 .set_file_name("insitu_map.dat")
                 .save_file()
+            && let Some(map) = &self.map
         {
             let dat = map.to_dat(self.reference);
             self.status = match std::fs::write(&path, dat) {
@@ -904,36 +961,84 @@ impl InsituWindow {
         crate::plot::show(&mut self.plot, ui);
     }
 
+    /// The displayed profile — `(x, y, legend, x label)` — for the current
+    /// selection, mode and reference; `None` without a map or a clicked cell.
+    fn profile_xy(&self) -> Option<(Vec<f64>, Vec<f64>, String, &'static str)> {
+        let map = self.map.as_ref()?;
+        let (i, j) = self.sel?;
+        Some(match self.profile {
+            ProfileMode::Scan => {
+                let y = (0..map.x.len())
+                    .map(|c| map.display(self.reference, i, c))
+                    .collect();
+                (map.x.clone(), y, map.labels[i].clone(), map.kind.x_label())
+            }
+            ProfileMode::Trace => {
+                let xs = (1..=map.rows.len()).map(|n| n as f64).collect();
+                let y = (0..map.rows.len())
+                    .map(|r| map.display(self.reference, r, j))
+                    .collect();
+                (xs, y, format!("x = {:.4}", map.x[j]), "scan #")
+            }
+        })
+    }
+
+    /// The peak fit made for exactly the profile now shown, if any.
+    fn current_fit(&self) -> Option<&ProfileFit> {
+        self.fit.as_ref().filter(|f| {
+            f.mode == self.profile && Some(f.sel) == self.sel && f.reference == self.reference
+        })
+    }
+
+    /// "Fit peaks": fit the shown profile (Gaussians + linear background) and
+    /// key the result on it.
+    fn fit_profile(&mut self) {
+        let Some(sel) = self.sel else { return };
+        let Some((x, y, _, _)) = self.profile_xy() else {
+            return;
+        };
+        match crate::peakfit::fit_area_gaussians(&x, &y, self.fit_max_peaks) {
+            Ok(fit) => {
+                self.status = format!(
+                    "Fitted {} Gaussian(s) on a linear background.",
+                    fit.peaks.len()
+                );
+                self.fit = Some(ProfileFit {
+                    mode: self.profile,
+                    sel,
+                    reference: self.reference,
+                    x,
+                    fit,
+                });
+            }
+            Err(e) => {
+                self.fit = None;
+                self.status = format!("Fit failed: {e}");
+            }
+        }
+        self.plot_dirty = true;
+    }
+
     /// Rebuild the profile plot from the current selection.
     fn rebuild_profile(&mut self) {
         self.plot.clear();
-        let Some(map) = &self.map else { return };
-        let Some((i, j)) = self.sel else { return };
+        let Some((x, y, legend, x_label)) = self.profile_xy() else {
+            return;
+        };
         let y_label = if self.reference.is_some() {
             "Δ value"
         } else {
             "value"
         };
-        match self.profile {
-            ProfileMode::Scan => {
-                let y: Vec<f64> = (0..map.x.len())
-                    .map(|c| map.display(self.reference, i, c))
-                    .collect();
-                self.plot.set_graph_x_label(map.kind.x_label());
-                self.plot.set_graph_y_label(y_label, YAxis::Left);
-                self.plot
-                    .add_curve_with_legend(&map.x, &y, BLUE, &map.labels[i]);
-            }
-            ProfileMode::Trace => {
-                let xs: Vec<f64> = (1..=map.rows.len()).map(|n| n as f64).collect();
-                let y: Vec<f64> = (0..map.rows.len())
-                    .map(|r| map.display(self.reference, r, j))
-                    .collect();
-                self.plot.set_graph_x_label("scan #");
-                self.plot.set_graph_y_label(y_label, YAxis::Left);
-                self.plot
-                    .add_curve_with_legend(&xs, &y, BLUE, format!("x = {:.4}", map.x[j]));
-            }
+        self.plot.set_graph_x_label(x_label);
+        self.plot.set_graph_y_label(y_label, YAxis::Left);
+        self.plot.add_curve_with_legend(&x, &y, BLUE, legend);
+        let fit_curve = self
+            .current_fit()
+            .map(|f| (f.x.clone(), f.fit.model.clone(), f.fit.peaks.len()));
+        if let Some((fx, fy, n)) = fit_curve {
+            let legend = format!("fit: {n} Gaussian(s) + linear");
+            self.plot.add_curve_with_legend(&fx, &fy, RED, legend);
         }
     }
 }

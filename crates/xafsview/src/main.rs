@@ -21,6 +21,7 @@ mod jobs;
 mod mback_ui;
 mod mcp;
 mod open_data;
+mod peakfit;
 mod plot;
 mod plot_data;
 mod plot_files;
