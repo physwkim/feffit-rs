@@ -238,6 +238,11 @@ pub struct Plot {
     /// than [`LEGEND_AUTO_FOLD`] entries), `Some` is the user's explicit choice
     /// from clicking the legend header. See [`show`].
     legend_folded: Option<bool>,
+    /// Handles of the x-markers managed by [`set_x_markers`](Self::set_x_markers),
+    /// removed and re-added as a set on each call. Markers added through the
+    /// deref'd `Plot1D::add_x_marker` are NOT tracked here — their caller owns
+    /// their removal (the XANES tab clears its whole plot per rebuild).
+    marker_handles: Vec<ItemHandle>,
 }
 
 /// Emphasized-curve styling: the default curve width is 1.0; 3.0 reads as
@@ -290,6 +295,23 @@ impl Plot {
             handles: Vec::new(),
             declared: None,
             legend_folded: None,
+            marker_handles: Vec::new(),
+        }
+    }
+
+    /// Draw x-position markers as a managed set: remove the markers from the
+    /// previous call, then add one at each of `xs`. Rebuild-style callers (Plot
+    /// Data's caught peaks) re-derive the full set every pass, and neither
+    /// `clear_curves` (markers are not curve-like) nor the declare diff (curves
+    /// only) removes the old ones — without this, each rebuild stacks a new
+    /// copy of every marker over the last.
+    pub fn set_x_markers(&mut self, xs: &[f64], color: egui::Color32) {
+        for h in self.marker_handles.drain(..) {
+            self.inner.remove_marker(h);
+        }
+        for &x in xs {
+            let h = self.inner.add_x_marker(x, color);
+            self.marker_handles.push(h);
         }
     }
 
@@ -490,6 +512,9 @@ impl Plot {
         self.handles.clear();
         self.declared = None;
         self.last_pick = None;
+        // `Plot1D::clear` removed the marker items; drop the stale handles.
+        // (`clear_curves` below spares markers, so it keeps the tracking.)
+        self.marker_handles.clear();
     }
 
     /// Clear curve items and the recorded legend together. Shadows

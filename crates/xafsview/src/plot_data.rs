@@ -966,10 +966,8 @@ impl PlotDataWindow {
         }
         self.plot.commit_declare();
 
-        for px in peaks_x {
-            self.plot
-                .add_x_marker(px, Color32::from_rgb(0x80, 0x80, 0x80));
-        }
+        self.plot
+            .set_x_markers(&peaks_x, Color32::from_rgb(0x80, 0x80, 0x80));
     }
 }
 
