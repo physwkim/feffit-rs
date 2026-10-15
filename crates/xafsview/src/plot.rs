@@ -414,10 +414,13 @@ impl Plot {
     }
 
     /// Commit the declare session started by
-    /// [`begin_declare`](Self::begin_declare).
-    pub fn commit_declare(&mut self) {
+    /// [`begin_declare`](Self::begin_declare). Returns whether the plot's
+    /// content actually changed (any curve added, removed, or updated) — a
+    /// no-op commit leaves the view alone, so callers adjusting limits after a
+    /// rebuild can preserve the user's zoom the same way the diff itself does.
+    pub fn commit_declare(&mut self) -> bool {
         let Some(decls) = self.declared.take() else {
-            return;
+            return false;
         };
         // Pair each declared curve with a retained one by label, in order
         // (duplicate labels pair first-to-first).
@@ -437,9 +440,11 @@ impl Plot {
         for &j in matched.iter().flatten() {
             keep[j] = true;
         }
+        let mut changed = false;
         for (j, kept) in keep.iter().enumerate() {
             if !kept {
                 self.inner.remove_curve(self.handles[j]);
+                changed = true;
             }
         }
         let old_legend = std::mem::take(&mut self.legend);
@@ -463,6 +468,7 @@ impl Plot {
                             spec.line_width = EMPH_WIDTH;
                         }
                         self.inner.update_curve_spec(handle, spec);
+                        changed = true;
                     }
                     if same_data {
                         // Move the recorded hit-test samples over instead of
@@ -488,6 +494,7 @@ impl Plot {
                         d.emphasized,
                     );
                     self.record_pick_curve(&d.label, d.color, &d.x, &d.y);
+                    changed = true;
                     handle
                 }
             };
@@ -500,6 +507,30 @@ impl Plot {
             self.handles.push(handle);
         }
         self.last_pick = None;
+        changed
+    }
+
+    /// Y bounds `(min, max)` over every curve's samples whose x lies within
+    /// `[xmin, xmax]` (bounds accepted in either order; non-finite y skipped).
+    /// `None` when no sample falls inside the window.
+    pub fn y_bounds_in_x_window(&self, xmin: f64, xmax: f64) -> Option<(f64, f64)> {
+        let (lo, hi) = if xmin <= xmax {
+            (xmin, xmax)
+        } else {
+            (xmax, xmin)
+        };
+        let mut bounds: Option<(f64, f64)> = None;
+        for c in &self.pick_curves {
+            for &(x, y) in &c.points {
+                if x >= lo && x <= hi && y.is_finite() {
+                    bounds = Some(match bounds {
+                        None => (y, y),
+                        Some((bl, bh)) => (bl.min(y), bh.max(y)),
+                    });
+                }
+            }
+        }
+        bounds
     }
 
     /// Clear all plot items and the recorded legend together. Shadows

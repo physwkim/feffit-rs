@@ -1968,7 +1968,22 @@ impl XafsViewApp {
         if self.show_all_groups {
             self.overlay_other_groups();
         }
-        self.plot.commit_declare();
+        let changed = self.plot.commit_declare();
+        // On the k-weighted χ graphs, y-autoscale over the FT k-window only:
+        // the AUTOBK spline can hook sharply at the data end (parity with the
+        // original tool), and fitting y to the hook squashes the oscillations
+        // the analysis actually uses. Only on a content change, so a no-op
+        // replot preserves the user's zoom like the declare diff does.
+        if changed
+            && matches!(self.reduction.graph, GraphType::KChi | GraphType::ChiQ)
+            && let Some((lo, hi)) = self
+                .plot
+                .y_bounds_in_x_window(self.reduction.kmin, self.reduction.kmax)
+        {
+            let pad = if hi > lo { 0.05 * (hi - lo) } else { 1.0 };
+            self.plot
+                .set_graph_y_limits(lo - pad, hi + pad, rsplot::YAxis::Left);
+        }
     }
 
     /// The single "principal" curve `(x, y)` a group contributes for `graph` — the
