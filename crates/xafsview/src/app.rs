@@ -1684,11 +1684,17 @@ impl XafsViewApp {
         // other loaded groups overlaid after Multiple_data (the current group is
         // already drawn in full by `replot_graph_base`). Plot Data is a separate
         // window now and draws its loaded files onto its own graph.
-        self.plot.clear_curves();
+        //
+        // Declared rebuild instead of clear-and-re-add: with tens of groups
+        // loaded, recreating every curve's GPU buffers on each replot dominates
+        // the cost of every interaction; the declare diff touches only the
+        // curves that actually changed.
+        self.plot.begin_declare();
         self.replot_graph_base();
         if self.show_all_groups {
             self.overlay_other_groups();
         }
+        self.plot.commit_declare();
     }
 
     /// The single "principal" curve `(x, y)` a group contributes for `graph` — the

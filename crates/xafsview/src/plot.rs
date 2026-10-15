@@ -8,6 +8,8 @@
 //! off the frame, and routing every plot through one constructor means no site
 //! can forget it.
 
+use std::collections::{HashMap, VecDeque};
+
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use rsplot::{CurveSpec, DataMargins, ItemHandle, Plot1D, PlotId, Roi, Symbol};
@@ -223,6 +225,32 @@ pub struct Plot {
     /// none, and drawn as a pinned bottom readout so the clicked curve's name and
     /// coordinates stay visible.
     last_pick: Option<Pick>,
+    /// Each legend-bearing curve's inner item handle, in lockstep with
+    /// [`legend`](Self::legend) / [`pick_curves`](Self::pick_curves), so a
+    /// declared rebuild ([`begin_declare`](Self::begin_declare)) can update or
+    /// remove the retained items instead of recreating every curve.
+    handles: Vec<ItemHandle>,
+    /// Curves recorded since [`begin_declare`](Self::begin_declare) — `Some`
+    /// only inside a declare session; [`commit_declare`](Self::commit_declare)
+    /// diffs them against the retained curves and resets this to `None`.
+    declared: Option<Vec<CurveDecl>>,
+}
+
+/// Emphasized-curve styling: the default curve width is 1.0; 3.0 reads as
+/// clearly emphasized on either canvas background without depending on colour,
+/// and the high z keeps the thick line on top of the other curves.
+const EMPH_WIDTH: f32 = 3.0;
+const EMPH_Z: f32 = 100.0;
+
+/// One curve recorded during a declare session — the desired end state, diffed
+/// against the retained curves by legend label on commit (duplicate labels pair
+/// in declaration order).
+struct CurveDecl {
+    label: String,
+    color: egui::Color32,
+    emphasized: bool,
+    x: Vec<f64>,
+    y: Vec<f64>,
 }
 
 impl std::ops::Deref for Plot {
@@ -255,23 +283,24 @@ impl Plot {
             legend_clicked: None,
             pick_curves: Vec::new(),
             last_pick: None,
+            handles: Vec::new(),
+            declared: None,
         }
     }
 
     /// Add a curve and record its `(label, colour)` for the in-axes legend.
     /// Shadows [`Plot1D::add_curve_with_legend`], so existing call sites record
-    /// their legend entry without change.
+    /// their legend entry without change. Inside a declare session
+    /// ([`begin_declare`](Self::begin_declare)) the curve is recorded for the
+    /// commit diff instead of added immediately.
     pub fn add_curve_with_legend(
         &mut self,
         x: &[f64],
         y: &[f64],
         color: egui::Color32,
         legend: impl Into<String>,
-    ) -> ItemHandle {
-        let legend = legend.into();
-        self.legend.push((legend.clone(), color, false));
-        self.record_pick_curve(&legend, color, x, y);
-        self.inner.add_curve_with_legend(x, y, color, legend)
+    ) {
+        self.add_entry(x, y, color, legend.into(), false);
     }
 
     /// Record a curve's samples for click hit-testing. Kept in lockstep with the
@@ -298,22 +327,152 @@ impl Plot {
         y: &[f64],
         color: egui::Color32,
         legend: impl Into<String>,
+    ) {
+        self.add_entry(x, y, color, legend.into(), true);
+    }
+
+    /// The shared body of the two add methods: record a declared curve inside a
+    /// declare session, or add + bookkeep immediately outside one.
+    fn add_entry(&mut self, x: &[f64], y: &[f64], color: egui::Color32, label: String, emph: bool) {
+        if let Some(declared) = &mut self.declared {
+            declared.push(CurveDecl {
+                label,
+                color,
+                emphasized: emph,
+                x: x.to_vec(),
+                y: y.to_vec(),
+            });
+            return;
+        }
+        self.legend.push((label.clone(), color, emph));
+        self.record_pick_curve(&label, color, x, y);
+        let handle = Self::push_curve(&mut self.inner, x, y, color, &label, emph);
+        self.handles.push(handle);
+    }
+
+    /// Add one curve to the inner plot with the wrapper's styling rules (the
+    /// emphasized width/z convention of
+    /// [`add_emphasized_curve`](Self::add_emphasized_curve)).
+    fn push_curve(
+        inner: &mut Plot1D,
+        x: &[f64],
+        y: &[f64],
+        color: egui::Color32,
+        label: &str,
+        emph: bool,
     ) -> ItemHandle {
-        // Default curve width is 1.0; 3.0 reads as clearly emphasized on either
-        // canvas background without depending on colour. A high z keeps the
-        // thick line on top of curves added after it.
-        const EMPH_WIDTH: f32 = 3.0;
-        const EMPH_Z: f32 = 100.0;
-        let legend = legend.into();
-        self.legend.push((legend.clone(), color, true));
-        self.record_pick_curve(&legend, color, x, y);
-        let handle = self.inner.add_curve_spec(CurveSpec {
-            line_width: EMPH_WIDTH,
-            ..CurveSpec::new(x, y, color)
-        });
-        self.inner.set_item_legend(handle, legend);
-        self.inner.set_item_z(handle, EMPH_Z);
+        let mut spec = CurveSpec::new(x, y, color);
+        if emph {
+            spec.line_width = EMPH_WIDTH;
+        }
+        let handle = inner.add_curve_spec(spec);
+        inner.set_item_legend(handle, label);
+        if emph {
+            inner.set_item_z(handle, EMPH_Z);
+        }
         handle
+    }
+
+    /// Start a declared rebuild: until [`commit_declare`](Self::commit_declare),
+    /// the add methods record the desired curves instead of adding them, and
+    /// the commit diffs that declaration against the curves already on the
+    /// plot — unchanged curves are kept as-is, changed ones update their
+    /// existing item in place, and only genuinely new/removed curves are
+    /// added/removed. A clear-and-re-add rebuild recreates every curve's GPU
+    /// buffers on every call, which dominates interaction cost once tens of
+    /// groups are loaded; the diff makes that cost proportional to what
+    /// actually changed.
+    pub fn begin_declare(&mut self) {
+        self.declared = Some(Vec::new());
+    }
+
+    /// Commit the declare session started by
+    /// [`begin_declare`](Self::begin_declare).
+    pub fn commit_declare(&mut self) {
+        let Some(decls) = self.declared.take() else {
+            return;
+        };
+        // Pair each declared curve with a retained one by label, in order
+        // (duplicate labels pair first-to-first).
+        let mut by_label: HashMap<&str, VecDeque<usize>> = HashMap::new();
+        for (j, (label, _, _)) in self.legend.iter().enumerate() {
+            by_label.entry(label.as_str()).or_default().push_back(j);
+        }
+        let matched: Vec<Option<usize>> = decls
+            .iter()
+            .map(|d| {
+                by_label
+                    .get_mut(d.label.as_str())
+                    .and_then(|q| q.pop_front())
+            })
+            .collect();
+        let mut keep = vec![false; self.handles.len()];
+        for &j in matched.iter().flatten() {
+            keep[j] = true;
+        }
+        for (j, kept) in keep.iter().enumerate() {
+            if !kept {
+                self.inner.remove_curve(self.handles[j]);
+            }
+        }
+        let old_legend = std::mem::take(&mut self.legend);
+        let mut old_picks = std::mem::take(&mut self.pick_curves);
+        let old_handles = std::mem::take(&mut self.handles);
+        for (i, (d, m)) in decls.into_iter().zip(matched).enumerate() {
+            let handle = match m {
+                Some(j) => {
+                    let (_, old_color, old_emph) = old_legend[j];
+                    let same_style = old_color == d.color && old_emph == d.emphasized;
+                    let old_points = &old_picks[j].points;
+                    let same_data = old_points.len() == d.x.len()
+                        && old_points
+                            .iter()
+                            .zip(d.x.iter().zip(&d.y))
+                            .all(|(p, (&x, &y))| p.0 == x && p.1 == y);
+                    let handle = old_handles[j];
+                    if !(same_style && same_data) {
+                        let mut spec = CurveSpec::new(&d.x, &d.y, d.color);
+                        if d.emphasized {
+                            spec.line_width = EMPH_WIDTH;
+                        }
+                        self.inner.update_curve_spec(handle, spec);
+                    }
+                    if same_data {
+                        // Move the recorded hit-test samples over instead of
+                        // copying them again.
+                        let points = std::mem::take(&mut old_picks[j].points);
+                        self.pick_curves.push(PickCurve {
+                            label: d.label.clone(),
+                            color: d.color,
+                            points,
+                        });
+                    } else {
+                        self.record_pick_curve(&d.label, d.color, &d.x, &d.y);
+                    }
+                    handle
+                }
+                None => {
+                    let handle = Self::push_curve(
+                        &mut self.inner,
+                        &d.x,
+                        &d.y,
+                        d.color,
+                        &d.label,
+                        d.emphasized,
+                    );
+                    self.record_pick_curve(&d.label, d.color, &d.x, &d.y);
+                    handle
+                }
+            };
+            // Keep paint order = declaration order even for retained items (a
+            // kept curve would otherwise stay below items added after it). The
+            // fractional step keeps every normal curve well under EMPH_Z.
+            let base = if d.emphasized { EMPH_Z } else { 0.0 };
+            self.inner.set_item_z(handle, base + i as f32 * 0.01);
+            self.legend.push((d.label, d.color, d.emphasized));
+            self.handles.push(handle);
+        }
+        self.last_pick = None;
     }
 
     /// Clear all plot items and the recorded legend together. Shadows
@@ -323,6 +482,8 @@ impl Plot {
         self.inner.clear();
         self.legend.clear();
         self.pick_curves.clear();
+        self.handles.clear();
+        self.declared = None;
         self.last_pick = None;
     }
 
@@ -332,6 +493,8 @@ impl Plot {
         self.inner.clear_curves();
         self.legend.clear();
         self.pick_curves.clear();
+        self.handles.clear();
+        self.declared = None;
         self.last_pick = None;
     }
 }
@@ -572,7 +735,6 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
                     });
                 });
         });
-
     // A legend row was clicked this frame — record it for `take_legend_click`.
     if legend_click.is_some() {
         plot.legend_clicked = legend_click;

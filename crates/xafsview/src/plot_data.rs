@@ -915,8 +915,10 @@ impl PlotDataWindow {
         };
         let peaks_x: Vec<f64> = self.peaks.iter().map(|(_, px, _)| *px).collect();
 
-        // Draw onto the window's own plot.
-        self.plot.clear_curves();
+        // Draw onto the window's own plot — a declared rebuild, so curves that
+        // did not change (e.g. a highlight toggle touching two of sixty traces)
+        // keep their GPU buffers instead of being recreated.
+        self.plot.begin_declare();
         crate::plot::set_theme(&mut self.plot, !dark);
         self.plot.set_graph_x_label(xlabel.as_str());
         self.plot
@@ -962,6 +964,7 @@ impl PlotDataWindow {
                 self.plot.add_curve_with_legend(&x, &y, c, "average");
             }
         }
+        self.plot.commit_declare();
 
         for px in peaks_x {
             self.plot
