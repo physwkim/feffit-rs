@@ -374,8 +374,9 @@ pub struct InsituWindow {
     /// Channel for "Build from loaded groups".
     channel: SeriesKind,
     /// XANES rows from the flattened spectrum (`flat`, falling back to `norm`)
-    /// rather than the plain normalized one. The legacy BL10C XANES.dat export
-    /// is plain `norm`; the XANES tool offers the same norm/flat choice.
+    /// rather than the plain normalized one. Off by default: the legacy BL10C
+    /// XANES.dat export is plain `norm`, and the XANES tool's own norm/flat
+    /// choice starts on norm too.
     xanes_flat: bool,
     /// XANES common-grid fields; `e_steps == 0` means "seed from the data".
     e_start: f64,
@@ -411,7 +412,7 @@ impl InsituWindow {
             open: false,
             map: None,
             channel: SeriesKind::Rdf,
-            xanes_flat: true,
+            xanes_flat: false,
             e_start: 0.0,
             e_stop: 0.0,
             e_steps: 0,

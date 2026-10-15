@@ -311,8 +311,8 @@ pub struct InsituMapArgs {
     pub e_stop: Option<f64>,
     /// XANES grid point count; seeded from the data when omitted.
     pub e_steps: Option<usize>,
-    /// XANES rows from the flattened spectrum (true, the window's default) or
-    /// the plain normalized one (false — what the legacy BL10C XANES.dat holds).
+    /// XANES rows from the flattened spectrum (true) or the plain normalized
+    /// one (false, the window's default — what the legacy BL10C XANES.dat holds).
     pub flat: Option<bool>,
     /// Write the displayed map to this path as a tab-separated matrix
     /// (x first column, one named column per scan) — OriginPro-importable and
