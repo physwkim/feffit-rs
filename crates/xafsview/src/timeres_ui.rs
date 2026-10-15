@@ -44,20 +44,43 @@ impl TimeResolvedWindow {
         }
         // `keep_open` tracks the OS window close button, which closes the window.
         let mut keep_open = true;
-        crate::window::detached(
+        // The save action is pinned under the (growing) table; read before the
+        // closures since the pinned row renders first and cannot borrow `self`
+        // while the body holds it.
+        let has_rows = !self.rows.is_empty();
+        let status = self.status.clone();
+        let mut do_save = false;
+        crate::window::detached_with_action(
             ctx,
             "time_resolved",
             "Extract XAS measured time",
             &mut keep_open,
             [500.0, 380.0],
             |ui| self.body(ui),
+            |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(has_rows, egui::Button::new("Save as a single file"))
+                        .clicked()
+                    {
+                        do_save = true;
+                    }
+                    if !status.is_empty() {
+                        ui.weak(&status);
+                    }
+                });
+            },
         );
+        if do_save {
+            self.save_single_file();
+        }
         if !keep_open {
             self.open = false;
         }
     }
 
-    /// The window contents: pick/clear controls, the time table, and save/exit.
+    /// The window contents: pick/clear controls and the time table (the save
+    /// action is the window's pinned action row).
     fn body(&mut self, ui: &mut egui::Ui) {
         // Honest notice while [`extract_measured_time`] is a stub: without the
         // header parser every row's times show "—", which otherwise reads as a
@@ -114,22 +137,6 @@ impl TimeResolvedWindow {
                         }
                     });
             });
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    !self.rows.is_empty(),
-                    egui::Button::new("Save as a single file"),
-                )
-                .clicked()
-            {
-                self.save_single_file();
-            }
-        });
-        if !self.status.is_empty() {
-            ui.weak(&self.status);
         }
     }
 

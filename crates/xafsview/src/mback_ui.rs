@@ -113,15 +113,19 @@ impl MbackWindow {
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui, groups));
                     });
-                egui::CentralPanel::default().show(ui, |ui| {
-                    if self.dirty {
-                        self.rebuild_plot(groups);
-                        self.dirty = false;
-                    }
-                    crate::plot::show(&mut self.plot, ui);
-                    ui.separator();
-                    self.stats(ui);
-                });
+                crate::window::fill_with_footer(
+                    ui,
+                    "mback",
+                    self,
+                    |s, ui| s.stats(ui),
+                    |s, ui| {
+                        if s.dirty {
+                            s.rebuild_plot(groups);
+                            s.dirty = false;
+                        }
+                        crate::plot::show(&mut s.plot, ui);
+                    },
+                );
             },
         );
         self.open = open;

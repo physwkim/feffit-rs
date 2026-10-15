@@ -739,87 +739,98 @@ impl PlotDataWindow {
     /// the plot and `<=` un-plots — the original browser's Open and Append in one
     /// action, which is why there are not two buttons here for them.
     ///
-    /// Shown as its own OS viewport (via
-    /// [`crate::window::detached_with_action`]) so it can be dragged outside the
-    /// Plot Data window. `log` receives the per-file reasons when staged files
-    /// fail to load (the in-window `pick_status` line only carries the count).
+    /// Shown as its own OS viewport (via [`crate::window::detached_panels`],
+    /// the OK row pinned under the height-filling panes) so it can be dragged
+    /// outside the Plot Data window. `log` receives the per-file reasons when
+    /// staged files fail to load (the in-window `pick_status` line only carries
+    /// the count).
     pub fn file_picker(&mut self, ctx: &egui::Context, log: &mut crate::status_log::StatusLog) {
         if !self.picker_open {
             return;
         }
         let mut keep_open = true;
         let mut do_ok = false;
-        crate::window::detached_with_action(
+        crate::window::detached_panels(
             ctx,
             "plot_data_picker",
             "File selection",
             &mut keep_open,
             [660.0, 460.0],
             |ui| {
-                let item = self.graph_item;
-                if self.browser.nav_bar(ui, "(pick a folder)") {
-                    self.browser.refresh(|p| item.matches(p));
-                }
-                ui.separator();
+                crate::window::fill_with_footer(
+                    ui,
+                    "plot_data_picker",
+                    self,
+                    |_, ui| {
+                        // Always enabled: OK with an emptied Selected pane
+                        // un-plots everything (the pane is seeded with the
+                        // loaded set).
+                        if crate::widgets::primary(ui, "OK", crate::widgets::ROW_BTN, true)
+                            .on_hover_text("Plot exactly the staged files")
+                            .clicked()
+                        {
+                            do_ok = true;
+                        }
+                    },
+                    |s, ui| {
+                        let item = s.graph_item;
+                        if s.browser.nav_bar(ui, "(pick a folder)") {
+                            s.browser.refresh(|p| item.matches(p));
+                        }
+                        ui.separator();
 
-                // The type / item filters sit above the panes: they decide what
-                // "Available Data" lists, so they belong to the whole row rather
-                // than to one column of it. Labelled like the Plot Data window's
-                // own Files block, which shares these two fields.
-                ui.horizontal(|ui| {
-                    ui.label("file type");
-                    egui::ComboBox::from_id_salt("pd_ftype")
-                        .selected_text(self.file_type.label())
-                        .show_ui(ui, |ui| {
-                            for ft in FileType::ALL {
-                                if ui
-                                    .selectable_value(&mut self.file_type, ft, ft.label())
-                                    .changed()
-                                {
-                                    self.graph_item = self.file_type.default_item();
-                                    self.refresh_available();
-                                }
-                            }
+                        // The type / item filters sit above the panes: they
+                        // decide what "Available Data" lists, so they belong to
+                        // the whole row rather than to one column of it.
+                        // Labelled like the Plot Data window's own Files block,
+                        // which shares these two fields.
+                        ui.horizontal(|ui| {
+                            ui.label("file type");
+                            egui::ComboBox::from_id_salt("pd_ftype")
+                                .selected_text(s.file_type.label())
+                                .show_ui(ui, |ui| {
+                                    for ft in FileType::ALL {
+                                        if ui
+                                            .selectable_value(&mut s.file_type, ft, ft.label())
+                                            .changed()
+                                        {
+                                            s.graph_item = s.file_type.default_item();
+                                            s.refresh_available();
+                                        }
+                                    }
+                                });
+                            ui.label(if s.file_type == FileType::Xmu {
+                                "xmu data type"
+                            } else {
+                                "graph item"
+                            });
+                            egui::ComboBox::from_id_salt("pd_gitem")
+                                .selected_text(s.graph_item.label())
+                                .show_ui(ui, |ui| {
+                                    for &gi in s.file_type.items() {
+                                        if ui
+                                            .selectable_value(&mut s.graph_item, gi, gi.label())
+                                            .changed()
+                                        {
+                                            s.refresh_available();
+                                        }
+                                    }
+                                });
                         });
-                    ui.label(if self.file_type == FileType::Xmu {
-                        "xmu data type"
-                    } else {
-                        "graph item"
-                    });
-                    egui::ComboBox::from_id_salt("pd_gitem")
-                        .selected_text(self.graph_item.label())
-                        .show_ui(ui, |ui| {
-                            for &gi in self.file_type.items() {
-                                if ui
-                                    .selectable_value(&mut self.graph_item, gi, gi.label())
-                                    .changed()
-                                {
-                                    self.refresh_available();
-                                }
-                            }
-                        });
-                });
 
-                FileBrowser::pane_headers(ui);
-                // The pinned action panel already took its height, so the panes
-                // get exactly what is left.
-                let list_h = ui.available_height().max(160.0);
-                let item = self.graph_item;
-                if self.browser.panes(ui, list_h, |p| item.matches(p)) {
-                    // The staged set is what OK/Append will load; nothing to do
-                    // until then, but a stale status line would mislead.
-                    self.pick_status.clear();
-                }
-            },
-            |ui| {
-                // Always enabled: OK with an emptied Selected pane un-plots
-                // everything (the pane is seeded with the loaded set).
-                if crate::widgets::primary(ui, "OK", crate::widgets::ROW_BTN, true)
-                    .on_hover_text("Plot exactly the staged files")
-                    .clicked()
-                {
-                    do_ok = true;
-                }
+                        FileBrowser::pane_headers(ui);
+                        // The pinned OK panel already took its height, so the
+                        // panes get exactly what is left.
+                        let list_h = ui.available_height().max(160.0);
+                        let item = s.graph_item;
+                        if s.browser.panes(ui, list_h, |p| item.matches(p)) {
+                            // The staged set is what OK/Append will load;
+                            // nothing to do until then, but a stale status line
+                            // would mislead.
+                            s.pick_status.clear();
+                        }
+                    },
+                );
             },
         );
         if do_ok {

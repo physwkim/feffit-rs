@@ -2575,11 +2575,9 @@ impl XafsViewApp {
             &mut keep_open,
             [360.0, 520.0],
             |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    action = self
-                        .feffit_batch
-                        .panel(ui, &self.session.groups, &self.feffit);
-                });
+                action = self
+                    .feffit_batch
+                    .panel(ui, &self.session.groups, &self.feffit);
             },
         );
         self.feffit_batch_open = keep_open;
@@ -3344,28 +3342,17 @@ impl XafsViewApp {
         let mut keep_open = true;
         let mut changed = false;
         let mut add_clicked = false;
-        crate::window::detached(
+        // Own panel layout: the group list fills the window, so Add + the
+        // checked-count row go in a top panel and "Clear all" in a pinned footer
+        // (in one flow the list pushed "Clear all" past the viewport edge).
+        crate::window::detached_panels(
             ctx,
             "data_manager",
             "Data",
             &mut keep_open,
             [320.0, 420.0],
             |ui| {
-                // ADD opens the Plot Data-style staging picker (needs an open
-                // import for the column mapping); same affordance as Plot Data.
-                if ui
-                    .button("Add data files…")
-                    .on_hover_text("Stage several raw scan files, then build μ(E) for each")
-                    .clicked()
-                {
-                    add_clicked = true;
-                }
-                ui.separator();
                 let n = self.session.groups.len();
-                if n == 0 {
-                    ui.weak("No data — open a file, then Add data files.");
-                    return;
-                }
                 let current = self.session.current;
                 let sel_count = self.session.selected.len();
                 // Snapshot the checked state so the row loop can read it while
@@ -3376,52 +3363,87 @@ impl XafsViewApp {
                 let mut toggle = None;
                 let mut select_all = false;
                 let mut clear_sel = false;
-                // The shared "selected file list": which groups each tab's Run
-                // (Autobk reduce / Feffit fit) acts on. Check none → Run falls back
-                // to the current group.
-                ui.horizontal(|ui| {
-                    ui.strong(format!("{sel_count} of {n} checked for Run"));
-                    if ui.small_button("All").clicked() {
-                        select_all = true;
+                let mut clear_all = false;
+                egui::Panel::top("data_manager_header").show(ui, |ui| {
+                    // ADD opens the Plot Data-style staging picker (needs an open
+                    // import for the column mapping); same affordance as Plot Data.
+                    if ui
+                        .button("Add data files…")
+                        .on_hover_text("Stage several raw scan files, then build μ(E) for each")
+                        .clicked()
+                    {
+                        add_clicked = true;
                     }
-                    if ui.small_button("None").clicked() {
-                        clear_sel = true;
+                    if n > 0 {
+                        ui.separator();
+                        // The shared "selected file list": which groups each tab's
+                        // Run (Autobk reduce / Feffit fit) acts on. Check none →
+                        // Run falls back to the current group.
+                        ui.horizontal(|ui| {
+                            ui.strong(format!("{sel_count} of {n} checked for Run"));
+                            if ui.small_button("All").clicked() {
+                                select_all = true;
+                            }
+                            if ui.small_button("None").clicked() {
+                                clear_sel = true;
+                            }
+                        });
                     }
                 });
-                egui::ScrollArea::vertical()
-                    .id_salt("data_manager_list")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for (i, g) in self.session.groups.iter().enumerate() {
-                            ui.push_id(i, |ui| {
-                                ui.horizontal(|ui| {
-                                    if crate::widgets::delete_box(ui)
-                                        .on_hover_text("Remove this data")
-                                        .clicked()
-                                    {
-                                        remove = Some(i);
-                                    }
-                                    let mut on = checked[i];
-                                    if ui
-                                        .checkbox(&mut on, "")
-                                        .on_hover_text(
-                                            "Include this group in Run — shift-click \
-                                             checks/unchecks the whole range from the \
-                                             last clicked row",
-                                        )
-                                        .changed()
-                                    {
-                                        toggle = Some((i, on));
-                                    }
-                                    if ui.selectable_label(current == Some(i), &g.label).clicked() {
-                                        select = Some(i);
-                                    }
-                                });
-                            });
-                        }
+                if n == 0 {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.weak("No data — open a file, then Add data files.");
                     });
-                ui.separator();
-                if ui.button("Clear all").clicked() {
+                    return;
+                }
+                crate::window::fill_with_footer(
+                    ui,
+                    "data_manager",
+                    self,
+                    |_, ui| {
+                        if ui.button("Clear all").clicked() {
+                            clear_all = true;
+                        }
+                    },
+                    |s, ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("data_manager_list")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for (i, g) in s.session.groups.iter().enumerate() {
+                                    ui.push_id(i, |ui| {
+                                        ui.horizontal(|ui| {
+                                            if crate::widgets::delete_box(ui)
+                                                .on_hover_text("Remove this data")
+                                                .clicked()
+                                            {
+                                                remove = Some(i);
+                                            }
+                                            let mut on = checked[i];
+                                            if ui
+                                                .checkbox(&mut on, "")
+                                                .on_hover_text(
+                                                    "Include this group in Run — shift-click \
+                                                     checks/unchecks the whole range from the \
+                                                     last clicked row",
+                                                )
+                                                .changed()
+                                            {
+                                                toggle = Some((i, on));
+                                            }
+                                            if ui
+                                                .selectable_label(current == Some(i), &g.label)
+                                                .clicked()
+                                            {
+                                                select = Some(i);
+                                            }
+                                        });
+                                    });
+                                }
+                            });
+                    },
+                );
+                if clear_all {
                     self.session.groups.clear();
                     self.session.current = None;
                     self.session.clear_selected();

@@ -135,15 +135,19 @@ impl LcfWindow {
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui, groups));
                     });
-                egui::CentralPanel::default().show(ui, |ui| {
-                    if self.dirty {
-                        self.rebuild_plot(groups);
-                        self.dirty = false;
-                    }
-                    crate::plot::show(&mut self.plot, ui);
-                    ui.separator();
-                    self.results(ui);
-                });
+                crate::window::fill_with_footer(
+                    ui,
+                    "lcf",
+                    self,
+                    |s, ui| s.results(ui),
+                    |s, ui| {
+                        if s.dirty {
+                            s.rebuild_plot(groups);
+                            s.dirty = false;
+                        }
+                        crate::plot::show(&mut s.plot, ui);
+                    },
+                );
             },
         );
         self.open = open;
@@ -413,15 +417,19 @@ impl PcaWindow {
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui, groups));
                     });
-                egui::CentralPanel::default().show(ui, |ui| {
-                    if self.dirty {
-                        self.rebuild_plot(groups);
-                        self.dirty = false;
-                    }
-                    crate::plot::show(&mut self.plot, ui);
-                    ui.separator();
-                    self.results(ui);
-                });
+                crate::window::fill_with_footer(
+                    ui,
+                    "pca",
+                    self,
+                    |s, ui| s.results(ui),
+                    |s, ui| {
+                        if s.dirty {
+                            s.rebuild_plot(groups);
+                            s.dirty = false;
+                        }
+                        crate::plot::show(&mut s.plot, ui);
+                    },
+                );
             },
         );
         self.open = open;

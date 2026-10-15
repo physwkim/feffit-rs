@@ -578,19 +578,69 @@ impl FeffTab {
         });
 
         ui.separator();
-        egui::ScrollArea::vertical()
-            .id_salt("feff_inp_editor")
-            .show(ui, |ui| {
-                ui.add(
-                    egui::TextEdit::multiline(feff_inp)
-                        .code_editor()
-                        .hint_text("Load a feff.inp, or build one on the Atoms tab.")
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(22),
-                );
-            });
+        // The editor fills the tab (a long feff.inp grows it), so the run status
+        // and the action row are pinned in a footer under it.
+        let has_inp = !feff_inp.trim().is_empty();
+        let mut do_run = false;
+        crate::window::fill_with_footer(
+            ui,
+            "feff_tab",
+            self,
+            |s, ui| {
+                s.status_line(ui);
+                // Bottom action row (그림 1-2-5: Select Feff Version / View
+                // Structure / Execute), uniform width, with the run button as the
+                // amber primary action. The original labels it "Execute"; renamed
+                // to say what it does.
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if crate::widgets::action_enabled(
+                        ui,
+                        "View Structure",
+                        crate::widgets::ROW_BTN,
+                        has_inp,
+                    )
+                    .clicked()
+                    {
+                        action = Some(FeffAction::ViewStructure);
+                    }
+                    let can_run = !s.running && has_inp;
+                    if crate::widgets::primary(ui, "Run FEFF", crate::widgets::ROW_BTN, can_run)
+                        .on_hover_text("Run FEFF → feffNNNN.dat")
+                        .clicked()
+                    {
+                        do_run = true;
+                    }
+                    if s.running {
+                        ui.spinner();
+                        ui.label("running…");
+                        ui.ctx().request_repaint();
+                    }
+                });
+            },
+            |_, ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("feff_inp_editor")
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(feff_inp)
+                                .code_editor()
+                                .hint_text("Load a feff.inp, or build one on the Atoms tab.")
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(22),
+                        );
+                    });
+            },
+        );
+        if do_run {
+            self.start_run(feff_inp, work_dir);
+        }
 
-        ui.separator();
+        action
+    }
+
+    /// The last run's outcome (or "No run yet.").
+    fn status_line(&self, ui: &mut egui::Ui) {
         match &self.last {
             Some(Ok(s)) => {
                 ui.colored_label(
@@ -612,38 +662,6 @@ impl FeffTab {
                 ui.weak("No run yet.");
             }
         }
-
-        // Bottom action row (그림 1-2-5: Select Feff Version / View Structure /
-        // Execute), uniform width, with the run button as the amber primary
-        // action. The original labels it "Execute"; renamed to say what it does.
-        ui.separator();
-        ui.horizontal(|ui| {
-            let has_inp = !feff_inp.trim().is_empty();
-            if crate::widgets::action_enabled(
-                ui,
-                "View Structure",
-                crate::widgets::ROW_BTN,
-                has_inp,
-            )
-            .clicked()
-            {
-                action = Some(FeffAction::ViewStructure);
-            }
-            let can_run = !self.running && has_inp;
-            if crate::widgets::primary(ui, "Run FEFF", crate::widgets::ROW_BTN, can_run)
-                .on_hover_text("Run FEFF → feffNNNN.dat")
-                .clicked()
-            {
-                self.start_run(feff_inp, work_dir);
-            }
-            if self.running {
-                ui.spinner();
-                ui.label("running…");
-                ui.ctx().request_repaint();
-            }
-        });
-
-        action
     }
 
     /// Full paths to the `feffNNNN.dat` files produced by the last successful
@@ -836,134 +854,149 @@ impl PlotSitesWindow {
         }
 
         let mut open = self.open;
-        crate::window::detached(
+        // Own panel layout: the 3D scene fills the window, so the controls go
+        // in a top panel and the ipot legend / path table in a pinned footer.
+        crate::window::detached_panels(
             ctx,
             "plot_sites",
             "Plot Sites (3D cluster)",
             &mut open,
             [680.0, 620.0],
             |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button("Reset view").clicked() {
-                        self.scene.reset_camera();
-                    }
-                    rsplot::viewpoint_menu(ui, &mut self.scene);
-                    ui.separator();
-                    if let Some(e) = &self.error {
-                        ui.colored_label(RED, e);
-                    } else {
-                        ui.weak(format!("{} atoms", self.atoms.len()));
-                    }
-                });
-
-                // Marker size + shell selection (그림 1-4-1: PointSize / Shell #).
-                ui.horizontal(|ui| {
-                    ui.label("Point size");
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut self.point_size)
-                                .range(2.0..=30.0)
-                                .speed(0.2),
-                        )
-                        .changed()
-                    {
-                        self.dirty = true;
-                    }
-                    ui.separator();
-                    if ui.checkbox(&mut self.all_shells, "All shells").changed() {
-                        self.dirty = true;
-                    }
-                    if !self.all_shells && !self.shells.is_empty() {
-                        ui.label("Shell #");
-                        let nsh = self.shells.len();
-                        if ui
-                            .add(egui::DragValue::new(&mut self.shell_count).range(1..=nsh))
-                            .changed()
-                        {
-                            self.dirty = true;
-                        }
-                        let i = self.shell_count.clamp(1, nsh) - 1;
-                        ui.weak(format!("≤ {:.3} Å", self.shells[i]));
-                    }
-                });
-
-                // View Path overlay (그림 1-4-2): pick a feffNNNN.dat path and
-                // trace it as a red dotted route through its atoms.
-                if self.paths.is_empty() {
-                    ui.weak("Run FEFF (Feff tab) to enable View Path.");
-                } else {
-                    ui.horizontal(|ui| {
-                        if ui.checkbox(&mut self.view_path, "View Path").changed() {
-                            self.dirty = true;
-                        }
-                        if self.view_path {
-                            ui.label("Path #");
-                            let last = self.paths.len() - 1;
-                            if ui
-                                .add(egui::DragValue::new(&mut self.path_idx).range(0..=last))
-                                .changed()
-                            {
-                                self.dirty = true;
-                            }
-                            if let Some(p) = self.paths.get(self.path_idx) {
-                                ui.weak(format!(
-                                    "reff={:.3} Å · nleg={} · degen={} · {}",
-                                    p.reff,
-                                    p.nleg,
-                                    p.degen,
-                                    path_label(p)
-                                ));
-                            }
-                        }
-                    });
-                }
-
+                egui::Panel::top("plot_sites_controls").show(ui, |ui| self.controls(ui));
                 if self.dirty {
                     self.build_scene(render_state);
                     self.dirty = false;
                 }
-
-                ui.separator();
-                self.scene.show(ui);
-                ui.separator();
-                ui.horizontal_wrapped(|ui| {
-                    for (ipot, tag, count) in &self.legend {
-                        ui.label(format!("ipot {ipot} = {tag} ({count})"));
-                        ui.add_space(8.0);
-                    }
-                });
-
-                // The selected path's geometry, as the original's paths.dat table.
-                if self.view_path
-                    && let Some(p) = self.paths.get(self.path_idx)
-                {
-                    egui::CollapsingHeader::new("Scattering path geometry (paths.dat)")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            egui::Grid::new("path_geom")
-                                .num_columns(5)
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    ui.strong("atom");
-                                    ui.strong("ipot");
-                                    ui.strong("x");
-                                    ui.strong("y");
-                                    ui.strong("z");
-                                    ui.end_row();
-                                    for g in &p.geom {
-                                        ui.label(&g.label);
-                                        ui.monospace(format!("{}", g.ipot));
-                                        ui.monospace(format!("{:.4}", g.x));
-                                        ui.monospace(format!("{:.4}", g.y));
-                                        ui.monospace(format!("{:.4}", g.z));
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                }
+                crate::window::fill_with_footer(
+                    ui,
+                    "plot_sites",
+                    self,
+                    |s, ui| s.footer(ui),
+                    |s, ui| {
+                        s.scene.show(ui);
+                    },
+                );
             },
         );
         self.open = open;
+    }
+
+    /// The window's control rows: view reset / viewpoint, marker size, shell
+    /// selection, and the View Path overlay (그림 1-4-1 / 1-4-2).
+    fn controls(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("Reset view").clicked() {
+                self.scene.reset_camera();
+            }
+            rsplot::viewpoint_menu(ui, &mut self.scene);
+            ui.separator();
+            if let Some(e) = &self.error {
+                ui.colored_label(RED, e);
+            } else {
+                ui.weak(format!("{} atoms", self.atoms.len()));
+            }
+        });
+
+        // Marker size + shell selection (그림 1-4-1: PointSize / Shell #).
+        ui.horizontal(|ui| {
+            ui.label("Point size");
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.point_size)
+                        .range(2.0..=30.0)
+                        .speed(0.2),
+                )
+                .changed()
+            {
+                self.dirty = true;
+            }
+            ui.separator();
+            if ui.checkbox(&mut self.all_shells, "All shells").changed() {
+                self.dirty = true;
+            }
+            if !self.all_shells && !self.shells.is_empty() {
+                ui.label("Shell #");
+                let nsh = self.shells.len();
+                if ui
+                    .add(egui::DragValue::new(&mut self.shell_count).range(1..=nsh))
+                    .changed()
+                {
+                    self.dirty = true;
+                }
+                let i = self.shell_count.clamp(1, nsh) - 1;
+                ui.weak(format!("≤ {:.3} Å", self.shells[i]));
+            }
+        });
+
+        // View Path overlay (그림 1-4-2): pick a feffNNNN.dat path and
+        // trace it as a red dotted route through its atoms.
+        if self.paths.is_empty() {
+            ui.weak("Run FEFF (Feff tab) to enable View Path.");
+        } else {
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut self.view_path, "View Path").changed() {
+                    self.dirty = true;
+                }
+                if self.view_path {
+                    ui.label("Path #");
+                    let last = self.paths.len() - 1;
+                    if ui
+                        .add(egui::DragValue::new(&mut self.path_idx).range(0..=last))
+                        .changed()
+                    {
+                        self.dirty = true;
+                    }
+                    if let Some(p) = self.paths.get(self.path_idx) {
+                        ui.weak(format!(
+                            "reff={:.3} Å · nleg={} · degen={} · {}",
+                            p.reff,
+                            p.nleg,
+                            p.degen,
+                            path_label(p)
+                        ));
+                    }
+                }
+            });
+        }
+    }
+
+    /// Under the scene: the ipot legend and, with View Path on, the selected
+    /// path's geometry as the original's paths.dat table.
+    fn footer(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for (ipot, tag, count) in &self.legend {
+                ui.label(format!("ipot {ipot} = {tag} ({count})"));
+                ui.add_space(8.0);
+            }
+        });
+        if self.view_path
+            && let Some(p) = self.paths.get(self.path_idx)
+        {
+            egui::CollapsingHeader::new("Scattering path geometry (paths.dat)")
+                .default_open(false)
+                .show(ui, |ui| {
+                    egui::Grid::new("path_geom")
+                        .num_columns(5)
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.strong("atom");
+                            ui.strong("ipot");
+                            ui.strong("x");
+                            ui.strong("y");
+                            ui.strong("z");
+                            ui.end_row();
+                            for g in &p.geom {
+                                ui.label(&g.label);
+                                ui.monospace(format!("{}", g.ipot));
+                                ui.monospace(format!("{:.4}", g.x));
+                                ui.monospace(format!("{:.4}", g.y));
+                                ui.monospace(format!("{:.4}", g.z));
+                                ui.end_row();
+                            }
+                        });
+                });
+        }
     }
 
     /// Parse `feff_inp` into the cached cluster (`atoms`, `absorber`, `shells`,

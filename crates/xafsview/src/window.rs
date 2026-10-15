@@ -25,10 +25,15 @@ use eframe::egui;
 /// embedded window inside the main viewport, so the pop-up still works.
 ///
 /// The body is wrapped in a default [`egui::CentralPanel`], whose frame carries
-/// the standard inner margin — content never hugs the viewport edges. A window
-/// that lays out its own `SidePanel`/`CentralPanel` split must use
-/// [`detached_panels`] instead (panels are added to the viewport root, and their
-/// own frames supply the margins).
+/// the standard inner margin — content never hugs the viewport edges — and in a
+/// vertical scroll, so a form taller than the viewport scrolls instead of
+/// clipping its last rows. A body is therefore *single-flow*: a widget that
+/// takes `available_size` (a plot, a 3D scene, a list with `auto_shrink(false)`)
+/// sees an infinite height inside the scroll and cannot live here. A window
+/// built around such a widget lays out its own panels through
+/// [`detached_panels`] (panels are added to the viewport root, and their own
+/// frames supply the margins) with [`fill_with_footer`] for anything it shows
+/// below the fill widget.
 ///
 /// Reopen discipline: an immediate viewport closed via its window button cannot
 /// be reliably recreated under the *same* [`egui::ViewportId`] — eframe/winit
@@ -47,15 +52,13 @@ pub fn detached(
     mut add_contents: impl FnMut(&mut egui::Ui),
 ) {
     detached_panels(ctx, id_source, title, open, default_size, |ui| {
-        egui::CentralPanel::default().show(ui, |ui| add_contents(ui));
+        egui::CentralPanel::default().show(ui, |ui| scrolled(ui, &mut add_contents));
     });
 }
 
 /// As [`detached`] but with `action_row` pinned in its own bottom panel, for a
-/// window whose last row is its primary action (OK, Autobk Start). In the
-/// single-flow [`detached`] body a tall form pushes that row past the viewport
-/// edge, and a detached window has no outer scroll, so the action becomes
-/// unreachable; a bottom panel holds its space by construction. The panel
+/// window whose last row is its primary action (OK, Autobk Start, Save): the
+/// action stays in view however long the form above it scrolls. The panel
 /// renders before `add_contents`, so anything the action row reads (an enabled
 /// gate) is one frame stale — fine for display state; apply the action itself
 /// from a flag after this call returns.
@@ -70,8 +73,43 @@ pub fn detached_with_action(
 ) {
     detached_panels(ctx, id_source, title, open, default_size, |ui| {
         egui::Panel::bottom(egui::Id::new((id_source, "action_row"))).show(ui, |ui| action_row(ui));
-        egui::CentralPanel::default().show(ui, |ui| add_contents(ui));
+        egui::CentralPanel::default().show(ui, |ui| scrolled(ui, &mut add_contents));
     });
+}
+
+/// The single-flow body scroll shared by [`detached`] and
+/// [`detached_with_action`]: fills the panel (no auto-shrink, so width-filling
+/// widgets keep the panel width) and scrolls vertically past the viewport.
+fn scrolled(ui: &mut egui::Ui, add_contents: &mut impl FnMut(&mut egui::Ui)) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| add_contents(ui));
+}
+
+/// Lay out `fill` — a widget that takes all remaining space (a plot, a 3D
+/// scene, a `auto_shrink(false)` list) — with `footer` pinned in a bottom panel
+/// under it. The fill widget reads `available_size`, so anything laid out
+/// *after* it in the same flow lands past the viewport edge (a results table
+/// below a plot was never visible); a bottom panel reserves its height before
+/// the fill widget is drawn. The footer scrolls past 40 % of the height so a
+/// long results table cannot starve the fill widget. `state` is handed to both
+/// closures in turn so a caller can draw its footer and its plot from the same
+/// `&mut self` (two capturing closures could not both borrow it).
+pub fn fill_with_footer<S>(
+    ui: &mut egui::Ui,
+    id_source: &str,
+    state: &mut S,
+    footer: impl FnOnce(&mut S, &mut egui::Ui),
+    fill: impl FnOnce(&mut S, &mut egui::Ui),
+) {
+    let cap = (ui.available_height() * 0.4).max(60.0);
+    egui::Panel::bottom(egui::Id::new((id_source, "footer"))).show(ui, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt((id_source, "footer_scroll"))
+            .max_height(cap)
+            .show(ui, |ui| footer(state, ui));
+    });
+    egui::CentralPanel::default().show(ui, |ui| fill(state, ui));
 }
 
 /// [`detached`] without the [`egui::CentralPanel`] wrap, for windows whose body

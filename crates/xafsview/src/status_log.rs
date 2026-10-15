@@ -101,43 +101,49 @@ impl StatusLog {
             return;
         }
         let mut keep_open = true;
-        crate::window::detached(
+        // Own panel layout: the message list fills the window (`auto_shrink`
+        // off, pinned to the newest), which a scrolled `detached` body cannot
+        // host, so the header goes in a top panel of its own.
+        crate::window::detached_panels(
             ctx,
             "status_log",
             "Log",
             &mut keep_open,
             [560.0, 420.0],
             |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "{} message(s), {} error(s)",
-                        self.entries.len(),
-                        self.error_count()
-                    ));
-                    if ui.button("Clear").clicked() {
-                        self.entries.clear();
-                    }
-                });
-                ui.separator();
-                let err_color = ui.visuals().error_fg_color;
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for e in &self.entries {
-                            match e.level {
-                                LogLevel::Error => {
-                                    ui.colored_label(err_color, &e.message);
-                                }
-                                LogLevel::Info => {
-                                    ui.label(&e.message);
-                                }
-                            }
-                        }
-                        if self.entries.is_empty() {
-                            ui.weak("No messages yet.");
+                egui::Panel::top("status_log_header").show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(format!(
+                            "{} message(s), {} error(s)",
+                            self.entries.len(),
+                            self.error_count()
+                        ));
+                        if ui.button("Clear").clicked() {
+                            self.entries.clear();
                         }
                     });
+                });
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let err_color = ui.visuals().error_fg_color;
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for e in &self.entries {
+                                match e.level {
+                                    LogLevel::Error => {
+                                        ui.colored_label(err_color, &e.message);
+                                    }
+                                    LogLevel::Info => {
+                                        ui.label(&e.message);
+                                    }
+                                }
+                            }
+                            if self.entries.is_empty() {
+                                ui.weak("No messages yet.");
+                            }
+                        });
+                });
             },
         );
         self.open = self.open && keep_open;
