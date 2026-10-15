@@ -66,6 +66,12 @@ pub struct AtomsTab {
     absorber: usize,
     sites: Vec<SiteRow>,
     status: Option<Result<String, String>>,
+    /// Cache behind the right-column preview: the [`input_key`](Self::input_key)
+    /// snapshot `preview` was generated from. The cell is regenerated only when
+    /// the key changes, not every frame.
+    preview_key: String,
+    /// The feff.inp text Build would write right now (or why it can't).
+    preview: Result<String, String>,
 }
 
 impl Default for AtomsTab {
@@ -92,6 +98,9 @@ impl Default for AtomsTab {
                 z: 0.0,
             }],
             status: None,
+            // Never matches a real key, so the first frame computes the preview.
+            preview_key: String::new(),
+            preview: Ok(String::new()),
         }
     }
 }
@@ -278,15 +287,82 @@ impl AtomsTab {
             }
             None => {}
         }
+
+        // Live preview of exactly what Build would write (same generator), so
+        // the cell can be tuned without round-tripping through the Feff tab.
+        ui.add_space(8.0);
+        ui.strong("feff.inp preview");
+        let key = self.input_key();
+        if key != self.preview_key {
+            self.preview = self.generate().map(|(text, _status)| text);
+            self.preview_key = key;
+        }
+        match &self.preview {
+            Ok(text) => {
+                egui::ScrollArea::both()
+                    .id_salt("feff_inp_preview")
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        // Extend past the narrow column into the horizontal
+                        // scroll instead of wrapping the ATOMS rows.
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        ui.monospace(text);
+                    });
+            }
+            Err(e) => {
+                ui.colored_label(RED, e);
+            }
+        }
         action
     }
 
-    /// Expand the asymmetric unit by the space group, then build the cluster and
-    /// write its `feff.inp` into `feff_inp`.
+    /// Snapshot of every input that shapes the generated feff.inp; the preview
+    /// regenerates only when this changes.
+    fn input_key(&self) -> String {
+        use std::fmt::Write;
+        let mut k = format!(
+            "{}|{:?} {:?} {:?} {:?} {:?} {:?}|{}|{}|{:?}|{}",
+            self.title,
+            self.a,
+            self.b,
+            self.c,
+            self.alpha,
+            self.beta,
+            self.gamma,
+            self.edge.as_str(),
+            self.space_group,
+            self.cluster_size,
+            self.absorber
+        );
+        for s in &self.sites {
+            let _ = write!(k, "|{} {:?} {:?} {:?}", s.element, s.x, s.y, s.z);
+        }
+        k
+    }
+
+    /// Expand the asymmetric unit by the space group, build the cluster, and
+    /// write its `feff.inp` into `feff_inp`. Uses the same [`generate`](Self::generate)
+    /// the preview renders, so Build writes exactly what the preview showed.
     fn build(&mut self, feff_inp: &mut String) -> Option<AtomsAction> {
+        match self.generate() {
+            Ok((text, status)) => {
+                *feff_inp = text;
+                self.status = Some(Ok(status));
+                Some(AtomsAction::BuiltFeffInp)
+            }
+            Err(e) => {
+                self.status = Some(Err(e));
+                None
+            }
+        }
+    }
+
+    /// Generate the feff.inp text plus the one-line build status from the
+    /// current cell — the single generator behind both "Build feff.inp" and
+    /// the live preview.
+    fn generate(&self) -> Result<(String, String), String> {
         if self.sites.is_empty() {
-            self.status = Some(Err("Add at least one site.".to_owned()));
-            return None;
+            return Err("Add at least one site.".to_owned());
         }
         let asym = Crystal {
             lattice: Lattice {
@@ -304,13 +380,9 @@ impl AtomsTab {
                 .collect(),
         };
         // Expand the asymmetric unit to the full cell.
-        let full = match asym.expand(self.space_group) {
-            Ok(f) => f,
-            Err(e) => {
-                self.status = Some(Err(format!("Expand failed: {e}")));
-                return None;
-            }
-        };
+        let full = asym
+            .expand(self.space_group)
+            .map_err(|e| format!("Expand failed: {e}"))?;
         // The chosen absorber is an asymmetric-unit site; expansion reorders the
         // list, so locate its image (same element + wrapped position) in the
         // expanded cell.
@@ -329,25 +401,19 @@ impl AtomsTab {
             })
             .unwrap_or(0);
 
-        match full.cluster(abs_idx, self.cluster_size, self.edge) {
-            Ok(mut cluster) => {
-                cluster.title = self.title.clone();
-                *feff_inp = cluster.to_feff_inp();
-                self.status = Some(Ok(format!(
-                    "SG {} expanded {} site(s) → {} in cell; built feff.inp: {} atoms, {} potentials.",
-                    self.space_group,
-                    self.sites.len(),
-                    full.sites.len(),
-                    cluster.atoms.len(),
-                    cluster.potentials.len()
-                )));
-                Some(AtomsAction::BuiltFeffInp)
-            }
-            Err(e) => {
-                self.status = Some(Err(format!("Build failed: {e}")));
-                None
-            }
-        }
+        let mut cluster = full
+            .cluster(abs_idx, self.cluster_size, self.edge)
+            .map_err(|e| format!("Build failed: {e}"))?;
+        cluster.title = self.title.clone();
+        let status = format!(
+            "SG {} expanded {} site(s) → {} in cell; built feff.inp: {} atoms, {} potentials.",
+            self.space_group,
+            self.sites.len(),
+            full.sites.len(),
+            cluster.atoms.len(),
+            cluster.potentials.len()
+        );
+        Ok((cluster.to_feff_inp(), status))
     }
 }
 
