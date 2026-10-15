@@ -298,6 +298,7 @@ impl IonChamberWindow {
 
         ui.separator();
         egui::Grid::new("ic_params").num_columns(2).show(ui, |ui| {
+            crate::widgets::uniform_num_fields(ui);
             ui.label("energy (eV)");
             ui.add(
                 egui::DragValue::new(&mut self.energy)
@@ -433,6 +434,7 @@ impl PowderWindow {
 
     fn body(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("pw_params").num_columns(2).show(ui, |ui| {
+            crate::widgets::uniform_num_fields(ui);
             ui.label("formula");
             ui.text_edit_singleline(&mut self.formula);
             ui.end_row();

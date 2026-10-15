@@ -253,8 +253,10 @@ impl ReductionUi {
                 // column 1: edge energy + pre-edge / normalization ranges
                 egui::Grid::new("autobk_col1")
                     .num_columns(2)
+                    .min_col_width(crate::widgets::NUM_FIELD_W)
                     .spacing([6.0, 4.0])
                     .show(ui, |ui| {
+                        crate::widgets::uniform_num_fields(ui);
                         ui.label("Eo");
                         ui.horizontal(|ui| {
                             change.refit |= ui.checkbox(&mut self.e0_auto, "auto").changed();
@@ -319,8 +321,10 @@ impl ReductionUi {
                 // column 2: k-range, FT window, spline clamps
                 egui::Grid::new("autobk_col2")
                     .num_columns(2)
+                    .min_col_width(crate::widgets::NUM_FIELD_W)
                     .spacing([6.0, 4.0])
                     .show(ui, |ui| {
+                        crate::widgets::uniform_num_fields(ui);
                         ui.label("kmin");
                         let r = ui.add(
                             egui::DragValue::new(&mut self.kmin)
@@ -394,8 +398,10 @@ impl ReductionUi {
                 // the Feffit panel's grouping.)
                 egui::Grid::new("autobk_col3")
                     .num_columns(2)
+                    .min_col_width(crate::widgets::NUM_FIELD_W)
                     .spacing([6.0, 4.0])
                     .show(ui, |ui| {
+                        crate::widgets::uniform_num_fields(ui);
                         // Reverse-FT R-window (the back-transform peak selection
                         // for the *Q.CHI graph; also the band draggable on *R.CHI).
                         for (label, value, speed, range) in [

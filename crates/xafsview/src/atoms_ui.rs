@@ -128,6 +128,7 @@ impl AtomsTab {
                 egui::Grid::new("atoms_lattice")
                     .striped(true)
                     .show(ui, |ui| {
+                        crate::widgets::uniform_num_fields(ui);
                         ui.label("a");
                         ui.add(
                             egui::DragValue::new(&mut self.a)

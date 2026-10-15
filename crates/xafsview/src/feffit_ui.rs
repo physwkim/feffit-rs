@@ -1494,8 +1494,10 @@ impl FeffitUi {
             ui.strong("Transform");
             egui::Grid::new("feffit_head")
                 .num_columns(4)
+                .min_col_width(crate::widgets::NUM_FIELD_W)
                 .spacing([6.0, 4.0])
                 .show(ui, |ui| {
+                    crate::widgets::uniform_num_fields(ui);
                     ui.label("kmin");
                     ui.add(
                         egui::DragValue::new(&mut self.ft.kmin)

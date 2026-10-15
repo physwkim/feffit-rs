@@ -20,6 +20,19 @@ pub const BROWSE_BTN: Vec2 = Vec2::new(76.0, 22.0);
 /// Amber primary-action fill (Autobk Start / Run / Execute / OK in the originals).
 const PRIMARY_FILL: Color32 = Color32::from_rgb(0x9a, 0x7d, 0x2e);
 
+/// Uniform numeric-field width for the parameter form grids. Qt spin boxes in
+/// a form are equal-width; egui's `DragValue` hugs its text, so a column of
+/// them renders ragged ("3.0" narrower than "14.0"). Doubles as the grids'
+/// `min_col_width` so the label columns line up across side-by-side grids.
+pub const NUM_FIELD_W: f32 = 64.0;
+
+/// Make every `DragValue` in this scope render [`NUM_FIELD_W`] wide instead of
+/// hugging its text (a DragValue's minimum width is `interact_size.x`). Call
+/// at the top of a form grid's closure; the tweak ends with that scope.
+pub fn uniform_num_fields(ui: &mut egui::Ui) {
+    ui.spacing_mut().interact_size.x = NUM_FIELD_W;
+}
+
 /// A fixed-minimum-size plain button, so a row of action buttons is uniform.
 pub fn action(ui: &mut egui::Ui, text: &str, size: Vec2) -> Response {
     ui.add(egui::Button::new(text).min_size(size))
