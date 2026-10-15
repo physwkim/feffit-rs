@@ -67,6 +67,10 @@ pub enum McpRequest {
         args: SetGraphArgs,
         reply: TextReply,
     },
+    SetTab {
+        tab: String,
+        reply: TextReply,
+    },
     RunAutobk {
         reply: TextReply,
     },
@@ -148,6 +152,13 @@ pub struct SetGraphArgs {
     /// Overlay every loaded group's curve for the graph type, not just the
     /// current one (the "Show all groups" checkbox).
     pub show_all_groups: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SetTabArgs {
+    /// Tab by its strip label (case-insensitive): "Folders", "Autobk",
+    /// "Feffit", "Feffit_txt", "Atoms", "Feff", or "About".
+    pub tab: String,
 }
 
 /// Parameters for `set_params`. Every field is optional; only the given ones
@@ -360,6 +371,17 @@ impl XafsMcp {
         Parameters(a): Parameters<SetGraphArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::SetGraph { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "Switch the main window's active tab (Folders, Autobk, Feffit, Feffit_txt, Atoms, Feff, About) — what screenshot then shows."
+    )]
+    async fn set_tab(
+        &self,
+        Parameters(a): Parameters<SetTabArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::SetTab { tab: a.tab, reply })
             .await
     }
 

@@ -455,6 +455,23 @@ impl XafsViewApp {
             mcp::McpRequest::SetGraph { args, reply } => {
                 let _ = reply.send(self.apply_mcp_graph(args));
             }
+            mcp::McpRequest::SetTab { tab, reply } => {
+                let _ = reply.send(
+                    match Tab::ALL
+                        .into_iter()
+                        .find(|t| t.label().eq_ignore_ascii_case(&tab))
+                    {
+                        Some(t) => {
+                            self.tab = t;
+                            Ok(format!("tab = {:?}", t.label()))
+                        }
+                        None => {
+                            let labels: Vec<&str> = Tab::ALL.iter().map(|t| t.label()).collect();
+                            Err(format!("unknown tab {tab:?}; one of {labels:?}"))
+                        }
+                    },
+                );
+            }
             mcp::McpRequest::RunAutobk { reply } => {
                 let errors = self.status.error_count();
                 self.run_reduction();
