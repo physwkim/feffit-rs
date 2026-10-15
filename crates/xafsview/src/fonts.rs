@@ -13,6 +13,11 @@
 //! and compare-toolbar `═` — so DejaVu Sans follows it in the chain for the
 //! symbol blocks.
 //!
+//! Neither vendored font covers CJK, so Korean file and scan names (common in
+//! the 10C data folders) render as tofu; a system CJK face (Noto Sans CJK KR,
+//! NanumGothic, Malgun Gothic, Apple SD Gothic Neo) is loaded at runtime when
+//! present — see [`CJK_CANDIDATES`] for why it is not vendored.
+//!
 //! Installing broad-coverage fonts as the *last* fallbacks in every font family
 //! fills only the glyphs the primary fonts lack — the normal Latin text keeps
 //! Ubuntu-Light's look — and because the fallbacks are registered on the shared
@@ -34,10 +39,38 @@ static NOTO_SANS: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf")
 /// and Noto Sans lack.
 static DEJAVU_SANS: &[u8] = include_bytes!("../assets/fonts/DejaVuSans.ttf");
 
-/// The egui font set plus the vendored fallbacks, appended (not prepended) to
-/// every family: a fallback at the end is consulted only for glyphs the
-/// family's earlier fonts cannot render, so the primary UI font is unchanged
-/// and the fallbacks only fill the gaps.
+/// System fonts with Hangul/CJK coverage, tried in order: `(path, ttc face
+/// index)`. Korean file and scan names render as tofu without one — none of
+/// the vendored fallbacks covers CJK — but a CJK face is 6–20 MB, too heavy
+/// to vendor, so the first readable candidate is loaded from the system at
+/// startup; on a machine without any, the tofu simply remains.
+const CJK_CANDIDATES: &[(&str, u32)] = &[
+    // Debian/Ubuntu fonts-noto-cjk (face 1 = Noto Sans CJK KR).
+    ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
+    // Ubuntu fonts-nanum.
+    ("/usr/share/fonts/truetype/nanum/NanumGothic.ttf", 0),
+    // Windows (Malgun Gothic).
+    ("C:\\Windows\\Fonts\\malgun.ttf", 0),
+    // macOS (Apple SD Gothic Neo).
+    ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
+];
+
+/// Load the first available [`CJK_CANDIDATES`] face.
+fn system_cjk_font() -> Option<egui::FontData> {
+    for &(path, index) in CJK_CANDIDATES {
+        if let Ok(bytes) = std::fs::read(path) {
+            let mut data = egui::FontData::from_owned(bytes);
+            data.index = index;
+            return Some(data);
+        }
+    }
+    None
+}
+
+/// The egui font set plus the vendored fallbacks (and the system CJK face when
+/// one exists), appended (not prepended) to every family: a fallback at the
+/// end is consulted only for glyphs the family's earlier fonts cannot render,
+/// so the primary UI font is unchanged and the fallbacks only fill the gaps.
 fn font_definitions() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -48,10 +81,16 @@ fn font_definitions() -> egui::FontDefinitions {
         "dejavu_sans".to_owned(),
         Arc::new(egui::FontData::from_static(DEJAVU_SANS)),
     );
+    let mut fallbacks = vec!["noto_sans".to_owned(), "dejavu_sans".to_owned()];
+    if let Some(cjk) = system_cjk_font() {
+        fonts
+            .font_data
+            .insert("system_cjk".to_owned(), Arc::new(cjk));
+        fallbacks.push("system_cjk".to_owned());
+    }
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         let list = fonts.families.entry(family).or_default();
-        list.push("noto_sans".to_owned());
-        list.push("dejavu_sans".to_owned());
+        list.extend(fallbacks.iter().cloned());
     }
     fonts
 }
@@ -73,6 +112,25 @@ mod tests {
     /// Every non-ASCII glyph a user-visible string in xafsview or the embedded
     /// rsplot widgets uses must be covered by the installed font chain —
     /// swapping or dropping a fallback font must fail here, not render tofu.
+    /// Hangul paths and scan names must not render as tofu where a system
+    /// CJK face exists; on a machine without one there is nothing to assert.
+    #[test]
+    fn system_cjk_font_covers_hangul_when_present() {
+        let Some(data) = system_cjk_font() else {
+            return;
+        };
+        let font = skrifa::FontRef::from_index(&data.font, data.index).expect("CJK font parses");
+        let needed = "한글김상우측정";
+        let missing: Vec<char> = needed
+            .chars()
+            .filter(|&c| font.charmap().map(c).is_none())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "Hangul glyphs missing from the system CJK face: {missing:?}"
+        );
+    }
+
     #[test]
     fn ui_glyphs_covered_by_font_chain() {
         let defs = font_definitions();
@@ -80,10 +138,12 @@ mod tests {
         let faces: Vec<(String, skrifa::FontRef)> = family
             .iter()
             .map(|name| {
-                let data = &defs.font_data[name].font;
+                let data = &defs.font_data[name];
                 (
                     name.clone(),
-                    skrifa::FontRef::new(data).expect("font data parses"),
+                    // from_index, because the system CJK fallback can be a
+                    // collection (.ttc); a single-face file is index 0.
+                    skrifa::FontRef::from_index(&data.font, data.index).expect("font data parses"),
                 )
             })
             .collect();
