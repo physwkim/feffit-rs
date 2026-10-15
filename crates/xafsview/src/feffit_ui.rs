@@ -1551,21 +1551,21 @@ impl FeffitUi {
                     ui.label("R window");
                     window_combo(ui, "feffit_rwin", &mut self.ft.rwindow);
                     ui.end_row();
+                    // Fit mode (the original's "Fit" dropdown: fit / no fit /
+                    // only FT) — a grid row, so it shares the label column.
+                    ui.label("Fit").on_hover_text(
+                        "Run: No fit = forward model preview; Only FT = transform data; \
+                         Fit = least-squares fit",
+                    );
+                    egui::ComboBox::from_id_salt("feffit_fit_mode")
+                        .selected_text(self.fit_mode.label())
+                        .show_ui(ui, |ui| {
+                            for m in FitMode::ALL {
+                                ui.selectable_value(&mut self.fit_mode, m, m.label());
+                            }
+                        });
+                    ui.end_row();
                 });
-            // Fit mode (the original's "Fit" dropdown: fit / no fit / only FT).
-            ui.horizontal(|ui| {
-                ui.label("Fit").on_hover_text(
-                    "Run: No fit = forward model preview; Only FT = transform data; \
-                     Fit = least-squares fit",
-                );
-                egui::ComboBox::from_id_salt("feffit_fit_mode")
-                    .selected_text(self.fit_mode.label())
-                    .show_ui(ui, |ui| {
-                        for m in FitMode::ALL {
-                            ui.selectable_value(&mut self.fit_mode, m, m.label());
-                        }
-                    });
-            });
         });
 
         // --- Paths (path list + the selected path's specs) -----------------
@@ -1838,8 +1838,11 @@ impl FeffitUi {
         // --- Graph (item / component / all-fits overlay) ------------------
         rsplot::widget::form::group(ui, |ui| {
             ui.strong("Graph");
+            // Shared label column of the two selector rows ("Graph item" is
+            // the widest label).
+            const GRAPH_LABEL_W: f32 = 70.0;
             ui.horizontal(|ui| {
-                ui.label("Graph item");
+                rsplot::widget::form::label(ui, GRAPH_LABEL_W, "Graph item");
                 for (s, lbl) in [
                     (PlotSpace::Q, "Q"),
                     (PlotSpace::R, "R"),
@@ -1857,7 +1860,7 @@ impl FeffitUi {
             // "Component" says what Re/Im/Am/Ph are — components of complex χ.
             if self.space != PlotSpace::K {
                 ui.horizontal(|ui| {
-                    ui.label("Component");
+                    rsplot::widget::form::label(ui, GRAPH_LABEL_W, "Component");
                     for (p, lbl) in [
                         (PlotPart::Re, "Re"),
                         (PlotPart::Im, "Im"),

@@ -2284,7 +2284,7 @@ impl XafsViewApp {
         let n = self.session.groups.len();
         let mut changed = false;
         ui.horizontal(|ui| {
-            ui.label("Group");
+            form::label(ui, INFO_LABEL_W, "Group");
             let current = self.session.current;
             let text = current
                 .and_then(|i| self.session.groups.get(i))
@@ -2507,9 +2507,8 @@ impl XafsViewApp {
                             group_switched = self.current_group_selector(ui);
 
                             // info rows: Title (group label) / Data File / Theory —
-                            // flex rows with a fixed label column (QFormLayout
+                            // form rows with a fixed label column (QFormLayout
                             // look): the field grows with the panel.
-                            const INFO_LABEL_W: f32 = 80.0;
                             ui.horizontal(|ui| {
                                 form::label(ui, INFO_LABEL_W, "Title");
                                 match self.session.current_group_mut() {
@@ -3261,6 +3260,10 @@ fn set_project_folders(folders: &mut Folders, root: &std::path::Path) -> Vec<Str
 /// Label-column width of the Folders form rows ("Sub base folder" is the
 /// widest label).
 const FOLDER_LABEL_W: f32 = 110.0;
+
+/// Label-column width of the Autobk Data box rows (Group / Title / Data File /
+/// Output file / Theory share one aligned column).
+const INFO_LABEL_W: f32 = 80.0;
 
 /// One labelled folder row — fixed label column, a path field filling up to
 /// the trailing Browse button that opens a native folder picker.
