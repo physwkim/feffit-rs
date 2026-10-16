@@ -13,9 +13,9 @@ XAFSView 0.2.0 기준입니다. PLS-II 10C 빔라인에서 측정한 XAFS 데이
   들어 있습니다.
 - **Linux / macOS**: 소스에서 빌드합니다 (Rust 1.95 이상).
 
-  ```sh
-  cargo run -p xafsview --release
-  ```
+    ```sh
+    cargo run -p xafsview --release
+    ```
 
 - FEFF 계산기는 두 가지입니다. **FEFF10**은 프로그램 안에 내장되어 있어 기본값이고,
   **FEFF8L**은 함께 배포되는 외부 실행 파일을 호출합니다. Feff 탭에서 고릅니다.
