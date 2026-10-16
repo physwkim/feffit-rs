@@ -35,7 +35,7 @@ executables via the `FEFF8L_DIR` environment variable or `PATH`.
 ## XAFSView GUI
 
 The `xafsview` crate is a desktop application — [egui](https://github.com/emilk/egui)/eframe
-with the `siplot` GPU plotter — that re-implements the LabVIEW **XAFSView v1.6**
+with the `rsplot` GPU plotter — that re-implements the LabVIEW **XAFSView v1.6**
 EXAFS toolkit on the engines above. The data model lives in `xasdata`, the
 reduction math in `xasproc`, and the fitting math in `feffit`/`feffdat`; this
 binary is the shell that wires them to the UI. The original LabVIEW manual is the
@@ -115,7 +115,7 @@ crates/feffit/         # the whole EXAFS engine as ONE library (formerly 9 crate
   src/xasdata/         # XAS session model: XasGroup, Session/Folders, beamline I/O, batch drivers
   tests/               # parity tests, prefixed by source area (feffdat_*, xasproc_*, lm_*, …)
   scripts/             # larch/scipy reference generators for the reduction parity tests
-crates/xafsview/       # the XAFSView desktop GUI (egui/eframe + siplot)
+crates/xafsview/       # the XAFSView desktop GUI (egui/eframe + rsplot)
   src/app.rs           # app shell: tabs, menu bar, shared plot, window wiring
   src/reduce_ui.rs     # Autobk tab: import + pre-edge/normalize + AUTOBK
   src/feffit_ui.rs     # Feffit tab: path list, variables, fit + report
