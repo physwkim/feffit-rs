@@ -5,6 +5,87 @@ here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/
 the release version tracks the `xafsview` binary. The `feffit` library crate is
 versioned independently.
 
+## [0.2.0] - 2026-10-16
+
+### Added
+
+- **In-situ map window** (Tools › In-situ map, or the Autobk tab's new Analysis
+  group), ported from the BL10C_XAFS PyMca app: a scan series as a 2-D map of
+  RDF |χ(R)| or XANES μ(E) (norm or flat), built from the loaded groups or a
+  legacy series `.dat`, with reference subtraction, click/drag profile
+  extraction with a marker line, one-click **Re-reduce & build**, an
+  OriginPro-ready map export, and **Fit peaks** — PyMca's Specfit "Simple Fit"
+  on the profile (area Gaussians on a linear background, Mariscotti peak
+  search, every FWHM tied to the highest peak's).
+- **Embedded MCP server** (`--mcp [port]` or a Settings toggle; streamable
+  HTTP on 127.0.0.1) for AI-agent control, with load_data (one file or a
+  batch), set_params, run_autobk, run_fit (fit / nofit / only_ft),
+  get_results, screenshot, add_path, select_groups, remove_groups,
+  remove_paths, set_graph, set_tab, set_zoom, deglitch and insitu_map tools.
+- **FEFF10** in-process backend enabled and made the **default** (feff10 ≥
+  0.2.3); FEFF8L stays selectable. The runner normalises the PRINT card so
+  FEFF10 always writes the path files.
+- **Automatic glitch detection**: `xasdata::find_glitches` / `auto_deglitch`
+  (7-point rolling median, MAD-sigma threshold); Edit μ(E) gains **Find**,
+  **Remove** and a batch over the checked groups, plus a "use clicked" button
+  that seeds the remove-point energy from the plot pick.
+- **Plot Data**: a raw scan file type (intensity ratios and bare channels
+  against energy, with an optional clamp of non-positive counts), **Add loaded
+  groups** to overlay in-memory groups, and the shared file browser (Open data
+  and Plot Data) with Up / sub-folder navigation and **Delete** behind a
+  confirmation dialog. Legends past 15 entries start folded to an N-curves
+  header.
+- **Settings and working folders persist** across runs (font size, dark/light,
+  the five folders, window geometry); the MCP toggle stays per-run.
+- Numeric **axis-limits row** behind a Limits toolbar toggle on every plot; all
+  eight FT windows in the window combos; a live **feff.inp preview** on the
+  Atoms tab; "Go to Feffit" on the empty Fit report tab; shift-click range
+  check and move up/down in the Data window; empty-state hints on curveless
+  plots and the Feff editor.
+- `xasdata`: column roles match parenthesised channel names (`Ch1 (I0)`,
+  `Ch2 (IT)`), label lines split on tab or comma before whitespace, and an
+  opt-in **clamp of non-positive monitor counts** (`MonitorPolicy`; a checkbox
+  on the reading-format chooser, off by default).
+
+### Changed
+
+- GUI stack on **egui/eframe 0.36** and **rsplot 0.6** (wgpu 30); the
+  `xafsview` binary needs Rust 1.95. Forms use rsplot's native form helpers at
+  desktop density: group boxes span the panel, numeric fields share one width,
+  primary buttons take the theme accent, and plots follow the dark/light
+  toggle.
+- Layout: status bar at the window bottom, About under a Help menu, the
+  Feffit_txt tab renamed **Fit report** (MCP set_tab keeps the alias), the
+  Atoms tab in two columns, Autobk Start and Feffit Run pinned below their
+  scrolling forms, detached windows scroll with pinned action rows.
+- The AUTOBK reduction runs on the background job; replots diff the declared
+  curves against the retained ones (selecting 66 groups: 243 ms → 26 ms);
+  kʷ·χ graphs autoscale y over the FT k-window; the graph title names the
+  focused group.
+- `feffit()` rejects varied parameters no path references (as UWXAFS feffit
+  does) instead of returning NaN uncertainties.
+- Fonts: DejaVu Sans and the first readable system CJK face join the fallback
+  chain, so arrows, box-drawing glyphs and Hangul paths render.
+
+### Fixed
+
+- Undo restores the group its snapshot came from; the Autobk Output file,
+  manual E0, Edit μ(E) energies and the XANES/MBACK/LCF/PCA inputs re-seed
+  when the current or picked group changes; MBACK's edge guess prefers K, then
+  L3, within 25 eV.
+- KeConvert took a second square root in E→k; "deg of free" shows n_idp −
+  nvarys; "Use fit as guess" adopts the per-path locals; the Feffit Results
+  box names the fitted group; the Feffit batch runs over the session's checked
+  set.
+- Plot Data: peak markers no longer accumulate across rebuilds; the status
+  line and peak table follow every trace-set change; the Feffit overlay
+  honours G_kweight and Same height; only energy-overlapping groups overlay on
+  energy axes; the view resets when the last curve is removed.
+- Legend viewport sizing, overlay-text clipping, status-line truncation, combo
+  popup height, detached-window footers, raw listings that require a scan
+  table, series headers with a trailing tab, and the 10C "Date and Time"
+  header in the measured-time window.
+
 ## [0.1.5] - 2026-07-06
 
 ### Changed
@@ -130,6 +211,7 @@ Earlier releases predate this changelog; see the GitHub release notes.
 
 See the GitHub release notes.
 
+[0.2.0]: https://github.com/physwkim/feffit-rs/compare/0.1.5...0.2.0
 [0.1.5]: https://github.com/physwkim/feffit-rs/compare/0.1.4...0.1.5
 [0.1.4]: https://github.com/physwkim/feffit-rs/compare/0.1.3...0.1.4
 [0.1.3]: https://github.com/physwkim/feffit-rs/compare/0.1.2...0.1.3
