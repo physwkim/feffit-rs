@@ -49,6 +49,8 @@ Path fitting (the Feff tab) needs the FEFF8L `feff8l_*` executables on `PATH` (o
 `FEFF8L_DIR`), as above; data reduction, plotting, and the calculators are
 self-contained.
 
+A short user manual with screenshots (Korean): [`doc/manual-ko.md`](doc/manual-ko.md).
+
 **Tabs** — Autobk (import + pre-edge/normalize + AUTOBK), Feffit (path fitting),
 Feffit_txt (fit report), Atoms (crystal → `feff.inp`), Feff (edit `feff.inp` /
 run FEFF8L), Folders (working directories), About.
