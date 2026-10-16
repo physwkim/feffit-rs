@@ -37,7 +37,7 @@ env:
   # would otherwise fetch from the same release (which only catches a tampered
   # .a, not an upstream that swaps both). An upstream asset swap then fails the
   # build instead of being trusted. Update this when the feff10 dep is bumped.
-  FEFF10_LIB_SHA256: dc6fe339d55275de70c7326a7c0890a10d2aba2143333f79cfda93278db7a410
+  FEFF10_LIB_SHA256: f722301e41e8ddb660d0038e170b441424ac694ee4b971d742bcf666bc6187cf
 
 jobs:
   checks:

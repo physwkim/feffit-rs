@@ -72,7 +72,7 @@ jobs:
           # release (which only catches a tampered .a, not an upstream that
           # swaps both). An upstream asset swap then fails the build instead of
           # being trusted. Update this when the feff10 dependency is bumped.
-          FEFF10_LIB_SHA256: b575f0a92aaa8862b24a7326210a1c8fb42faed24cd2338bf67b547f8c8354a7
+          FEFF10_LIB_SHA256: 1eb28ccd35ff4214b4ebbbb97f669efb27cdc31f882ebe65f5d6098040b4d4c5
         run: |
           export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:$PATH"
           cargo build --release --target x86_64-pc-windows-gnu -p xafsview
@@ -169,7 +169,7 @@ jobs:
       - name: Test workspace (GNU target)
         shell: msys2 {0}
         env:
-          FEFF10_LIB_SHA256: b575f0a92aaa8862b24a7326210a1c8fb42faed24cd2338bf67b547f8c8354a7
+          FEFF10_LIB_SHA256: 1eb28ccd35ff4214b4ebbbb97f669efb27cdc31f882ebe65f5d6098040b4d4c5
           FEFF8L_DIR: ${{ github.workspace }}/crates/xafsview/assets/feff8l/win64
         run: |
           export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:$PATH"

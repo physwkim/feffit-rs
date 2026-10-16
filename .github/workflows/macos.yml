@@ -32,7 +32,7 @@ env:
   # Linux/Windows gates. macOS is the one platform where the FEFF10 prebuilt
   # actually works, so the workspace links it here. Update when the feff10 dep is
   # bumped.
-  FEFF10_LIB_SHA256: 321b6d1f65c106152f7af2c1744a4247499b0d65c917a593e64dbb95f3893be5
+  FEFF10_LIB_SHA256: 121a02de0337892508e86eeface4e0e7accba4cef751733131e748007bde37da
 
 jobs:
   checks:
