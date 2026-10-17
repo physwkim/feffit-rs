@@ -1515,8 +1515,9 @@ impl XafsViewApp {
     /// background pair μ0(E) → `<stem>e.bkg` and μ0−μ in k → `<stem>k.bkg`, into
     /// the Autobk folder (falling back to the data folder, then the source
     /// folder). The single-group path passes the editable "Output file" stem; the
-    /// Multiple-autobk path passes each group's own label so the outputs stay
-    /// distinct. Returns the two χ paths (for the status line).
+    /// batch paths (Multiple autobk, the Open-data window's Autobk Start) pass
+    /// each group's own label so the outputs stay distinct. Returns the two χ
+    /// paths (for the status line).
     fn write_chi_files(
         &self,
         g: &XasGroup,
@@ -1863,6 +1864,8 @@ impl XafsViewApp {
         let built = groups.len();
         let mut written = 0usize;
         let mut write_failed = 0usize;
+        let mut chi_saved = 0usize;
+        let mut chi_failed = 0usize;
         for (group, index) in groups {
             let input = group.filename.clone();
             match self.write_xmu_output(
@@ -1879,6 +1882,19 @@ impl XafsViewApp {
                         .detail_error(format!("{}: .xmu not written: {e}", group.label));
                 }
             }
+            // A group the job also reduced gets its AUTOBK outputs (<label>k.chi,
+            // <label>r.chi, <label>e.bkg, <label>k.bkg) like the Autobk tab's
+            // Start would — the manual promises them from this button too.
+            if group.k.as_deref().is_some_and(|k| !k.is_empty()) && group.r.is_some() {
+                match self.write_chi_files(&group, &group.label) {
+                    Ok(_) => chi_saved += 1,
+                    Err(e) => {
+                        chi_failed += 1;
+                        self.status
+                            .detail_error(format!("{}: χ write failed: {e}", group.label));
+                    }
+                }
+            }
             self.session.add_group(group);
         }
         if built > 0 {
@@ -1890,12 +1906,17 @@ impl XafsViewApp {
             self.plot_data.mark_dirty();
             self.replot_active_tab();
         }
+        let chi_note = if reduced > 0 {
+            format!(", saved {chi_saved} χ pair(s) ({chi_failed} not written)")
+        } else {
+            String::new()
+        };
         let msg = format!(
             "Batch μ(E): built {built}, wrote {written} .xmu \
              ({write_failed} not written), build errors {build_errors}, \
-             unreadable {read_errors}, AUTOBK reduced {reduced}."
+             unreadable {read_errors}, AUTOBK reduced {reduced}{chi_note}."
         );
-        let failed = write_failed + build_errors + read_errors > 0;
+        let failed = write_failed + chi_failed + build_errors + read_errors > 0;
         // Answer a parked MCP batch load_data with the same summary.
         if let Some(reply) = self.mcp_job_reply.take() {
             let _ = reply.send(if failed {
