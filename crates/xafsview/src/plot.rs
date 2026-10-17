@@ -56,8 +56,8 @@ pub fn new_plot1d(render_state: &RenderState, id: PlotId) -> Plot1D {
 /// labels read clearly *independent of the egui panel theme* (rsplot otherwise
 /// derives the axis colour from `ui.visuals()`, which would render light axes
 /// on a light canvas under a dark UI theme). `light = false` is the cohesive
-/// dark canvas used as the house default for every plot; `true` is the white
-/// data area with dark axes selected by Plot Data's "Change BG color" toggle.
+/// dark canvas under the dark UI theme; `true` is the white data area with dark
+/// axes under the light theme (Plot Data's "Change BG color" swaps the two).
 pub fn set_theme(plot: &mut Plot1D, light: bool) {
     // `(chrome, data, fg, grid)`: the surround behind the axes, the data area
     // itself, the axis/frame/text colour, and the grid lines. `grid` is passed

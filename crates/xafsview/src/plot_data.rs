@@ -172,8 +172,14 @@ pub struct PlotDataWindow {
     show_average: bool,
     /// "Average (5 points)": display-smooth each curve (5-point moving average).
     smooth5: bool,
-    /// "Change BG color": dark plot background (the original's black/white swap).
-    dark_bg: bool,
+    /// "Change BG color": swap the canvas against the UI theme — a white canvas
+    /// under the dark theme, a dark one under the light theme (the original's
+    /// black/white swap, relative to the theme rather than absolute).
+    swap_bg: bool,
+    /// The egui theme observed on the last paint (`true` = dark). Written only
+    /// by [`show_window`](Self::show_window) from the context, so the canvas
+    /// follows the Settings theme toggle like every other plot.
+    theme_dark: bool,
     peak_lo: f64,
     peak_hi: f64,
     /// Which feature the Multiple peaks catching window locates.
@@ -239,9 +245,9 @@ impl PlotDataWindow {
             same_height: false,
             show_average: false,
             smooth5: false,
-            // Dark by default, matching the cohesive dark canvas every other
-            // plot uses (the checkbox still flips to the white "Change BG" mode).
-            dark_bg: true,
+            swap_bg: false,
+            // Corrected from the context on the first paint (dirty anyway).
+            theme_dark: true,
             peak_lo: 0.0,
             peak_hi: 0.0,
             peak_mode: PeakMode::Max,
@@ -276,6 +282,12 @@ impl PlotDataWindow {
     /// it draws.
     fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    /// Whether the canvas is dark: the UI theme, flipped by "Change BG color".
+    /// The one rule behind both the canvas theme and the curve palette.
+    fn canvas_dark(&self) -> bool {
+        self.theme_dark != self.swap_bg
     }
 
     /// Open (show) the detached Plot Data window. Called from the main window's
@@ -340,6 +352,13 @@ impl PlotDataWindow {
     pub fn show_window(&mut self, ctx: &egui::Context, groups: &[XasGroup]) {
         if !self.open {
             return;
+        }
+        // Follow the UI theme: a Settings toggle re-themes the canvas (and
+        // re-palettes the curves) on this frame's rebuild.
+        let theme_dark = ctx.global_style().visuals.dark_mode;
+        if self.theme_dark != theme_dark {
+            self.theme_dark = theme_dark;
+            self.dirty = true;
         }
         // A separate local so the closure can borrow `self` mutably; the window's
         // own close button flips it and we copy it back afterwards.
@@ -458,7 +477,11 @@ impl PlotDataWindow {
             self.dirty = true;
         }
         if ui
-            .checkbox(&mut self.dark_bg, "Change BG color (dark)")
+            .checkbox(&mut self.swap_bg, "Change BG color")
+            .on_hover_text(
+                "Swap the canvas against the UI theme: white under the dark theme, \
+                 dark under the light theme",
+            )
             .changed()
         {
             self.dirty = true;
@@ -1017,9 +1040,9 @@ impl PlotDataWindow {
     /// 5-point smoothing, and "same height" applied, before any stacking offset.
     /// One source of truth for both drawing and saving.
     fn built_traces(&self) -> Vec<(String, Vec<f64>, Vec<f64>, Color32)> {
-        // Bright curves on the dark canvas; the muted tab10 on the white "Change
-        // BG" canvas, where the bright palette would wash out.
-        let palette = if self.dark_bg {
+        // Bright curves on a dark canvas; the muted tab10 on a white one, where
+        // the bright palette would wash out.
+        let palette = if self.canvas_dark() {
             crate::plot::PALETTE
         } else {
             crate::plot::PALETTE_LIGHT
@@ -1132,13 +1155,13 @@ impl PlotDataWindow {
     /// labels and canvas theme, then draw a sent Feffit fit (when shown), the
     /// loaded files (stacked, optionally 5-point-smoothed / same-height), an
     /// optional average, and peak markers. A legend-highlighted curve is drawn
-    /// emphasized. The canvas follows the "Change BG color" toggle (dark house
-    /// canvas by default).
+    /// emphasized. The canvas follows the UI theme, flipped by the "Change BG
+    /// color" toggle.
     fn rebuild(&mut self) {
         // Everything read from `self` is captured before mutating `self.plot`, so
         // the draw calls below borrow only `self.plot` (and `self.overlay`, a
         // disjoint field).
-        let dark = self.dark_bg;
+        let dark = self.canvas_dark();
         // `fg` is the average-overlay colour, kept legible against the chosen
         // background.
         let fg = if dark {
