@@ -3037,9 +3037,9 @@ dependencies = [
 
 [[package]]
 name = "rsplot"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61de969db346036cb757c5449fa91df89ff83212cb4bcd8d1e350b8df3939ee0"
+checksum = "22ae15d540e19ab623a1d5a3ee519b32d8ac20f6dce3948eb0bdac7becbb5971"
 dependencies = [
  "arboard",
  "bytemuck",

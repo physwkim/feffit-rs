@@ -40,7 +40,7 @@ eframe = { version = "0.36", default-features = false, features = [
     "persistence",
 ] }
 egui = "0.36"
-rsplot = "0.6.0"
+rsplot = "0.6.1"
 # Native file/folder dialogs (Folders tab, Open/Save). Matches rsplot's rfd pin.
 rfd = "0.17"
 
