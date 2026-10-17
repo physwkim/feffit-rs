@@ -21,10 +21,14 @@ pub fn normalize(group: &mut XasGroup, params: &PreEdgeParams) {
     let out = pre_edge(&group.energy, &group.mu, params);
     group.e0 = Some(out.e0);
     group.edge_step = Some(out.edge_step);
-    // Record the (resolved, e0-relative) pre-edge range used, for the output
-    // provenance header — the same kind of provenance as e0/edge_step above.
+    // Record the (resolved, e0-relative) pre-edge and normalization ranges and
+    // the polynomial order used — provenance for the output header, and what a
+    // UI shows for the ranges while they are on "auto".
     group.pre1 = Some(out.pre1);
     group.pre2 = Some(out.pre2);
+    group.norm1 = Some(out.norm1);
+    group.norm2 = Some(out.norm2);
+    group.nnorm = Some(out.nnorm);
     group.pre_edge = Some(out.pre_edge);
     group.post_edge = Some(out.post_edge);
     group.norm = Some(out.norm);

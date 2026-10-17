@@ -356,15 +356,47 @@ impl ReductionUi {
         }
     }
 
+    /// Leaving "auto pre/norm": start the manual ranges (and Nnorm) at the
+    /// values the reduction resolved for the current group, not at whatever the
+    /// fields last held, so the first manual Run reproduces the auto result and
+    /// the user edits from there. Values the group has not recorded stay as is.
+    fn seed_manual_ranges(&mut self, found: Option<&feffit::xasdata::XasGroup>) {
+        if self.pre_norm_auto {
+            return;
+        }
+        let Some(g) = found else {
+            return;
+        };
+        for (field, value) in [
+            (&mut self.pre1, g.pre1),
+            (&mut self.pre2, g.pre2),
+            (&mut self.norm1, g.norm1),
+            (&mut self.norm2, g.norm2),
+        ] {
+            if let Some(v) = value {
+                *field = v;
+            }
+        }
+        if let Some(n) = g.nnorm {
+            self.nnorm = n;
+        }
+    }
+
     /// Render the "Autobk parameters" grid plus the graph-type selector,
-    /// mirroring the original 3-column layout. `detected_e0` is the current
-    /// group's E0 as found by the reduction: shown in the disabled field while
-    /// "auto" is on and copied into the manual field when "auto" is unchecked.
+    /// mirroring the original 3-column layout. `found` is the current group as
+    /// the reduction left it: its E0, pre/norm ranges and Nnorm are shown in the
+    /// disabled fields while the matching "auto" is on, and copied into the
+    /// manual fields when that "auto" is unchecked.
     /// The returned [`ControlsChange`] reports whether a reduction parameter's
     /// edit just finished (`refit`, re-run Autobk) and/or only the graph type
     /// changed (`replot`, a cheap re-render).
-    pub fn controls(&mut self, ui: &mut egui::Ui, detected_e0: Option<f64>) -> ControlsChange {
+    pub fn controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        found: Option<&feffit::xasdata::XasGroup>,
+    ) -> ControlsChange {
         let mut change = ControlsChange::default();
+        let detected_e0 = found.and_then(|g| g.e0);
         rsplot::widget::form::group(ui, |ui| {
             ui.strong("Autobk parameters");
             ui.horizontal_top(|ui| {
@@ -408,35 +440,54 @@ impl ReductionUi {
                         ui.end_row();
 
                         ui.label("ranges");
-                        change.refit |= ui
+                        if ui
                             .checkbox(&mut self.pre_norm_auto, "auto pre/norm")
-                            .changed();
+                            .changed()
+                        {
+                            self.seed_manual_ranges(found);
+                            change.refit = true;
+                        }
                         ui.end_row();
 
+                        // While "auto" is on the disabled fields show the ranges
+                        // the reduction resolved for this group (not the manual
+                        // values, which would be stale); without a reduction yet
+                        // they fall back to the manual values.
                         let manual = !self.pre_norm_auto;
-                        for (label, value) in [
-                            ("Pre1", &mut self.pre1),
-                            ("Pre2", &mut self.pre2),
-                            ("Nor1", &mut self.norm1),
-                            ("Nor2", &mut self.norm2),
+                        for (label, value, resolved) in [
+                            ("Pre1", &mut self.pre1, found.and_then(|g| g.pre1)),
+                            ("Pre2", &mut self.pre2, found.and_then(|g| g.pre2)),
+                            ("Nor1", &mut self.norm1, found.and_then(|g| g.norm1)),
+                            ("Nor2", &mut self.norm2, found.and_then(|g| g.norm2)),
                         ] {
                             ui.label(label);
-                            let r = ui.add_enabled(
-                                manual,
-                                egui::DragValue::new(value).speed(1.0).suffix(" eV"),
-                            );
-                            change.refit |= r.drag_stopped() || r.lost_focus();
+                            if manual {
+                                let r =
+                                    ui.add(egui::DragValue::new(value).speed(1.0).suffix(" eV"));
+                                change.refit |= r.drag_stopped() || r.lost_focus();
+                            } else {
+                                let mut shown = resolved.unwrap_or(*value);
+                                ui.add_enabled(
+                                    false,
+                                    egui::DragValue::new(&mut shown).speed(1.0).suffix(" eV"),
+                                );
+                            }
                             ui.end_row();
                         }
 
                         ui.label("Nnorm");
-                        let r = ui
-                            .add_enabled(manual, egui::DragValue::new(&mut self.nnorm).range(0..=3))
-                            .on_hover_text(
-                                "post-edge normalization order (0=const … 3=cubic); \
-                                 XAFSView uses 2",
-                            );
-                        change.refit |= r.drag_stopped() || r.lost_focus();
+                        let hover = "post-edge normalization order (0=const … 3=cubic); \
+                                     XAFSView uses 2";
+                        if manual {
+                            let r = ui
+                                .add(egui::DragValue::new(&mut self.nnorm).range(0..=3))
+                                .on_hover_text(hover);
+                            change.refit |= r.drag_stopped() || r.lost_focus();
+                        } else {
+                            let mut shown = found.and_then(|g| g.nnorm).unwrap_or(self.nnorm);
+                            ui.add_enabled(false, egui::DragValue::new(&mut shown).range(0..=3))
+                                .on_hover_text(hover);
+                        }
                         ui.end_row();
                     });
 
@@ -585,6 +636,35 @@ fn window_name(w: Window) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unchecking "auto pre/norm" seeds the manual ranges and Nnorm from what the
+    /// reduction resolved for the group; checking it back, or a group without a
+    /// reduction, leaves the fields alone.
+    #[test]
+    fn manual_ranges_seed_from_the_resolved_values() {
+        let mut g = feffit::xasdata::XasGroup::from_mu("g", vec![], vec![]);
+        let mut r = ReductionUi::default();
+        let before = (r.pre1, r.pre2, r.norm1, r.norm2, r.nnorm);
+        // No reduction recorded on the group: nothing to seed from.
+        r.pre_norm_auto = false;
+        r.seed_manual_ranges(Some(&g));
+        assert_eq!((r.pre1, r.pre2, r.norm1, r.norm2, r.nnorm), before);
+        (g.pre1, g.pre2, g.norm1, g.norm2, g.nnorm) =
+            (Some(-150.0), Some(-40.0), Some(120.0), Some(600.0), Some(1));
+        r.seed_manual_ranges(Some(&g));
+        assert_eq!(
+            (r.pre1, r.pre2, r.norm1, r.norm2, r.nnorm),
+            (-150.0, -40.0, 120.0, 600.0, 1)
+        );
+        // Going back to "auto" keeps the manual values for the next time.
+        r.pre_norm_auto = true;
+        g.pre1 = Some(-99.0);
+        r.seed_manual_ranges(Some(&g));
+        assert_eq!(r.pre1, -150.0);
+        r.pre_norm_auto = false;
+        r.seed_manual_ranges(None);
+        assert_eq!(r.pre1, -150.0);
+    }
 
     /// Unchecking "auto" seeds the manual E0 from the detected value; checking
     /// it back, or a group without a detected E0, leaves the field alone.

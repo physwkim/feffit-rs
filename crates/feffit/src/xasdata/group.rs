@@ -109,6 +109,16 @@ pub struct XasGroup {
     pub pre1: Option<f64>,
     #[serde(default)]
     pub pre2: Option<f64>,
+    /// Normalization fit range `[norm1, norm2]` (eV, relative to `e0`) and
+    /// post-edge polynomial order `nnorm` used by the last normalize — the
+    /// values the auto rules resolved when the caller gave none, so a UI can
+    /// show what "auto" actually did. `None` until normalize has run.
+    #[serde(default)]
+    pub norm1: Option<f64>,
+    #[serde(default)]
+    pub norm2: Option<f64>,
+    #[serde(default)]
+    pub nnorm: Option<usize>,
     /// `rbkg` (Å) used by the last AUTOBK, recorded for the output provenance
     /// header. `None` until AUTOBK has run.
     #[serde(default)]
@@ -155,6 +165,9 @@ impl XasGroup {
         // `source_header` is kept — it describes the source file, not a stage.
         self.pre1 = None;
         self.pre2 = None;
+        self.norm1 = None;
+        self.norm2 = None;
+        self.nnorm = None;
         self.rbkg = None;
         self.pre_edge = None;
         self.post_edge = None;
