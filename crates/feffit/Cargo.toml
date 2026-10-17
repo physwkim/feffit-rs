@@ -32,3 +32,17 @@ feff10 = { version = "0.2.3", optional = true }
 default = ["feff10"]
 feff10 = ["dep:feff10"]
 spacegroup = ["dep:crystallographic-group"]
+
+[dev-dependencies]
+# Test protocol (`--list`, `--exact`, `--skip`, nextest's per-test processes)
+# for the one harness-less test binary below.
+libtest-mimic = "0.8.2"
+
+# The FEFF10 end-to-end tests own their `main`: the stage-worker hook has to be
+# the first statement of the *test binary's* `main`, because feff10 re-executes
+# the current executable as a single-stage worker on Windows (libtest's `main`
+# would run the whole suite in that child instead of the stage).
+[[test]]
+name = "feff10_pipeline"
+harness = false
+required-features = ["feff10"]

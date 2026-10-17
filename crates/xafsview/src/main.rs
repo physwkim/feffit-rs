@@ -61,6 +61,12 @@ fn mcp_port_arg() -> Option<u16> {
 }
 
 fn main() -> eframe::Result {
+    // First, before anything else: FEFF10 runs each stage in a fresh process,
+    // and where it cannot fork (Windows; macOS once AppKit is up) it re-executes
+    // this very binary as a single-stage worker. In that worker this call runs
+    // the stage and exits; in the GUI process it just arms the hook.
+    feffit::feffrun::init_worker();
+
     let mcp_port = mcp_port_arg();
     let icon =
         eframe::icon_data::from_png_bytes(ICON_PNG).expect("bundled icon.png is a valid PNG");

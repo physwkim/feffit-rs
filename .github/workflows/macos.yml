@@ -60,12 +60,11 @@ jobs:
 
       - name: Test (nextest)
         # FEFF8L_DIR points the feff8l pipeline test at the vendored darwin64 set
-        # (x86_64, run via Rosetta). The FEFF10 end-to-end test is excluded to keep
-        # all three platform gates uniform — it stays in the tree as the
-        # upstream-tracking case, only excluded from CI runs.
+        # (x86_64, run via Rosetta). The FEFF10 end-to-end tests run as on the
+        # other two gates (see rust.yml).
         env:
           FEFF8L_DIR: ${{ github.workspace }}/crates/xafsview/assets/feff8l/darwin64
-        run: cargo nextest run --workspace -E 'not test(feff10_pipeline_generates_and_parses_cu_paths)'
+        run: cargo nextest run --workspace
 
       - name: Doctests
         run: cargo test --doc --workspace

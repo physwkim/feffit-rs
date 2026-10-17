@@ -28,15 +28,28 @@
 //!
 //! - [`Feff8l`] — the FEFF8L subprocess pipeline described above; always
 //!   available, needs the external `feff8l_*` executables.
-//! - [`Feff10`] — the in-process FEFF10 pipeline from the `feff10` crate,
-//!   gated behind the **`feff10`** cargo feature, which is **on by default**.
-//!   It runs the FEFF10 Fortran in-process (one forked process per stage), so
-//!   it needs no external executables. Build with `--no-default-features` to
-//!   drop it and keep only [`Feff8l`].
+//! - [`Feff10`] — the FEFF10 pipeline from the `feff10` crate, gated behind
+//!   the **`feff10`** cargo feature, which is **on by default**. The FEFF10
+//!   Fortran is compiled into the host binary, so it needs no external
+//!   executables; each stage still runs in a fresh process (see
+//!   [`init_worker`]). Build with `--no-default-features` to drop it and keep
+//!   only [`Feff8l`].
 //!
 //! Pick one directly, or select at run time with [`Backend`] — whose
 //! [`Default`] is [`Backend::Feff10`] in the default build. Both return a
 //! [`RunOutput`] and write `feffNNNN.dat` into the working directory.
+//!
+//! # The FEFF10 stage worker
+//!
+//! FEFF's Fortran modules keep allocated state between stages, so [`Feff10`]
+//! gives every stage its own process: a `fork()` on Unix, and otherwise a
+//! re-execution of the host executable as a single-stage worker — always on
+//! Windows, and on macOS once AppKit is initialized (a forked GUI process
+//! aborts in the Objective-C runtime). The re-execution only works if the
+//! host recognises when it *is* the worker, which is what [`init_worker`]
+//! does: every executable that runs [`Feff10`] must call it as the first
+//! statement of `main()`. Without it the pipeline fails on those hosts with
+//! a configuration error before any stage runs.
 //!
 //! # Locating the executables
 //!
@@ -249,16 +262,33 @@ impl Feff8l {
     }
 }
 
-/// An in-process FEFF10 runner backed by the `feff10` crate.
+/// A FEFF10 runner backed by the `feff10` crate.
 ///
 /// Available only with the **`feff10`** cargo feature. Unlike [`Feff8l`],
 /// FEFF10 needs no external executables: the `feff10` crate compiles the FEFF10
-/// Fortran into this binary and runs each stage in a forked child, writing the
-/// same `feffNNNN.dat` files into the working directory.
+/// Fortran into this binary and runs each stage in a fresh process (a fork, or
+/// a re-execution of this binary as a stage worker), writing the same
+/// `feffNNNN.dat` files into the working directory. The host executable must
+/// call [`init_worker`] first thing in `main()`; see the module docs.
 #[cfg(feature = "feff10")]
 #[derive(Debug, Clone, Default)]
 pub struct Feff10 {
     _priv: (),
+}
+
+/// Install the FEFF10 stage-worker hook. Call it as the first statement of
+/// `main()` in every executable that runs [`Feff10`], before any GUI, logging
+/// or other application set-up.
+///
+/// When the current process was spawned by [`Feff10`] as a stage worker, this
+/// runs that single FEFF stage and exits — it never returns. Otherwise it
+/// records that the hook is installed and returns at once. Without the hook,
+/// [`Feff10`] fails with a configuration error wherever a fork is not an
+/// option (Windows; macOS with AppKit initialized). A no-op without the
+/// `feff10` feature.
+pub fn init_worker() {
+    #[cfg(feature = "feff10")]
+    feff10::worker::init();
 }
 
 #[cfg(feature = "feff10")]

@@ -129,13 +129,16 @@ jobs:
 
   # Exercise the test suite on Windows, built for x86_64-pc-windows-gnu -- the
   # same GNU/MinGW toolchain the release exe uses (MSVC cannot link libgfortran).
-  # Like the Linux gate (rust.yml), this excludes the in-process FEFF10 e2e test
-  # feff10_pipeline_generates_and_parses_cu_paths: that prebuilt aborts on Windows
-  # (`Fortran runtime error: Attempting to allocate already allocated variable
-  # 'lrstat'`, upstream Ameyanagi/feff10-rs#1). Instead FEFF8L_DIR points the
-  # feff8l pipeline test at the vendored win64 binaries, so the *default* backend
-  # is what gets proven on Windows. Independent of `build` (no `needs:`), so a red
-  # test never blocks the release zip. Runs on the same events as `build`.
+  # This is the one gate where FEFF10 cannot fork: feff10 re-executes the test
+  # binary as a single-stage worker, which is exactly what the shipped exe has
+  # to do, so the FEFF10 end-to-end tests (feffit's harness-less `feff10_pipeline`
+  # binary and xafsview's stage-worker test) are the point of this job. They
+  # used to be skipped while feff10 ran all stages in one process and aborted
+  # here with `allocate already allocated variable 'lrstat'`
+  # (Ameyanagi/feff10-rs#1); feff10 0.2.3 moved to a process per stage.
+  # FEFF8L_DIR points the feff8l pipeline test at the vendored win64 binaries.
+  # Independent of `build` (no `needs:`), so a red test never blocks the release
+  # zip. Runs on the same events as `build`.
   test:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -160,12 +163,12 @@ jobs:
       # Same PATH/pin as the build step: the test binaries link feff10-sys ->
       # libgfortran under /mingw64, and feff10-sys fetches the prebuilt
       # libfeff10-windows-x86_64.a (verified against this hash) on first build.
-      # FEFF8L_DIR points the feff8l pipeline test at the vendored win64 exes;
-      # the broken feff10 e2e test is skipped (see the job comment above).
-      # --nocapture surfaces that test's "RAN feff8l pipeline: N feffNNNN.dat"
-      # stderr line (and, if it ever regressed, its "SKIP" line), so the log
-      # proves feff8l actually ran on Windows rather than self-skipping — which
-      # would otherwise still count as a green pass.
+      # FEFF8L_DIR points the feff8l pipeline test at the vendored win64 exes.
+      # --nocapture surfaces the "RAN feff8l pipeline: N feffNNNN.dat" and
+      # "RAN feff10 pipeline ..." stderr lines (and, if feff8l ever regressed,
+      # its "SKIP" line), so the log proves both backends actually ran on
+      # Windows rather than self-skipping — which would otherwise still count
+      # as a green pass.
       - name: Test workspace (GNU target)
         shell: msys2 {0}
         env:
@@ -173,4 +176,4 @@ jobs:
           FEFF8L_DIR: ${{ github.workspace }}/crates/xafsview/assets/feff8l/win64
         run: |
           export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:$PATH"
-          cargo test --workspace --target x86_64-pc-windows-gnu -- --nocapture --skip feff10_pipeline_generates_and_parses_cu_paths
+          cargo test --workspace --target x86_64-pc-windows-gnu -- --nocapture
