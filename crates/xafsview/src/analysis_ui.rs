@@ -51,6 +51,24 @@ fn group_checkboxes(ui: &mut egui::Ui, groups: &[XasGroup], sel: &mut [bool]) ->
     changed
 }
 
+/// The index of the normalized group labelled `label` — what the selector
+/// combos and checkboxes offer (MCP picks by label).
+fn normalized_index(groups: &[XasGroup], label: &str) -> Result<usize, String> {
+    groups
+        .iter()
+        .position(|g| g.label == label && g.norm.is_some())
+        .ok_or_else(|| format!("no normalized group {label:?}"))
+}
+
+/// The MCP form of the array toggle: "norm" → false, "flat" → true.
+fn parse_array(name: &str) -> Result<bool, String> {
+    match name.to_ascii_lowercase().as_str() {
+        "norm" => Ok(false),
+        "flat" => Ok(true),
+        other => Err(format!("unknown array {other:?}; norm or flat")),
+    }
+}
+
 /// The "normalized vs flattened" array toggle, shared by both windows.
 fn array_toggle(ui: &mut egui::Ui, use_flat: &mut bool) -> bool {
     let mut changed = false;
@@ -174,25 +192,7 @@ impl LcfWindow {
                     }
                 }
             });
-        // A newly picked target: the previous target's fit no longer describes
-        // what is shown, and the fit range is reseeded from the new span (keyed
-        // to the picked index, not a one-shot flag — a Pt-seeded range kept
-        // across a switch to a Mn target has no overlap with it).
-        if self.seeded_for != self.target {
-            self.seeded_for = self.target;
-            self.result = None;
-            self.error = None;
-            self.dirty = true;
-            if let Some((e, _)) = self
-                .target
-                .and_then(|i| groups.get(i))
-                .and_then(|g| array_xy(g, self.use_flat))
-                && e.len() >= 2
-            {
-                self.emin = e[0];
-                self.emax = e[e.len() - 1];
-            }
-        }
+        self.reseed(groups);
 
         if array_toggle(ui, &mut self.use_flat) {
             self.dirty = true;
@@ -224,6 +224,96 @@ impl LcfWindow {
         if let Some(e) = &self.error {
             ui.colored_label(RED, e);
         }
+    }
+
+    /// A newly picked target: the previous target's fit no longer describes
+    /// what is shown, and the fit range is reseeded from the new span (keyed
+    /// to the picked index, not a one-shot flag — a Pt-seeded range kept
+    /// across a switch to a Mn target has no overlap with it).
+    fn reseed(&mut self, groups: &[XasGroup]) {
+        if self.seeded_for == self.target {
+            return;
+        }
+        self.seeded_for = self.target;
+        self.result = None;
+        self.error = None;
+        self.dirty = true;
+        if let Some((e, _)) = self
+            .target
+            .and_then(|i| groups.get(i))
+            .and_then(|g| array_xy(g, self.use_flat))
+            && e.len() >= 2
+        {
+            self.emin = e[0];
+            self.emax = e[e.len() - 1];
+        }
+    }
+
+    /// MCP `lcf`: the controls in their on-screen order (target → reseed →
+    /// array → E range → standards → Run LCF), then the Weights table.
+    pub fn apply_mcp(
+        &mut self,
+        groups: &[XasGroup],
+        a: &crate::mcp::LcfArgs,
+    ) -> Result<String, String> {
+        self.open = true;
+        self.components.resize(groups.len(), false);
+        if let Some(label) = &a.target {
+            self.target = Some(normalized_index(groups, label)?);
+        }
+        self.reseed(groups);
+        if let Some(arr) = &a.array {
+            self.use_flat = parse_array(arr)?;
+            self.dirty = true;
+        }
+        if let Some(v) = a.emin {
+            self.emin = v;
+        }
+        if let Some(v) = a.emax {
+            self.emax = v;
+        }
+        if let Some(labels) = &a.standards {
+            let picked = labels
+                .iter()
+                .map(|l| normalized_index(groups, l))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.components.iter_mut().for_each(|on| *on = false);
+            for i in picked {
+                self.components[i] = true;
+            }
+            self.dirty = true;
+        }
+        if a.run.unwrap_or(true) {
+            if self.target.is_none() || self.selected_components(groups).len() < 2 {
+                return Err("Pick a target and ≥2 standards.".to_owned());
+            }
+            self.run(groups);
+            if let Some(e) = &self.error {
+                return Err(e.clone());
+            }
+        }
+        let mut out = vec![format!(
+            "target {} ({}), E range [{:.1}, {:.1}] eV, standards {}",
+            self.target
+                .and_then(|i| groups.get(i))
+                .map_or("none", |g| g.label.as_str()),
+            if self.use_flat { "flat" } else { "norm" },
+            self.emin,
+            self.emax,
+            self.selected_components(groups).len()
+        )];
+        if let Some(r) = &self.result {
+            for (name, w) in &r.weights {
+                out.push(format!("  {name} {w:.4}"));
+            }
+            out.push(format!(
+                "sum {:.4}, R-factor {:.6}, reduced χ² {:.6}",
+                r.total, r.rfactor, r.redchi
+            ));
+        } else {
+            out.push("no fit".to_owned());
+        }
+        Ok(out.join("\n"))
     }
 
     /// Component group indices that are checked and not the target.
@@ -445,27 +535,7 @@ impl PcaWindow {
         ui.heading("PCA");
         ui.label("Decompose a training set; reconstruct an unknown.");
 
-        // Seed the E range from the first checked training spectrum (before any
-        // is checked, from the first normalized group so the fields are not
-        // blank), and reseed when a different group takes that role — a range
-        // seeded once from an unrelated first group (Pt) made every training
-        // set at another edge (Mn) fail with "no overlap".
-        let seed_from = self.training.iter().position(|on| *on).or_else(|| {
-            groups
-                .iter()
-                .position(|g| array_xy(g, self.use_flat).is_some())
-        });
-        if seed_from.is_some()
-            && self.seeded_for != seed_from
-            && let Some((e, _)) = seed_from
-                .and_then(|i| groups.get(i))
-                .and_then(|g| array_xy(g, self.use_flat))
-            && e.len() >= 2
-        {
-            self.emin = e[0];
-            self.emax = e[e.len() - 1];
-            self.seeded_for = seed_from;
-        }
+        self.reseed(groups);
 
         if array_toggle(ui, &mut self.use_flat) {
             self.dirty = true;
@@ -521,6 +591,138 @@ impl PcaWindow {
         if let Some(e) = &self.error {
             ui.colored_label(RED, e);
         }
+    }
+
+    /// Seed the E range from the first checked training spectrum (before any
+    /// is checked, from the first normalized group so the fields are not
+    /// blank), and reseed when a different group takes that role — a range
+    /// seeded once from an unrelated first group (Pt) made every training
+    /// set at another edge (Mn) fail with "no overlap".
+    fn reseed(&mut self, groups: &[XasGroup]) {
+        let seed_from = self.training.iter().position(|on| *on).or_else(|| {
+            groups
+                .iter()
+                .position(|g| array_xy(g, self.use_flat).is_some())
+        });
+        if seed_from.is_some()
+            && self.seeded_for != seed_from
+            && let Some((e, _)) = seed_from
+                .and_then(|i| groups.get(i))
+                .and_then(|g| array_xy(g, self.use_flat))
+            && e.len() >= 2
+        {
+            self.emin = e[0];
+            self.emax = e[e.len() - 1];
+            self.seeded_for = seed_from;
+        }
+    }
+
+    /// MCP `pca`: the controls in their on-screen order (training set →
+    /// reseed → array → E range → Train, or components / unknown → Fit
+    /// unknown), then the scree table or the reconstruction.
+    pub fn apply_mcp(
+        &mut self,
+        groups: &[XasGroup],
+        a: &crate::mcp::PcaArgs,
+    ) -> Result<String, String> {
+        self.open = true;
+        self.training.resize(groups.len(), false);
+        if let Some(labels) = &a.training {
+            let picked = labels
+                .iter()
+                .map(|l| normalized_index(groups, l))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.training.iter_mut().for_each(|on| *on = false);
+            for i in picked {
+                self.training[i] = true;
+            }
+            self.dirty = true;
+        }
+        self.reseed(groups);
+        if let Some(arr) = &a.array {
+            self.use_flat = parse_array(arr)?;
+            self.dirty = true;
+        }
+        if let Some(v) = a.emin {
+            self.emin = v;
+        }
+        if let Some(v) = a.emax {
+            self.emax = v;
+        }
+        if let Some(label) = &a.unknown {
+            self.target = Some(normalized_index(groups, label)?);
+        }
+        if let Some(n) = a.ncomps {
+            let maxc = self
+                .trained
+                .as_ref()
+                .map_or(1, |t| t.model.components.len().max(1));
+            if !(1..=maxc).contains(&n) {
+                return Err(format!("ncomps {n} outside 1..={maxc}"));
+            }
+            self.ncomps = n;
+        }
+        let ntrain = self.training.iter().filter(|b| **b).count();
+        match a.action.as_deref().map(str::to_ascii_lowercase).as_deref() {
+            None => {}
+            Some("train") => {
+                if ntrain < 2 {
+                    return Err("Select ≥2 training spectra.".to_owned());
+                }
+                self.train(groups);
+            }
+            Some("fit") => {
+                if self.trained.is_none() {
+                    return Err("Train first.".to_owned());
+                }
+                if self.target.is_none() {
+                    return Err("Pick an unknown.".to_owned());
+                }
+                self.fit_unknown(groups);
+            }
+            Some(other) => return Err(format!("unknown action {other:?}; train or fit")),
+        }
+        if let Some(e) = &self.error {
+            return Err(e.clone());
+        }
+        let mut out = vec![format!(
+            "training {ntrain} ({}), E range [{:.1}, {:.1}] eV",
+            if self.use_flat { "flat" } else { "norm" },
+            self.emin,
+            self.emax
+        )];
+        match &self.trained {
+            None => out.push("not trained".to_owned()),
+            Some(t) => {
+                out.push(format!(
+                    "suggested significant components: {}; components {}",
+                    t.model.nsig, self.ncomps
+                ));
+                for (i, v) in t.model.variances.iter().take(8).enumerate() {
+                    out.push(format!(
+                        "  PC{} variance {v:.5} IND {:.4e}",
+                        i + 1,
+                        t.model.ind.get(i).copied().unwrap_or(0.0)
+                    ));
+                }
+            }
+        }
+        if let Some(r) = &self.reco {
+            let n = r.ydat.len();
+            let rms = (r
+                .ydat
+                .iter()
+                .zip(&r.yfit)
+                .map(|(d, f)| (d - f) * (d - f))
+                .sum::<f64>()
+                / n.max(1) as f64)
+                .sqrt();
+            out.push(format!(
+                "reconstruction of {}: {n} points, rms residual {rms:.5}",
+                r.label
+            ));
+        }
+        Ok(out.join("\n"))
     }
 
     fn train(&mut self, groups: &[XasGroup]) {

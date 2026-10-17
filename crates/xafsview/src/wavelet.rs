@@ -203,6 +203,39 @@ impl WaveletWindow {
         }
     }
 
+    /// MCP `wavelet`: the parameter widgets, range-checked like the widgets,
+    /// then the window opens for the result the app computes.
+    pub fn apply_mcp(&mut self, a: &crate::mcp::WaveletArgs) -> Result<(), String> {
+        fn check<T: PartialOrd + std::fmt::Display + Copy>(
+            v: Option<T>,
+            lo: T,
+            hi: T,
+            name: &str,
+        ) -> Result<Option<T>, String> {
+            match v {
+                Some(x) if x < lo || x > hi => Err(format!("{name} {x} outside {lo}..={hi}")),
+                other => Ok(other),
+            }
+        }
+        if let Some(v) = check(a.kweight, 0, 3, "kweight")? {
+            self.kweight = v;
+        }
+        if let Some(v) = check(a.rmin, 0.1, 4.0, "rmin")? {
+            self.rmin = v;
+        }
+        if let Some(v) = check(a.rmax, 1.0, 10.0, "rmax")? {
+            self.rmax = v;
+        }
+        if let Some(v) = check(a.nr, 32, 512, "nr")? {
+            self.nr = v;
+        }
+        if let Some(v) = check(a.bandwidth, 0.2, 8.0, "bandwidth")? {
+            self.bandwidth = v;
+        }
+        self.open = true;
+        Ok(())
+    }
+
     /// The last result serialized as CSV (see [`WaveletTransform::to_csv`]), or
     /// `None` when nothing has been computed yet. The app calls this to fill the
     /// Export-CSV save dialog.

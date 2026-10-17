@@ -190,22 +190,7 @@ impl MbackWindow {
                 }
             });
 
-        // A newly picked spectrum: the previous spectrum's result no longer
-        // describes what is shown, and the element / edge are re-guessed from
-        // the new e0 (keyed to the picked index, not a one-shot flag — a Mn
-        // seed kept across a switch to Pt ran MBACK with the wrong f″).
-        if self.seeded_for != self.target {
-            self.seeded_for = self.target;
-            self.result = None;
-            self.error = None;
-            self.dirty = true;
-            if let Some(e0) = self.target.and_then(|i| groups.get(i)).and_then(|g| g.e0)
-                && let Some((z, edge)) = guess_element_edge(&self.db, e0)
-            {
-                self.z = z;
-                self.edge = edge;
-            }
-        }
+        self.reseed(groups);
 
         ui.separator();
         ui.horizontal(|ui| {
@@ -238,6 +223,90 @@ impl MbackWindow {
         if let Some(e) = &self.error {
             ui.colored_label(RED, e);
         }
+    }
+
+    /// A newly picked spectrum: the previous spectrum's result no longer
+    /// describes what is shown, and the element / edge are re-guessed from
+    /// the new e0 (keyed to the picked index, not a one-shot flag — a Mn
+    /// seed kept across a switch to Pt ran MBACK with the wrong f″).
+    fn reseed(&mut self, groups: &[XasGroup]) {
+        if self.seeded_for == self.target {
+            return;
+        }
+        self.seeded_for = self.target;
+        self.result = None;
+        self.error = None;
+        self.dirty = true;
+        if let Some(e0) = self.target.and_then(|i| groups.get(i)).and_then(|g| g.e0)
+            && let Some((z, edge)) = guess_element_edge(&self.db, e0)
+        {
+            self.z = z;
+            self.edge = edge;
+        }
+    }
+
+    /// MCP `mback`: the controls in their on-screen order (spectrum pick →
+    /// reseed → Z / edge → Run MBACK), then the Edge step table.
+    pub fn apply_mcp(
+        &mut self,
+        groups: &[XasGroup],
+        a: &crate::mcp::MbackArgs,
+    ) -> Result<String, String> {
+        self.open = true;
+        if let Some(label) = &a.spectrum {
+            let idx = groups
+                .iter()
+                .position(|g| g.label == *label && !g.mu.is_empty())
+                .ok_or_else(|| format!("no group {label:?} with μ(E)"))?;
+            self.target = Some(idx);
+        }
+        self.reseed(groups);
+        if let Some(z) = a.z {
+            if !(1..=98).contains(&z) {
+                return Err(format!("z {z} outside 1..=98"));
+            }
+            self.z = z;
+        }
+        if let Some(e) = &a.edge {
+            self.edge = match e.to_ascii_uppercase().as_str() {
+                "K" => EdgeSel::K,
+                "L1" => EdgeSel::L1,
+                "L2" => EdgeSel::L2,
+                "L3" => EdgeSel::L3,
+                other => return Err(format!("unknown edge {other:?}; one of K, L1, L2, L3")),
+            };
+        }
+        let sym = self
+            .db
+            .symbol(&self.z.to_string())
+            .unwrap_or("?")
+            .to_owned();
+        let target = self
+            .target
+            .and_then(|i| groups.get(i))
+            .map(|g| g.label.clone());
+        if a.run.unwrap_or(true) {
+            if target.is_none() {
+                return Err("Pick a spectrum with μ(E).".to_owned());
+            }
+            self.run(groups);
+            if let Some(e) = &self.error {
+                return Err(e.clone());
+            }
+        }
+        let steps = match &self.result {
+            Some(r) => format!(
+                "MBACK edge step {:.5}, polynomial edge step {:.5}",
+                r.edge_step, r.edge_step_poly
+            ),
+            None => "no result".to_owned(),
+        };
+        Ok(format!(
+            "spectrum {}, Z {} ({sym}) {} edge: {steps}",
+            target.as_deref().unwrap_or("none"),
+            self.z,
+            self.edge.label()
+        ))
     }
 
     fn run(&mut self, groups: &[XasGroup]) {

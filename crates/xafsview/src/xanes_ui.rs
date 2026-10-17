@@ -159,27 +159,7 @@ impl XanesWindow {
             self.dirty = true;
         }
 
-        // A newly picked spectrum: seed the region + arctangent center from its
-        // span / e0, drop the previous spectrum's cursors, and replot. Keyed to
-        // the picked index rather than a one-shot flag: a Pt-seeded region kept
-        // across a switch to a Mn group made every cursor search silently find
-        // nothing, and the plot kept the old curve until some other edit.
-        if self.seeded_for != self.target
-            && let Some((e, _)) = self.target_xy(groups)
-            && e.len() >= 2
-        {
-            self.rlo = e[0];
-            self.rhi = e[e.len() - 1];
-            let e0 = self
-                .target
-                .and_then(|i| groups.get(i))
-                .and_then(|g| g.e0)
-                .unwrap_or((e[0] + e[e.len() - 1]) * 0.5);
-            self.center = e0;
-            self.readouts.clear();
-            self.seeded_for = self.target;
-            self.dirty = true;
-        }
+        self.reseed(groups);
 
         ui.separator();
         ui.strong("Region (eV)");
@@ -269,6 +249,143 @@ impl XanesWindow {
         }
     }
 
+    /// A newly picked spectrum: seed the region + arctangent center from its
+    /// span / e0, drop the previous spectrum's cursors, and replot. Keyed to
+    /// the picked index rather than a one-shot flag: a Pt-seeded region kept
+    /// across a switch to a Mn group made every cursor search silently find
+    /// nothing, and the plot kept the old curve until some other edit.
+    fn reseed(&mut self, groups: &[XasGroup]) {
+        if self.seeded_for != self.target
+            && let Some((e, _)) = self.target_xy(groups)
+            && e.len() >= 2
+        {
+            self.rlo = e[0];
+            self.rhi = e[e.len() - 1];
+            let e0 = self
+                .target
+                .and_then(|i| groups.get(i))
+                .and_then(|g| g.e0)
+                .unwrap_or((e[0] + e[e.len() - 1]) * 0.5);
+            self.center = e0;
+            self.readouts.clear();
+            self.seeded_for = self.target;
+            self.dirty = true;
+        }
+    }
+
+    /// MCP `xanes`: the controls in their on-screen order (spectrum → array →
+    /// reseed → region → arctangent → a cursor button), then the cursor table
+    /// and the arctangent centroid as text.
+    pub fn apply_mcp(
+        &mut self,
+        groups: &[XasGroup],
+        a: &crate::mcp::XanesArgs,
+    ) -> Result<String, String> {
+        self.open = true;
+        if let Some(label) = &a.spectrum {
+            let idx = groups
+                .iter()
+                .position(|g| g.label == *label && g.norm.is_some())
+                .ok_or_else(|| format!("no normalized group {label:?}"))?;
+            self.target = Some(idx);
+        }
+        if let Some(arr) = &a.array {
+            self.use_flat = match arr.to_ascii_lowercase().as_str() {
+                "norm" => false,
+                "flat" => true,
+                other => return Err(format!("unknown array {other:?}; norm or flat")),
+            };
+            self.dirty = true;
+        }
+        self.reseed(groups);
+        if let Some(v) = a.rlo {
+            self.rlo = v;
+        }
+        if let Some(v) = a.rhi {
+            self.rhi = v;
+        }
+        if let Some(on) = a.arctan {
+            self.arc_on = on;
+            self.dirty = true;
+        }
+        for (v, slot) in [
+            (a.amp, &mut self.amp),
+            (a.center, &mut self.center),
+            (a.slope, &mut self.slope),
+            (a.intercept, &mut self.intercept),
+        ] {
+            if let Some(v) = v {
+                *slot = v;
+                self.dirty = true;
+            }
+        }
+        if let Some(s) = a.sigma {
+            if !(0.05..=500.0).contains(&s) {
+                return Err(format!("sigma {s} outside 0.05..=500"));
+            }
+            self.sigma = s;
+            self.dirty = true;
+        }
+        if let Some(cursor) = &a.cursor {
+            if self.target_xy(groups).is_none() {
+                return Err("Pick a normalized spectrum.".to_owned());
+            }
+            let before = self.readouts.len();
+            let name = cursor.to_ascii_lowercase();
+            match name.as_str() {
+                "peak" => self.cursor_peak(groups, true),
+                "valley" => self.cursor_peak(groups, false),
+                "half_step" => self.cursor_half_step(groups),
+                "half_max" => self.cursor_half_max(groups),
+                "x_at_y" => {
+                    self.yval = a.y.ok_or("x_at_y needs `y`")?;
+                    self.cursor_x_at_y(groups);
+                }
+                "clear" => {
+                    self.readouts.clear();
+                    self.dirty = true;
+                }
+                other => {
+                    return Err(format!(
+                        "unknown cursor {other:?}; one of peak, valley, half_step, half_max, x_at_y, clear"
+                    ));
+                }
+            }
+            if name != "clear" && self.readouts.len() == before {
+                return Err(format!(
+                    "{name}: nothing found in [{:.1}, {:.1}] eV",
+                    self.rlo, self.rhi
+                ));
+            }
+        }
+        let mut out = vec![format!(
+            "spectrum {} ({}), region [{:.1}, {:.1}] eV",
+            self.target
+                .and_then(|i| groups.get(i))
+                .map_or("none", |g| g.label.as_str()),
+            if self.use_flat { "flat" } else { "norm" },
+            self.rlo,
+            self.rhi
+        )];
+        if self.arc_on
+            && let Some((e, y)) = self.target_xy(groups)
+        {
+            let (_, peaks) = self.arc_overlay(e, y);
+            out.push(match self.region_centroid(e, &peaks) {
+                Some(c) => format!("arctangent on, peak centroid {c:.3} eV"),
+                None => "arctangent on, no centroid".to_owned(),
+            });
+        }
+        out.push(format!("cursors: {}", self.readouts.len()));
+        for r in &self.readouts {
+            out.push(match r.y {
+                Some(v) => format!("  {} {:.3} eV {v:.4}", r.label, r.x),
+                None => format!("  {} {:.3} eV", r.label, r.x),
+            });
+        }
+        Ok(out.join("\n"))
+    }
+
     fn push_readout(&mut self, label: String, x: f64, y: Option<f64>) {
         const CAP: usize = 12;
         self.readouts.push(Readout { label, x, y });
@@ -343,6 +460,21 @@ impl XanesWindow {
         (baseline, peaks)
     }
 
+    /// The centroid of the baseline-subtracted `peaks` over the region
+    /// [rlo, rhi]; `None` when the region holds no points.
+    fn region_centroid(&self, e: &[f64], peaks: &[f64]) -> Option<f64> {
+        let i_lo = e.iter().position(|&x| x >= self.rlo).unwrap_or(0);
+        let i_hi = e
+            .iter()
+            .rposition(|&x| x <= self.rhi)
+            .unwrap_or(e.len() - 1);
+        if i_hi >= i_lo {
+            centroid(&e[i_lo..=i_hi], &peaks[i_lo..=i_hi])
+        } else {
+            None
+        }
+    }
+
     fn rebuild_plot(&mut self, groups: &[XasGroup]) {
         self.plot.clear();
         self.arc_centroid = None;
@@ -359,17 +491,9 @@ impl XanesWindow {
             self.plot
                 .add_curve_with_legend(e, &baseline, ORANGE, "baseline");
             self.plot.add_curve_with_legend(e, &peaks, GREEN, "peaks");
-            // centroid over the region.
-            let i_lo = e.iter().position(|&x| x >= self.rlo).unwrap_or(0);
-            let i_hi = e
-                .iter()
-                .rposition(|&x| x <= self.rhi)
-                .unwrap_or(e.len() - 1);
-            if i_hi >= i_lo {
-                self.arc_centroid = centroid(&e[i_lo..=i_hi], &peaks[i_lo..=i_hi]);
-                if let Some(c) = self.arc_centroid {
-                    self.plot.add_x_marker(c, PURPLE);
-                }
+            self.arc_centroid = self.region_centroid(e, &peaks);
+            if let Some(c) = self.arc_centroid {
+                self.plot.add_x_marker(c, PURPLE);
             }
         }
 

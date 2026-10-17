@@ -114,6 +114,38 @@ pub enum McpRequest {
         args: FeffitGraphArgs,
         reply: TextReply,
     },
+    Xanes {
+        args: Box<XanesArgs>,
+        reply: TextReply,
+    },
+    Mback {
+        args: MbackArgs,
+        reply: TextReply,
+    },
+    Lcf {
+        args: Box<LcfArgs>,
+        reply: TextReply,
+    },
+    Pca {
+        args: Box<PcaArgs>,
+        reply: TextReply,
+    },
+    Wavelet {
+        args: WaveletArgs,
+        reply: TextReply,
+    },
+    EditMu {
+        args: Box<EditMuArgs>,
+        reply: TextReply,
+    },
+    BuildFeffInp {
+        args: Box<AtomsArgs>,
+        reply: TextReply,
+    },
+    RunFeff {
+        backend: Option<String>,
+        reply: TextReply,
+    },
     Screenshot {
         reply: PngReply,
     },
@@ -411,6 +443,173 @@ pub struct FeffitGraphArgs {
     pub part: Option<String>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct XanesArgs {
+    /// The spectrum to work on, by group label (must be normalized).
+    pub spectrum: Option<String>,
+    /// Which array: "norm" or "flat".
+    pub array: Option<String>,
+    /// Region low bound (eV) for the peak / valley / half-max searches.
+    pub rlo: Option<f64>,
+    /// Region high bound (eV).
+    pub rhi: Option<f64>,
+    /// A cursor button: "peak", "valley", "half_step", "half_max", "x_at_y"
+    /// (needs `y`), or "clear" (Clear cursors). Applied after the settings.
+    pub cursor: Option<String>,
+    /// The target level for the "x_at_y" cursor.
+    pub y: Option<f64>,
+    /// "Arctangent subtraction" on / off.
+    pub arctan: Option<bool>,
+    /// Arctangent amplitude.
+    pub amp: Option<f64>,
+    /// Arctangent center (eV).
+    pub center: Option<f64>,
+    /// Arctangent sigma (eV, 0.05–500).
+    pub sigma: Option<f64>,
+    /// Linear-baseline slope.
+    pub slope: Option<f64>,
+    /// Linear-baseline intercept.
+    pub intercept: Option<f64>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct MbackArgs {
+    /// The spectrum to normalize, by group label (needs μ(E)). Picking one
+    /// re-guesses the element and edge from its E₀, like the combo.
+    pub spectrum: Option<String>,
+    /// Element atomic number Z (1–98), after the guess.
+    pub z: Option<u16>,
+    /// Edge: "K", "L1", "L2" or "L3", after the guess.
+    pub edge: Option<String>,
+    /// Press "Run MBACK" (default true).
+    pub run: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct LcfArgs {
+    /// The target spectrum, by group label (must be normalized). Picking one
+    /// reseeds the E range from its span.
+    pub target: Option<String>,
+    /// The standards to check, by group label — exactly this set (others are
+    /// unchecked).
+    pub standards: Option<Vec<String>>,
+    /// Which array: "norm" or "flat".
+    pub array: Option<String>,
+    /// Fit range low bound (eV).
+    pub emin: Option<f64>,
+    /// Fit range high bound (eV).
+    pub emax: Option<f64>,
+    /// Press "Run LCF" (default true).
+    pub run: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PcaArgs {
+    /// The training spectra to check, by group label — exactly this set.
+    pub training: Option<Vec<String>>,
+    /// Which array: "norm" or "flat".
+    pub array: Option<String>,
+    /// E range low bound (eV).
+    pub emin: Option<f64>,
+    /// E range high bound (eV).
+    pub emax: Option<f64>,
+    /// "train" (Train on the checked set) or "fit" (Fit unknown: needs a
+    /// trained model and `unknown`). Applied after the settings.
+    pub action: Option<String>,
+    /// Number of components for the reconstruction (1 … trained components).
+    pub ncomps: Option<usize>,
+    /// The unknown spectrum to reconstruct, by group label.
+    pub unknown: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct WaveletArgs {
+    /// k-weight (0–3).
+    pub kweight: Option<i32>,
+    /// R min (Å, 0.1–4).
+    pub rmin: Option<f64>,
+    /// R max (Å, 1–10).
+    pub rmax: Option<f64>,
+    /// R samples (32–512).
+    pub nr: Option<usize>,
+    /// Morlet σ (0.2–8).
+    pub bandwidth: Option<f64>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct EditMuArgs {
+    /// The Edit μ(E) button, on the current group: "find" (mark automatic
+    /// glitch candidates), "remove_auto" (remove them), "remove_point"
+    /// (`energy`), "remove_range" (`side` above / below / between, `e1`, `e2`),
+    /// "trim" (`lo`, `hi`), "smooth" (`sigma`, `form`), or "undo". The batch
+    /// "Remove in N checked groups" is the `deglitch` tool with apply = true.
+    pub action: String,
+    /// Spike threshold in robust σ for find / remove_auto (default 10).
+    pub nsig: Option<f64>,
+    /// Energy (eV) of the point to remove (remove_point).
+    pub energy: Option<f64>,
+    /// Range side for remove_range: "above", "below" or "between" (default above).
+    pub side: Option<String>,
+    /// Reference energy (eV) for remove_range.
+    pub e1: Option<f64>,
+    /// Second reference energy (eV) for remove_range "between".
+    pub e2: Option<f64>,
+    /// Trim window low bound (eV).
+    pub lo: Option<f64>,
+    /// Trim window high bound (eV).
+    pub hi: Option<f64>,
+    /// Smoothing width σ (eV, default 1).
+    pub sigma: Option<f64>,
+    /// Smoothing line shape: "lorentzian" (default) or "gaussian".
+    pub form: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SiteArg {
+    /// Element symbol.
+    pub element: String,
+    /// Fractional x.
+    pub x: f64,
+    /// Fractional y.
+    pub y: f64,
+    /// Fractional z.
+    pub z: f64,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct AtomsArgs {
+    /// TITLE for the feff.inp.
+    pub title: Option<String>,
+    /// Lattice a (Å).
+    pub a: Option<f64>,
+    /// Lattice b (Å).
+    pub b: Option<f64>,
+    /// Lattice c (Å).
+    pub c: Option<f64>,
+    /// Lattice α (°).
+    pub alpha: Option<f64>,
+    /// Lattice β (°).
+    pub beta: Option<f64>,
+    /// Lattice γ (°).
+    pub gamma: Option<f64>,
+    /// Absorption edge: "K", "L1", "L2" or "L3".
+    pub edge: Option<String>,
+    /// International space-group number (1–230; 1 = P1, no expansion).
+    pub space_group: Option<u32>,
+    /// Cluster radius (Å, 1–12).
+    pub cluster_size: Option<f64>,
+    /// Index of the absorber among `sites` (0-based).
+    pub absorber: Option<usize>,
+    /// The asymmetric unit — replaces the site table when given.
+    pub sites: Option<Vec<SiteArg>>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct RunFeffArgs {
+    /// FEFF backend: "feff10" (in-process, default) or "feff8l" (external).
+    pub backend: Option<String>,
+}
+
 /// The per-connection MCP handler: forwards each tool call to the egui thread
 /// and awaits the oneshot. Cheap to clone (a channel sender + an egui context).
 #[derive(Clone)]
@@ -699,6 +898,106 @@ impl XafsMcp {
             .await
     }
 
+    #[tool(
+        description = "Drive the XANES tools window (opens it): pick the spectrum / array / region, the arctangent-subtraction settings, and press a cursor button (peak, valley, half_step, half_max, x_at_y, clear). Returns the cursor table and the arctangent centroid."
+    )]
+    async fn xanes(
+        &self,
+        Parameters(a): Parameters<XanesArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Xanes {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Drive the MBACK / NEXAFS normalization window (opens it): pick the spectrum, element Z and edge, and run MBACK. Returns the MBACK and polynomial edge steps."
+    )]
+    async fn mback(
+        &self,
+        Parameters(a): Parameters<MbackArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Mback { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "Drive the LCF window (opens it): pick the target, the standards, the array and the E range, and run the linear-combination fit. Returns the weights, their sum, the R-factor and reduced χ²."
+    )]
+    async fn lcf(&self, Parameters(a): Parameters<LcfArgs>) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Lcf {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Drive the PCA window (opens it): pick the training set, the array and the E range, then action \"train\" (returns the suggested component count and the scree table) or \"fit\" (reconstruct `unknown` with `ncomps` components)."
+    )]
+    async fn pca(&self, Parameters(a): Parameters<PcaArgs>) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Pca {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Set the wavelet window's parameters (k-weight, R range, R samples, Morlet σ) and press Compute on the current group's χ(k); opens the window with the |W(k,R)| map."
+    )]
+    async fn wavelet(
+        &self,
+        Parameters(a): Parameters<WaveletArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Wavelet { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "Press an Edit μ(E) button on the current group: find / remove_auto (automatic glitches at `nsig` σ), remove_point (`energy`), remove_range (`side`, `e1`, `e2`), trim (`lo`, `hi`), smooth (`sigma`, `form`), or undo. Re-run run_autobk after an edit."
+    )]
+    async fn edit_mu(
+        &self,
+        Parameters(a): Parameters<EditMuArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::EditMu {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Set the Atoms tab's cell (lattice, edge, space group, cluster size, absorber, sites — only the given fields change) and press Build feff.inp; the Feff tab then holds the input. Returns the build status."
+    )]
+    async fn build_feff_inp(
+        &self,
+        Parameters(a): Parameters<AtomsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::BuildFeffInp {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Press Run FEFF on the Feff tab's feff.inp with the chosen backend (feff10 in-process by default, or feff8l) and wait for it; returns the work folder and the feffNNNN.dat files written."
+    )]
+    async fn run_feff(
+        &self,
+        Parameters(a): Parameters<RunFeffArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::RunFeff {
+            backend: a.backend,
+            reply,
+        })
+        .await
+    }
+
     #[tool(description = "Capture a screenshot of the XAFSView main window as a PNG image.")]
     async fn screenshot(&self) -> Result<CallToolResult, ErrorData> {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -723,7 +1022,7 @@ impl XafsMcp {
 
 #[tool_handler(
     name = "xafsview",
-    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot shows the main window. open_window / close_window / set_theme / plot_data / feffit_graph drive the pop-up windows and the UI without the mouse."
+    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot shows the main window. open_window / close_window / set_theme / plot_data / feffit_graph / xanes / mback / lcf / pca / wavelet / edit_mu / build_feff_inp / run_feff drive the pop-up windows and the tabs without the mouse."
 )]
 impl ServerHandler for XafsMcp {}
 

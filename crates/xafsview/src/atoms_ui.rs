@@ -357,6 +357,72 @@ impl AtomsTab {
         }
     }
 
+    /// MCP `build_feff_inp`: the given cell fields (the rest keep their
+    /// values), then Build feff.inp. Returns the build status line.
+    pub fn apply_mcp(
+        &mut self,
+        a: &crate::mcp::AtomsArgs,
+        feff_inp: &mut String,
+    ) -> Result<String, String> {
+        if let Some(t) = &a.title {
+            self.title = t.clone();
+        }
+        for (v, slot) in [
+            (a.a, &mut self.a),
+            (a.b, &mut self.b),
+            (a.c, &mut self.c),
+            (a.alpha, &mut self.alpha),
+            (a.beta, &mut self.beta),
+            (a.gamma, &mut self.gamma),
+        ] {
+            if let Some(v) = v {
+                *slot = v;
+            }
+        }
+        if let Some(e) = &a.edge {
+            self.edge = Edge::from_str_ci(e)
+                .ok_or_else(|| format!("unknown edge {e:?}; one of K, L1, L2, L3"))?;
+        }
+        if let Some(sg) = a.space_group {
+            if !(1..=230).contains(&sg) {
+                return Err(format!("space_group {sg} outside 1..=230"));
+            }
+            self.space_group = sg;
+        }
+        if let Some(r) = a.cluster_size {
+            if !(1.0..=12.0).contains(&r) {
+                return Err(format!("cluster_size {r} outside 1..=12"));
+            }
+            self.cluster_size = r;
+        }
+        if let Some(sites) = &a.sites {
+            self.sites = sites
+                .iter()
+                .map(|s| SiteRow {
+                    element: s.element.clone(),
+                    x: s.x,
+                    y: s.y,
+                    z: s.z,
+                })
+                .collect();
+        }
+        if let Some(i) = a.absorber {
+            if i >= self.sites.len() {
+                return Err(format!(
+                    "absorber {i} outside the {} site(s)",
+                    self.sites.len()
+                ));
+            }
+            self.absorber = i;
+        }
+        self.build(feff_inp);
+        match &self.status {
+            Some(Ok(s)) => Ok(s.clone()),
+            Some(Err(e)) => Err(e.clone()),
+            None => Err("build did not run".to_owned()),
+        }
+    }
+
     /// Generate the feff.inp text plus the one-line build status from the
     /// current cell — the single generator behind both "Build feff.inp" and
     /// the live preview.
@@ -676,6 +742,51 @@ impl FeffTab {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// MCP `run_feff`: the backend selector, then Run FEFF — refused like the
+    /// disabled button while a run is in flight or the input is empty.
+    pub fn mcp_start(
+        &mut self,
+        backend: Option<&str>,
+        feff_inp: &str,
+        work_dir: Option<&Path>,
+    ) -> Result<(), String> {
+        if let Some(b) = backend {
+            self.backend = match b.to_ascii_lowercase().as_str() {
+                "feff10" => BackendSel::Feff10,
+                "feff8l" => BackendSel::Feff8l,
+                other => return Err(format!("unknown backend {other:?}; feff10 or feff8l")),
+            };
+        }
+        self.poll();
+        if self.running {
+            return Err("FEFF is already running.".to_owned());
+        }
+        if feff_inp.trim().is_empty() {
+            return Err("feff.inp is empty — build_feff_inp or Load one first.".to_owned());
+        }
+        self.start_run(feff_inp, work_dir);
+        Ok(())
+    }
+
+    /// The outcome of the run `mcp_start` began, once it has finished: the
+    /// status line's text. `None` while it is still running.
+    pub fn mcp_poll(&mut self) -> Option<Result<String, String>> {
+        self.poll();
+        if self.running {
+            return None;
+        }
+        Some(match &self.last {
+            Some(Ok(s)) => Ok(format!(
+                "Ran OK in {} — {} feffNNNN.dat: {}",
+                s.workdir.display(),
+                s.dat_names.len(),
+                s.dat_names.join(", ")
+            )),
+            Some(Err(e)) => Err(format!("Run failed: {e}")),
+            None => Err("No run yet.".to_owned()),
+        })
     }
 
     /// Drain a finished background run, if any.

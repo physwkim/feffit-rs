@@ -215,6 +215,9 @@ pub struct XafsViewApp {
     /// the job's finisher ([`finish_feffit`](Self::finish_feffit) /
     /// [`finish_build_xmu`](Self::finish_build_xmu)) or the job-failure path.
     mcp_job_reply: Option<mcp::TextReply>,
+    /// A parked MCP `run_feff` reply: the Feff tab's run finishes on its own
+    /// thread and is drained each frame while this is set.
+    mcp_feff_reply: Option<mcp::TextReply>,
     /// MCP `screenshot` replies awaiting the next [`egui::Event::Screenshot`].
     mcp_shot_replies: Vec<mcp::PngReply>,
     /// Armed by the In-situ window's "Re-reduce & build" when its reduction
@@ -417,6 +420,7 @@ impl XafsViewApp {
             mcp: None,
             mcp_port: mcp_port.unwrap_or(mcp::DEFAULT_PORT),
             mcp_job_reply: None,
+            mcp_feff_reply: None,
             mcp_shot_replies: Vec::new(),
             insitu_rebuild_after_reduce: false,
         };
@@ -639,6 +643,55 @@ impl XafsViewApp {
             }
             mcp::McpRequest::FeffitGraph { args, reply } => {
                 let _ = reply.send(self.apply_mcp_feffit_graph(&args));
+            }
+            mcp::McpRequest::Xanes { args, reply } => {
+                let _ = reply.send(self.xanes.apply_mcp(&self.session.groups, &args));
+            }
+            mcp::McpRequest::Mback { args, reply } => {
+                let _ = reply.send(self.mback.apply_mcp(&self.session.groups, &args));
+            }
+            mcp::McpRequest::Lcf { args, reply } => {
+                let _ = reply.send(self.lcf.apply_mcp(&self.session.groups, &args));
+            }
+            mcp::McpRequest::Pca { args, reply } => {
+                let _ = reply.send(self.pca.apply_mcp(&self.session.groups, &args));
+            }
+            mcp::McpRequest::Wavelet { args, reply } => {
+                let _ = reply.send(
+                    self.wavelet
+                        .apply_mcp(&args)
+                        .and_then(|()| self.run_wavelet()),
+                );
+            }
+            mcp::McpRequest::EditMu { args, reply } => {
+                let _ = reply.send(self.apply_mcp_edit_mu(&args));
+            }
+            mcp::McpRequest::BuildFeffInp { args, reply } => {
+                let built = self.atoms_tab.apply_mcp(&args, &mut self.feff_inp);
+                if built.is_ok() {
+                    // The Atoms tab hands off to the Feff tab on a build.
+                    self.tab = Tab::Feff;
+                }
+                let _ = reply.send(built);
+            }
+            mcp::McpRequest::RunFeff { backend, reply } => {
+                if self.mcp_feff_reply.is_some() {
+                    let _ = reply.send(Err("FEFF is already running.".to_owned()));
+                } else {
+                    match self.feff_tab.mcp_start(
+                        backend.as_deref(),
+                        &self.feff_inp,
+                        self.session.folders.atoms_dir.as_deref(),
+                    ) {
+                        Ok(()) => {
+                            self.tab = Tab::Feff;
+                            self.mcp_feff_reply = Some(reply);
+                        }
+                        Err(e) => {
+                            let _ = reply.send(Err(e));
+                        }
+                    }
+                }
             }
             mcp::McpRequest::Screenshot { reply } => {
                 self.mcp_shot_replies.push(reply);
@@ -876,6 +929,69 @@ impl XafsViewApp {
         Ok(format!("feffit graph: {ylabel} vs {xlabel}"))
     }
 
+    /// MCP `edit_mu`: the named Edit μ(E) button as its [`CleanAction`], through
+    /// the same dispatch as the window.
+    fn apply_mcp_edit_mu(&mut self, a: &mcp::EditMuArgs) -> Result<String, String> {
+        use feffit::xasdata::{RangeSide, SmoothForm};
+        let need = |v: Option<f64>, name: &str| {
+            v.ok_or_else(|| format!("edit_mu {:?} needs `{name}`", a.action))
+        };
+        let action = match a.action.to_ascii_lowercase().as_str() {
+            "find" => CleanAction::AutoFind(a.nsig.unwrap_or(10.0)),
+            "remove_auto" => CleanAction::AutoDeglitch(a.nsig.unwrap_or(10.0)),
+            "remove_point" => CleanAction::DeglitchPoint(need(a.energy, "energy")?),
+            "remove_range" => {
+                let side = match a.side.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                    None | Some("above") => RangeSide::Above,
+                    Some("below") => RangeSide::Below,
+                    Some("between") => RangeSide::Between,
+                    Some(other) => {
+                        return Err(format!(
+                            "unknown side {other:?}; one of above, below, between"
+                        ));
+                    }
+                };
+                let e2 = if side == RangeSide::Between {
+                    need(a.e2, "e2")?
+                } else {
+                    a.e2.unwrap_or(0.0)
+                };
+                CleanAction::DeglitchRange(side, need(a.e1, "e1")?, e2)
+            }
+            "trim" => CleanAction::Trim(need(a.lo, "lo")?, need(a.hi, "hi")?),
+            "smooth" => {
+                let form = match a.form.as_deref().map(str::to_ascii_lowercase).as_deref() {
+                    None | Some("lorentzian") => SmoothForm::Lorentzian,
+                    Some("gaussian") => SmoothForm::Gaussian,
+                    Some(other) => {
+                        return Err(format!("unknown form {other:?}; lorentzian or gaussian"));
+                    }
+                };
+                CleanAction::Smooth(a.sigma.unwrap_or(1.0), form)
+            }
+            "undo" => CleanAction::Undo,
+            other => {
+                return Err(format!(
+                    "unknown action {other:?}; one of find, remove_auto, remove_point, \
+                     remove_range, trim, smooth, undo"
+                ));
+            }
+        };
+        self.dispatch_clean_action(action)
+    }
+
+    /// Route an Edit μ(E) action (the window's buttons and MCP `edit_mu`): the
+    /// auto actions that reach beyond the current group (preview markers, the
+    /// batch over checked groups) are handled here; the single-group edits go
+    /// through the undo-snapshot path. Returns the status message.
+    fn dispatch_clean_action(&mut self, action: CleanAction) -> Result<String, String> {
+        match action {
+            CleanAction::AutoFind(nsig) => self.auto_deglitch_find(nsig),
+            CleanAction::AutoDeglitchChecked(nsig) => self.auto_deglitch_checked(nsig),
+            other => self.apply_clean_action(other),
+        }
+    }
+
     /// MCP `set_graph`: switch the plotted graph type by its menu label and/or
     /// toggle the all-groups overlay, then replot — the same state the Graph
     /// box's combo and checkbox mutate.
@@ -993,11 +1109,12 @@ impl XafsViewApp {
             ));
         }
         // A dry run is the MCP counterpart of the GUI "Find": when the current
-        // group is targeted, preview its candidates as markers on the graph.
+        // group is targeted, preview its candidates as markers on the graph
+        // (the per-group lines above already carry its report).
         if let Some(cur) = self.session.current
             && targets.contains(&cur)
         {
-            self.auto_deglitch_find(nsig);
+            let _ = self.auto_deglitch_find(nsig);
         }
         Ok(format!(
             "{total} candidate(s) at {nsig}σ in {}/{} group(s) (dry run — apply=true removes):\n{}",
@@ -2096,7 +2213,8 @@ impl XafsViewApp {
 
     /// Compute the Morlet wavelet transform of the current group's `χ(k)` using
     /// the wavelet window's parameters, and hand the result back to the window.
-    fn run_wavelet(&mut self) {
+    /// Returns the status message.
+    fn run_wavelet(&mut self) -> Result<String, String> {
         let p = self.wavelet.params();
         let computed = self
             .session
@@ -2116,24 +2234,22 @@ impl XafsViewApp {
                     wt.k.len(),
                     kstep
                 );
-                self.wavelet.set_result(Some(wt), info);
-                self.status.info("Wavelet transform computed.");
+                self.wavelet.set_result(Some(wt), info.clone());
+                Ok(format!("Wavelet transform computed: {info}."))
             }
             Some((None, _)) => {
                 self.wavelet.set_result(
                     None,
                     "Transform failed — check R range vs k-step (Nyquist).".to_owned(),
                 );
-                self.status
-                    .error("Wavelet transform failed (R range exceeds Nyquist?).");
+                Err("Wavelet transform failed (R range exceeds Nyquist?).".to_owned())
             }
             None => {
                 self.wavelet.set_result(
                     None,
                     "No χ(k) — run AUTOBK on the current group first.".to_owned(),
                 );
-                self.status
-                    .error("No χ(k) for the wavelet transform — run AUTOBK first.");
+                Err("No χ(k) for the wavelet transform — run AUTOBK first.".to_owned())
             }
         }
     }
@@ -2171,43 +2287,45 @@ impl XafsViewApp {
     }
 
     /// Apply a cleanup edit (or undo) to the current group, recording an undo
-    /// snapshot for edits that actually changed the spectrum.
-    fn apply_clean_action(&mut self, action: CleanAction) {
+    /// snapshot for edits that actually changed the spectrum. Returns the
+    /// status message; an edit that did not apply (e.g. grid too short) reads
+    /// as a failure.
+    fn apply_clean_action(&mut self, action: CleanAction) -> Result<String, String> {
         const UNDO_CAP: usize = 32;
 
         if let CleanAction::Undo = action {
             // The snapshot names its own group (its label): restore *that*
             // group, wherever it now sits — the current index may point at a
             // different group than the one edited.
-            if let Some(prev) = self.clean_undo.pop() {
-                match self
-                    .session
-                    .groups
-                    .iter()
-                    .position(|g| g.label == prev.label)
-                {
-                    Some(idx) => {
-                        self.status
-                            .info(format!("Undid last edit on {}.", prev.label));
-                        self.session.groups[idx] = prev;
-                        self.plot.set_x_markers(&[], GLITCH_MARKER);
-                        self.plot_data.mark_dirty();
-                        self.replot_active_tab();
-                    }
-                    None => self.status.error(format!(
-                        "Undo target \"{}\" is no longer loaded.",
-                        prev.label
-                    )),
+            let Some(prev) = self.clean_undo.pop() else {
+                return Err("Nothing to undo.".to_owned());
+            };
+            return match self
+                .session
+                .groups
+                .iter()
+                .position(|g| g.label == prev.label)
+            {
+                Some(idx) => {
+                    let msg = format!("Undid last edit on {}.", prev.label);
+                    self.session.groups[idx] = prev;
+                    self.plot.set_x_markers(&[], GLITCH_MARKER);
+                    self.plot_data.mark_dirty();
+                    self.replot_active_tab();
+                    Ok(msg)
                 }
-            }
-            return;
+                None => Err(format!(
+                    "Undo target \"{}\" is no longer loaded.",
+                    prev.label
+                )),
+            };
         }
 
         let Some(g) = self.session.current_group_mut() else {
-            return;
+            return Err("Load a spectrum to edit.".to_owned());
         };
         if g.mu.is_empty() {
-            return;
+            return Err("Load a spectrum to edit.".to_owned());
         }
         let snapshot = g.clone();
         let (changed, msg) = match action {
@@ -2246,41 +2364,34 @@ impl XafsViewApp {
             }
         };
 
-        // `changed = false` means the edit did not apply (e.g. grid too short) —
-        // that reads as a failure, so it logs as one.
-        if changed {
-            self.status.info(msg);
-        } else {
-            self.status.error(msg);
+        if !changed {
+            return Err(msg);
         }
-        if changed {
-            self.clean_undo.push(snapshot);
-            if self.clean_undo.len() > UNDO_CAP {
-                self.clean_undo.remove(0);
-            }
-            // Any edit moves the data the candidate markers pointed at.
-            self.plot.set_x_markers(&[], GLITCH_MARKER);
-            self.plot_data.mark_dirty();
-            self.replot_active_tab();
+        self.clean_undo.push(snapshot);
+        if self.clean_undo.len() > UNDO_CAP {
+            self.clean_undo.remove(0);
         }
+        // Any edit moves the data the candidate markers pointed at.
+        self.plot.set_x_markers(&[], GLITCH_MARKER);
+        self.plot_data.mark_dirty();
+        self.replot_active_tab();
+        Ok(msg)
     }
 
     /// Preview automatic glitch candidates on the current group: switch the
     /// graph to the E-space view, mark each candidate energy, and report the
     /// count. Removes nothing — "Remove" (or the batch button) does that.
-    fn auto_deglitch_find(&mut self, nsig: f64) {
+    fn auto_deglitch_find(&mut self, nsig: f64) -> Result<String, String> {
         let Some(g) = self.session.current_group() else {
-            return;
+            return Err("Load a spectrum to edit.".to_owned());
         };
         if g.mu.is_empty() {
-            return;
+            return Err("Load a spectrum to edit.".to_owned());
         }
         let energies = feffit::xasdata::find_glitches(g, nsig);
         if energies.is_empty() {
             self.plot.set_x_markers(&[], GLITCH_MARKER);
-            self.status
-                .info(format!("Auto deglitch: no candidates at {nsig:.0}σ."));
-            return;
+            return Ok(format!("Auto deglitch: no candidates at {nsig:.0}σ."));
         }
         // The markers are energies — show them on the E-space graph, which is
         // the Autobk tab's (the Edit μ(E) window can be driven from any tab).
@@ -2294,11 +2405,11 @@ impl XafsViewApp {
         } else {
             ""
         };
-        self.status.info(format!(
+        Ok(format!(
             "Auto deglitch: {} candidate(s) at {} eV{more} — Remove drops them.",
             energies.len(),
             shown.join(", "),
-        ));
+        ))
     }
 
     /// Auto-deglitch every Run-target group at `nsig`; the single owner of the
@@ -2335,19 +2446,19 @@ impl XafsViewApp {
 
     /// Auto-deglitch every group checked for Run (the batch counterpart of
     /// [`CleanAction::AutoDeglitch`], for a whole scan series in one pass).
-    fn auto_deglitch_checked(&mut self, nsig: f64) {
+    fn auto_deglitch_checked(&mut self, nsig: f64) -> Result<String, String> {
         let (total, groups, targeted) = self.deglitch_targets(nsig);
         if targeted == 0 {
-            self.status.error("No data to deglitch.");
+            Err("No data to deglitch.".to_owned())
         } else if total == 0 {
-            self.status.info(format!(
+            Ok(format!(
                 "Auto deglitch: no candidates at {nsig:.0}σ in {targeted} group(s)."
-            ));
+            ))
         } else {
-            self.status.info(format!(
+            Ok(format!(
                 "Auto deglitch: removed {total} point(s) across {groups}/{targeted} group(s) — \
                  re-run Autobk. Undo unavailable after a batch edit.",
-            ));
+            ))
         }
     }
 
@@ -4512,6 +4623,18 @@ impl eframe::App for XafsViewApp {
         // Handle MCP tool requests after the job poll, so a just-finished job
         // is applied before a new request checks the job slot.
         self.poll_mcp(ui.ctx());
+        // A parked run_feff reply: the Feff tab drains its own worker only
+        // while it is shown, so drain it here until the run reports.
+        if self.mcp_feff_reply.is_some() {
+            if let Some(result) = self.feff_tab.mcp_poll() {
+                if let Some(reply) = self.mcp_feff_reply.take() {
+                    let _ = reply.send(result);
+                }
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        }
 
         egui::Panel::top("menubar").show(ui, |ui| {
             self.menu_bar(ui);
@@ -4657,13 +4780,9 @@ impl eframe::App for XafsViewApp {
             self.edit_xmu
                 .show(ui.ctx(), has_group, npts, can_undo, n_checked, picked)
         {
-            match action {
-                // The auto actions that reach beyond the current group (preview
-                // markers, batch over checked groups) are handled here; the
-                // single-group edits go through the undo-snapshot path.
-                CleanAction::AutoFind(nsig) => self.auto_deglitch_find(nsig),
-                CleanAction::AutoDeglitchChecked(nsig) => self.auto_deglitch_checked(nsig),
-                other => self.apply_clean_action(other),
+            match self.dispatch_clean_action(action) {
+                Ok(msg) => self.status.info(msg),
+                Err(e) => self.status.error(e),
             }
         }
 
@@ -4674,7 +4793,10 @@ impl eframe::App for XafsViewApp {
             .current_group()
             .is_some_and(|g| g.k.is_some() && g.chi.is_some());
         match self.wavelet.show(ui.ctx(), has_chi) {
-            Some(WaveletAction::Compute) => self.run_wavelet(),
+            Some(WaveletAction::Compute) => match self.run_wavelet() {
+                Ok(msg) => self.status.info(msg),
+                Err(e) => self.status.error(e),
+            },
             Some(WaveletAction::ExportCsv) => self.export_wavelet_csv(),
             None => {}
         }
