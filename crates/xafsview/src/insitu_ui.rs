@@ -964,9 +964,11 @@ impl InsituWindow {
         crate::plot::show(&mut self.plot, ui);
     }
 
-    /// The displayed profile — `(x, y, legend, x label)` — for the current
-    /// selection, mode and reference; `None` without a map or a clicked cell.
-    fn profile_xy(&self) -> Option<(Vec<f64>, Vec<f64>, String, &'static str)> {
+    /// The displayed profile — `(x, y, legend)` — for the current selection,
+    /// mode and reference; `None` without a map or a clicked cell. The axis
+    /// labels are not part of it: they come from [`profile_axis_labels`], which
+    /// needs no selection.
+    fn profile_xy(&self) -> Option<(Vec<f64>, Vec<f64>, String)> {
         let map = self.map.as_ref()?;
         let (i, j) = self.sel?;
         Some(match self.profile {
@@ -974,14 +976,14 @@ impl InsituWindow {
                 let y = (0..map.x.len())
                     .map(|c| map.display(self.reference, i, c))
                     .collect();
-                (map.x.clone(), y, map.labels[i].clone(), map.kind.x_label())
+                (map.x.clone(), y, map.labels[i].clone())
             }
             ProfileMode::Trace => {
                 let xs = (1..=map.rows.len()).map(|n| n as f64).collect();
                 let y = (0..map.rows.len())
                     .map(|r| map.display(self.reference, r, j))
                     .collect();
-                (xs, y, format!("x = {:.4}", map.x[j]), "scan #")
+                (xs, y, format!("x = {:.4}", map.x[j]))
             }
         })
     }
@@ -997,7 +999,7 @@ impl InsituWindow {
     /// key the result on it.
     fn fit_profile(&mut self) {
         let Some(sel) = self.sel else { return };
-        let Some((x, y, _, _)) = self.profile_xy() else {
+        let Some((x, y, _)) = self.profile_xy() else {
             return;
         };
         match crate::peakfit::fit_area_gaussians(&x, &y, self.fit_max_peaks) {
@@ -1022,19 +1024,22 @@ impl InsituWindow {
         self.plot_dirty = true;
     }
 
-    /// Rebuild the profile plot from the current selection.
+    /// Rebuild the profile plot from the current selection. The axis labels are
+    /// written on every rebuild, before the curve, so they follow the current
+    /// map and mode even when nothing is selected: `set_map` clears the
+    /// selection, and `Plot::clear` keeps the graph labels, so a map switch used
+    /// to leave the previous map's x label ("R (angstrom)") on an empty plot.
     fn rebuild_profile(&mut self) {
         self.plot.clear();
-        let Some((x, y, legend, x_label)) = self.profile_xy() else {
+        let Some(map) = &self.map else {
             return;
         };
-        let y_label = if self.reference.is_some() {
-            "Δ value"
-        } else {
-            "value"
-        };
+        let (x_label, y_label) = profile_axis_labels(map.kind, self.profile, self.reference);
         self.plot.set_graph_x_label(x_label);
         self.plot.set_graph_y_label(y_label, YAxis::Left);
+        let Some((x, y, legend)) = self.profile_xy() else {
+            return;
+        };
         self.plot.add_curve_with_legend(&x, &y, BLUE, legend);
         let fit_curve = self
             .current_fit()
@@ -1046,9 +1051,53 @@ impl InsituWindow {
     }
 }
 
+/// The profile plot's `(x label, y label)` for a map of `kind` shown in `mode`
+/// with `reference` subtracted or not. A function of that state alone — not of
+/// the selection — so the labels are right on an empty plot too.
+fn profile_axis_labels(
+    kind: SeriesKind,
+    mode: ProfileMode,
+    reference: Option<usize>,
+) -> (&'static str, &'static str) {
+    let x = match mode {
+        ProfileMode::Scan => kind.x_label(),
+        ProfileMode::Trace => "scan #",
+    };
+    let y = if reference.is_some() {
+        "Δ value"
+    } else {
+        "value"
+    };
+    (x, y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Boundaries of the label rule: the x label follows the map kind in Scan
+    /// mode and is the scan index in Trace mode; the y label follows the
+    /// reference. None of it takes a selection, which is what lets a map switch
+    /// (selection cleared) relabel the empty plot.
+    #[test]
+    fn profile_axis_labels_follow_kind_mode_and_reference() {
+        assert_eq!(
+            profile_axis_labels(SeriesKind::Rdf, ProfileMode::Scan, None),
+            ("R (angstrom)", "value")
+        );
+        assert_eq!(
+            profile_axis_labels(SeriesKind::Xanes, ProfileMode::Scan, None),
+            ("Energy (eV)", "value")
+        );
+        assert_eq!(
+            profile_axis_labels(SeriesKind::Xanes, ProfileMode::Trace, None),
+            ("scan #", "value")
+        );
+        assert_eq!(
+            profile_axis_labels(SeriesKind::Rdf, ProfileMode::Scan, Some(0)),
+            ("R (angstrom)", "Δ value")
+        );
+    }
 
     #[test]
     fn parses_rdf_series_layout() {
