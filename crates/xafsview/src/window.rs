@@ -140,7 +140,7 @@ pub fn detached_panels(
 ) {
     // Bump the open generation on each closed→open edge (see the reopen note
     // above). Kept in egui's own per-id memory so the helper stays stateless.
-    let state_id = egui::Id::new(("detached_open_state", id_source));
+    let state_id = open_state_id(id_source);
     let generation = ctx.data_mut(|d| {
         let (was_open, mut g) = d.get_temp::<(bool, u64)>(state_id).unwrap_or((false, 0));
         if *open && !was_open {
@@ -152,7 +152,7 @@ pub fn detached_panels(
     if !*open {
         return;
     }
-    let viewport_id = egui::ViewportId::from_hash_of((id_source, generation));
+    let viewport_id = viewport_id(id_source, generation);
     let builder = egui::ViewportBuilder::default()
         .with_title(title)
         .with_inner_size(default_size);
@@ -162,4 +162,31 @@ pub fn detached_panels(
             *open = false;
         }
     });
+}
+
+/// Bring the detached window `id_source` to the front if it is open. A request
+/// to open an already-open pop-up — "Open New file" while the loader sits
+/// behind the main window — otherwise changes nothing on screen: the flag is
+/// already set and [`detached_panels`] only creates a viewport, never raises
+/// one. A no-op while the window is closed (its next open creates it in front).
+pub fn focus(ctx: &egui::Context, id_source: &str) {
+    if let Some((true, generation)) =
+        ctx.data(|d| d.get_temp::<(bool, u64)>(open_state_id(id_source)))
+    {
+        ctx.send_viewport_cmd_to(
+            viewport_id(id_source, generation),
+            egui::ViewportCommand::Focus,
+        );
+    }
+}
+
+/// The per-`id_source` memory slot holding `(open last frame, generation)`.
+fn open_state_id(id_source: &str) -> egui::Id {
+    egui::Id::new(("detached_open_state", id_source))
+}
+
+/// The viewport id of `id_source`'s `generation`-th open (see the reopen note
+/// on [`detached`]).
+fn viewport_id(id_source: &str, generation: u64) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of((id_source, generation))
 }

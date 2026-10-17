@@ -1080,13 +1080,16 @@ impl XafsViewApp {
         }
     }
 
+    /// The detached loader's `id_source` (see [`crate::window::detached`]).
+    const OPEN_DATA_WINDOW: &str = "open_data";
+
     /// "Open New file" / "Add data files…": open the unified [`open_data_window`]
     /// loader (in-app raw-scan browser + two-pane staging + reading-format
     /// chooser). Autobk loads raw scans from the Folders Data folder; the chooser
     /// starts fresh and is seeded from the first staged file.
     ///
     /// [`open_data_window`]: Self::open_data_window
-    fn open_new_file(&mut self) {
+    fn open_new_file(&mut self, ctx: &egui::Context) {
         self.import = None;
         // Seed the Selected pane with the files already loaded as groups, so the
         // loader shows the current session rather than an empty pane.
@@ -1096,6 +1099,11 @@ impl XafsViewApp {
             .iter()
             .filter_map(|g| g.filename.clone())
             .collect();
+        // Already open (behind the main window, say): raise it, since re-opening
+        // an open loader changes nothing on screen by itself.
+        if self.open_data.open {
+            crate::window::focus(ctx, Self::OPEN_DATA_WINDOW);
+        }
         self.open_data
             .open_on(self.session.folders.data_dir.clone(), loaded);
     }
@@ -1119,7 +1127,7 @@ impl XafsViewApp {
         let has_staged = self.open_data.has_staged();
         crate::window::detached_with_action(
             ctx,
-            "open_data",
+            Self::OPEN_DATA_WINDOW,
             "Open data",
             &mut keep_open,
             [640.0, 720.0],
@@ -3645,7 +3653,7 @@ impl XafsViewApp {
         );
         self.data_window_open = keep_open;
         if add_clicked {
-            self.open_new_file();
+            self.open_new_file(ctx);
         }
         changed
     }
@@ -4028,7 +4036,7 @@ impl XafsViewApp {
         }
 
         if open_clicked {
-            self.open_new_file();
+            self.open_new_file(ui.ctx());
         }
         // "Autobk Start" runs the full reduction *and* writes the χ files. A
         // finished Autobk parameter edit (change.refit) instead auto-runs a live
