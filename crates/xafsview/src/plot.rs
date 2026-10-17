@@ -1095,23 +1095,100 @@ fn legend_intrinsic_width(ui: &egui::Ui, entries: &[(String, egui::Color32, bool
     SWATCH_W + widest + 36.0
 }
 
-/// Elide `label` from the LEFT to fit `max_w`, keeping the tail. Batch scan
-/// names share a long common prefix and differ only in their suffix, so
-/// trailing elision ("PGT_Mn_S2_…") would make every row look identical;
-/// "…Insitu_064" keeps the part that tells curves apart.
-fn elide_left(painter: &egui::Painter, font: &egui::FontId, label: &str, max_w: f32) -> String {
-    let w = |s: String| {
-        painter
-            .layout_no_wrap(s, font.clone(), egui::Color32::WHITE)
-            .rect
-            .width()
+/// Characters that end a token inside a curve label; an affix cut is snapped to
+/// one of these (or to a letter/digit transition) so the shared stem and the
+/// distinguishing core split on a token boundary: "Insitu_" + "064" + ".dat",
+/// not "Insitu_06" + "4" + ".dat".
+const TOKEN_SEPARATORS: &[char] = &['_', '-', '.', ' '];
+
+/// Is byte index `i` of `s` a token boundary: the start or end, or a point
+/// where a separator or a letter/digit transition sits?
+fn is_token_boundary(s: &str, i: usize) -> bool {
+    if i == 0 || i == s.len() {
+        return true;
+    }
+    if !s.is_char_boundary(i) {
+        return false;
+    }
+    let prev = s[..i].chars().next_back().unwrap_or(' ');
+    let next = s[i..].chars().next().unwrap_or(' ');
+    TOKEN_SEPARATORS.contains(&prev)
+        || TOKEN_SEPARATORS.contains(&next)
+        || prev.is_ascii_digit() != next.is_ascii_digit()
+}
+
+/// The byte lengths of the prefix and suffix that every label in `labels`
+/// shares, each snapped to a token boundary (the prefix back, the suffix
+/// forward). Batch scan names are a long shared stem around a short
+/// distinguishing core, and this is what separates the two. `(0, 0)` with fewer
+/// than two labels; the two affixes never overlap within any label.
+fn common_affixes(labels: &[&str]) -> (usize, usize) {
+    let [first, rest @ ..] = labels else {
+        return (0, 0);
     };
-    if w(label.to_owned()) <= max_w {
+    if rest.is_empty() {
+        return (0, 0);
+    }
+    let mut prefix = first.len();
+    let mut suffix = first.len();
+    for l in rest {
+        prefix = first
+            .bytes()
+            .zip(l.bytes())
+            .take(prefix)
+            .take_while(|(a, b)| a == b)
+            .count();
+        suffix = first
+            .bytes()
+            .rev()
+            .zip(l.bytes().rev())
+            .take(suffix)
+            .take_while(|(a, b)| a == b)
+            .count();
+    }
+    // Snap the prefix back to a token boundary. Identical bytes have identical
+    // char boundaries, so a boundary in `first` is one in every label.
+    while prefix > 0 && !is_token_boundary(first, prefix) {
+        prefix -= 1;
+    }
+    // The suffix may not eat into any label's prefix; then snap it forward.
+    let shortest = labels.iter().map(|l| l.len()).min().unwrap_or(0);
+    suffix = suffix.min(shortest - prefix);
+    while suffix > 0 && !is_token_boundary(first, first.len() - suffix) {
+        suffix -= 1;
+    }
+    (prefix, suffix)
+}
+
+/// `label` as a legend row shows it under the width check `fits`: whole when
+/// it fits; otherwise its core — what is left after the legend's common prefix
+/// and suffix `affixes` — between ellipses marking the dropped stem, so rows
+/// that differ only in "064" / "065" stay distinguishable; and when even that
+/// is too wide, the core elided from the middle so a long distinguishing part
+/// keeps both its ends. A label that is nothing but stem (an empty core) is
+/// treated as all core.
+fn elide_label(label: &str, affixes: (usize, usize), fits: impl Fn(&str) -> bool) -> String {
+    if fits(label) {
         return label.to_owned();
     }
-    for (i, _) in label.char_indices().skip(1) {
-        let cand = format!("…{}", &label[i..]);
-        if w(cand.clone()) <= max_w {
+    let (prefix, suffix) = affixes;
+    let core = if prefix + suffix < label.len() {
+        prefix..label.len() - suffix
+    } else {
+        0..label.len()
+    };
+    let head = if core.start > 0 { "…" } else { "" };
+    let tail = if core.end < label.len() { "…" } else { "" };
+    let core: Vec<char> = label[core].chars().collect();
+    // keep = n shows the whole core; each step drops one more char from the
+    // middle, alternating sides so both ends survive as long as possible.
+    for keep in (0..=core.len()).rev() {
+        let (a, b) = (keep.div_ceil(2), keep / 2);
+        let start: String = core[..a].iter().collect();
+        let end: String = core[core.len() - b..].iter().collect();
+        let mid = if keep < core.len() { "…" } else { "" };
+        let cand = format!("{head}{start}{mid}{end}{tail}").replace("……", "…");
+        if fits(&cand) {
             return cand;
         }
     }
@@ -1153,6 +1230,10 @@ fn draw_legend(
         egui::Color32::from_white_alpha(110)
     };
     let body = egui::TextStyle::Body.resolve(ui.style());
+    // What every row shares, so a row too long to show whole keeps the part
+    // that tells it from the others (see `elide_label`).
+    let labels: Vec<&str> = entries.iter().map(|(l, _, _)| l.as_str()).collect();
+    let affixes = common_affixes(&labels);
     let mut clicked = None;
     for (label, color, emph) in entries {
         let mut frame = egui::Frame::new()
@@ -1184,7 +1265,15 @@ fn draw_legend(
                     // the legend's width cap. The emphasized row renders bold
                     // (wider), hence its slack.
                     let avail = ui.available_width() - if *emph { 8.0 } else { 0.0 };
-                    let shown = elide_left(ui.painter(), &body, label, avail);
+                    let painter = ui.painter();
+                    let fits = |s: &str| {
+                        painter
+                            .layout_no_wrap(s.to_owned(), body.clone(), egui::Color32::WHITE)
+                            .rect
+                            .width()
+                            <= avail
+                    };
+                    let shown = elide_label(label, affixes, fits);
                     let rich = egui::RichText::new(shown).color(text);
                     ui.label(if *emph { rich.strong() } else { rich });
                 });
@@ -1453,6 +1542,42 @@ fn symbol_menu(plot: &mut Plot1D, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use eframe::egui::{Color32, pos2, vec2};
+
+    #[test]
+    fn common_affixes_split_on_token_boundaries() {
+        // The shared stem ends at the "_" before the scan number and resumes at
+        // the "." of the extension, not inside the digits.
+        assert_eq!(
+            common_affixes(&["PGT_Mn_S2_Insitu_064.dat", "PGT_Mn_S2_Insitu_065.dat"]),
+            (17, 4)
+        );
+        // A digit run is one token: "scan" + "001".
+        assert_eq!(common_affixes(&["scan001", "scan002"]), (4, 0));
+        // One label is nothing but stem: the suffix stops at its prefix.
+        assert_eq!(common_affixes(&["a_b.dat", "a_b_c.dat"]), (3, 4));
+        assert_eq!(common_affixes(&["x.dat", "y.dat"]), (0, 4));
+        // Fewer than two labels share nothing.
+        assert_eq!(common_affixes(&["alone"]), (0, 0));
+        assert_eq!(common_affixes(&[]), (0, 0));
+    }
+
+    #[test]
+    fn elide_label_keeps_the_distinguishing_core() {
+        // Width as a character budget.
+        let fits = |n: usize| move |s: &str| s.chars().count() <= n;
+        let label = "PGT_Mn_S2_Insitu_064.dat";
+        let affixes = (17, 4);
+        assert_eq!(elide_label(label, affixes, fits(30)), label);
+        // Too long: the stem goes, the scan number stays.
+        assert_eq!(elide_label(label, affixes, fits(5)), "…064…");
+        // Narrower than the core: the core itself gives from the middle.
+        assert_eq!(elide_label(label, affixes, fits(4)), "…0…");
+        // An all-stem label is elided as a whole, from the middle.
+        assert_eq!(elide_label("a_b.dat", (3, 4), fits(5)), "a_…at");
+        // Nothing shared (a lone curve): middle elision keeps both ends.
+        assert_eq!(elide_label("abcdef", (0, 0), fits(4)), "ab…f");
+        assert_eq!(elide_label("abcdef", (0, 0), fits(0)), "…");
+    }
 
     /// Data `[0,10] × [0,10]` mapped onto a 100×100 px area, so `data_to_pixel`
     /// gives round pixel coordinates for the fixtures below.
