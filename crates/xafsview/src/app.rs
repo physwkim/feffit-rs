@@ -621,6 +621,25 @@ impl XafsViewApp {
             mcp::McpRequest::InsituMap { args, reply } => {
                 let _ = reply.send(self.insitu.apply_mcp(&self.session.groups, &args));
             }
+            mcp::McpRequest::OpenWindow { name, reply } => {
+                let _ = reply.send(self.mcp_window(&name, true, ctx));
+            }
+            mcp::McpRequest::CloseWindow { name, reply } => {
+                let _ = reply.send(self.mcp_window(&name, false, ctx));
+            }
+            mcp::McpRequest::SetTheme { dark, reply } => {
+                self.set_theme(ctx, dark);
+                let _ = reply.send(Ok(format!(
+                    "theme = {}",
+                    if dark { "dark" } else { "light" }
+                )));
+            }
+            mcp::McpRequest::PlotData { args, reply } => {
+                let _ = reply.send(self.apply_mcp_plot_data(ctx, *args));
+            }
+            mcp::McpRequest::FeffitGraph { args, reply } => {
+                let _ = reply.send(self.apply_mcp_feffit_graph(&args));
+            }
             mcp::McpRequest::Screenshot { reply } => {
                 self.mcp_shot_replies.push(reply);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
@@ -726,6 +745,135 @@ impl XafsViewApp {
         Ok(format!(
             "added path \"{label}\": reff = {reff:.4} Å, nleg = {nleg}, degen = {degen}"
         ))
+    }
+
+    /// MCP `open_window` / `close_window`: flip the open flag the menu item or
+    /// button flips — through the entry point that seeds the window where one
+    /// exists ("open_data") — and raise a window that is already open, since
+    /// setting a set flag changes nothing on screen.
+    fn mcp_window(
+        &mut self,
+        name: &str,
+        open: bool,
+        ctx: &egui::Context,
+    ) -> Result<String, String> {
+        let name = name.to_ascii_lowercase();
+        // (open flag, detached-window id) per name.
+        let (flag, id): (&mut bool, &str) = match name.as_str() {
+            "open_data" => {
+                if open {
+                    // Seeds the staging pane and raises an open loader itself.
+                    self.open_new_file(ctx);
+                } else {
+                    self.open_data.open = false;
+                }
+                return Ok(format!(
+                    "{name}: {}",
+                    if open { "opened" } else { "closed" }
+                ));
+            }
+            "data" => (&mut self.data_window_open, "data_manager"),
+            "log" => (&mut self.status.open, "status_log"),
+            "plot_data" => (&mut self.plot_data.open, "plot_data"),
+            "edit_mu" => (&mut self.edit_xmu.open, "edit_xmu"),
+            "periodic_table" => (&mut self.periodic.open, "periodic_table"),
+            "ion_chamber" => (&mut self.ion_chamber.open, "ion_chamber"),
+            "powder" => (&mut self.powder.open, "powder"),
+            "xanes" => (&mut self.xanes.open, "xanes"),
+            "mback" => (&mut self.mback.open, "mback"),
+            "wavelet" => (&mut self.wavelet.open, "wavelet"),
+            "ke_convert" => (&mut self.ke_convert.open, "ke_convert"),
+            "lcf" => (&mut self.lcf.open, "lcf"),
+            "pca" => (&mut self.pca.open, "pca"),
+            "time_resolved" => (&mut self.time_resolved.open, "time_resolved"),
+            "insitu_map" => (&mut self.insitu.open, "insitu"),
+            "plot_sites" => (&mut self.plot_sites.open, "plot_sites"),
+            "feffit_batch" => (&mut self.feffit_batch_open, "feffit_batch"),
+            "about" => (&mut self.about_open, "about"),
+            _ => {
+                return Err(format!(
+                    "unknown window {name:?}; one of {:?}",
+                    mcp::WINDOW_NAMES
+                ));
+            }
+        };
+        let was_open = *flag;
+        *flag = open;
+        let outcome = match (open, was_open) {
+            (true, true) => {
+                crate::window::focus(ctx, id);
+                "raised"
+            }
+            (true, false) => "opened",
+            (false, true) => "closed",
+            (false, false) => "already closed",
+        };
+        Ok(format!("{name}: {outcome}"))
+    }
+
+    /// Switch the whole egui UI between the dark and light visuals — the
+    /// Settings toggle and MCP `set_theme`. Every plot canvas follows the
+    /// theme through [`crate::plot::show`].
+    fn set_theme(&mut self, ctx: &egui::Context, dark: bool) {
+        ctx.set_visuals(if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+        self.dark_mode = dark;
+    }
+
+    /// MCP `plot_data`: "send_fit" is the Feffit tab's Send to Plot Data (it
+    /// needs the fit, so it lives here); everything else is the window's own
+    /// ([`PlotDataWindow::apply_mcp`]).
+    fn apply_mcp_plot_data(
+        &mut self,
+        ctx: &egui::Context,
+        mut args: mcp::PlotDataArgs,
+    ) -> Result<String, String> {
+        let mut done = Vec::new();
+        if args
+            .action
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case("send_fit"))
+        {
+            done.push(self.send_feffit_to_plot_data()?);
+            args.action = None;
+        }
+        done.push(self.plot_data.apply_mcp(ctx, &args, &self.session.groups)?);
+        Ok(done.join("; "))
+    }
+
+    /// MCP `feffit_graph`: the Feffit tab's space / component selectors, then
+    /// the replot their clicks trigger.
+    fn apply_mcp_feffit_graph(&mut self, args: &mcp::FeffitGraphArgs) -> Result<String, String> {
+        use crate::feffit_ui::{PlotPart, PlotSpace};
+        let space = match args.space.to_ascii_lowercase().as_str() {
+            "k" => PlotSpace::K,
+            "r" => PlotSpace::R,
+            "q" => PlotSpace::Q,
+            "kq" | "k+q" => PlotSpace::KQ,
+            other => return Err(format!("unknown space {other:?}; one of k, r, q, kq")),
+        };
+        let part = match args.part.as_deref().map(str::to_ascii_lowercase) {
+            None => None,
+            Some(p) => Some(match p.as_str() {
+                "re" => PlotPart::Re,
+                "im" => PlotPart::Im,
+                "mag" | "am" => PlotPart::Mag,
+                "pha" | "ph" => PlotPart::Pha,
+                other => {
+                    return Err(format!(
+                        "unknown component {other:?}; one of re, im, mag, pha"
+                    ));
+                }
+            }),
+        };
+        self.feffit.set_plot_selection(space, part);
+        self.replot_feffit();
+        let (space, part) = self.feffit.plot_selection();
+        let (xlabel, ylabel) = crate::feffit_ui::space_labels(space, part);
+        Ok(format!("feffit graph: {ylabel} vs {xlabel}"))
     }
 
     /// MCP `set_graph`: switch the plotted graph type by its menu label and/or
@@ -2648,7 +2796,10 @@ impl XafsViewApp {
             Some(FeffitAction::AddPath) => self.add_feff_path(),
             Some(FeffitAction::Run) => self.run_feffit(),
             Some(FeffitAction::Replot) => self.replot_feffit(),
-            Some(FeffitAction::SendToPlotData) => self.send_feffit_to_plot_data(),
+            Some(FeffitAction::SendToPlotData) => match self.send_feffit_to_plot_data() {
+                Ok(msg) => self.status.info(msg),
+                Err(e) => self.status.error(e),
+            },
             Some(FeffitAction::SaveResult) => self.save_feffit_result(),
             Some(FeffitAction::LoadResult) => self.load_feffit_result(),
             Some(FeffitAction::LoadInp) => self.load_feffit_inp(),
@@ -3201,17 +3352,16 @@ impl XafsViewApp {
     }
 
     /// Hand the last Feffit fit's data + model curves to the Plot Data panel
-    /// (the Feffit form's "Send to plot data"), in the currently-selected space.
-    fn send_feffit_to_plot_data(&mut self) {
+    /// (the Feffit form's "Send to plot data" and MCP `plot_data` "send_fit"),
+    /// in the currently-selected space. Returns the status message to show.
+    fn send_feffit_to_plot_data(&mut self) -> Result<String, String> {
         let label = match &self.feffit_fit_group {
             Some(g) => format!("Feffit fit — {g}"),
             None => "Feffit fit".to_owned(),
         };
         let (space, part) = self.feffit.plot_selection();
         let Some(p) = self.feffit.plot() else {
-            self.status
-                .error("Run Feffit first, then send it to Plot Data.");
-            return;
+            return Err("Run Feffit first, then send it to Plot Data.".to_owned());
         };
         let has_model = p.has_model;
         // Plot Data's own graph owns the axis labels; the fit's own labels are
@@ -3233,8 +3383,7 @@ impl XafsViewApp {
             .set_fit_overlay(label, item, x, data_y, model_y, p.kweight);
         // Pop the Plot Data window so the sent fit is visible right away.
         self.plot_data.open();
-        self.status
-            .info("Sent the Feffit fit (data + model) to Plot Data.");
+        Ok("Sent the Feffit fit (data + model) to Plot Data.".to_owned())
     }
 
     /// Save the current fit report to a text file (the original's "Save result").
@@ -4179,12 +4328,7 @@ impl XafsViewApp {
                 // light visuals (moved here from the former "Change BG" menu).
                 if ui.button("Toggle dark / light").clicked() {
                     let dark = ui.ctx().global_style().visuals.dark_mode;
-                    ui.ctx().set_visuals(if dark {
-                        egui::Visuals::light()
-                    } else {
-                        egui::Visuals::dark()
-                    });
-                    self.dark_mode = !dark;
+                    self.set_theme(ui.ctx(), !dark);
                 }
                 ui.separator();
                 // The embedded MCP server (also startable with `--mcp [port]`),

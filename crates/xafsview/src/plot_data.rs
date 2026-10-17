@@ -168,8 +168,8 @@ pub struct PlotDataWindow {
     /// plot). Rebuilt by [`rebuild`](Self::rebuild) when the overlay changes.
     plot: crate::plot::Plot,
     /// Whether the detached window is shown. Opened from the main window's top
-    /// bar (or "Send to Plot Data"); the window's close button clears it.
-    open: bool,
+    /// bar (or "Send to Plot Data", or MCP); the window's close button clears it.
+    pub open: bool,
     /// k-weight applied to any loaded k-space file (their χ is stored unweighted).
     kweight: i32,
     /// Vertical offset added to trace `i` (`i · stack`), in data units.
@@ -361,13 +361,7 @@ impl PlotDataWindow {
         if !self.open {
             return;
         }
-        // Follow the UI theme: a Settings toggle re-themes the canvas (and
-        // re-palettes the curves) on this frame's rebuild.
-        let theme_dark = ctx.global_style().visuals.dark_mode;
-        if self.theme_dark != theme_dark {
-            self.theme_dark = theme_dark;
-            self.dirty = true;
-        }
+        self.sync_theme(ctx);
         // A separate local so the closure can borrow `self` mutably; the window's
         // own close button flips it and we copy it back afterwards.
         let mut keep_open = true;
@@ -447,9 +441,7 @@ impl PlotDataWindow {
             ));
         }
         if ui.button("Clear fit").clicked() {
-            self.overlay = None;
-            self.show_overlay = false;
-            self.dirty = true;
+            self.clear_fit();
         }
     }
 
@@ -650,24 +642,9 @@ impl PlotDataWindow {
                  bkg / raw / result items are file products",
             )
             .clicked()
+            && let Err(e) = self.add_loaded_groups(groups)
         {
-            self.group_traces.clear();
-            let mut skipped = 0usize;
-            for g in groups {
-                match group_trace(g, self.graph_item) {
-                    Some(t) => self.group_traces.push(t),
-                    None => skipped += 1,
-                }
-            }
-            self.traces_changed();
-            self.pick_status = if skipped > 0 {
-                format!(
-                    "Added {} group(s); {skipped} without data for this item.",
-                    self.group_traces.len()
-                )
-            } else {
-                format!("Added {} group(s).", self.group_traces.len())
-            };
+            self.pick_status = e;
         }
 
         // File type + graph item — surfaced here (also in the picker; both share
@@ -796,11 +773,7 @@ impl PlotDataWindow {
             )
             .clicked()
         {
-            self.loaded.clear();
-            self.group_traces.clear();
-            self.overlay = None;
-            self.show_overlay = false;
-            self.traces_changed();
+            self.clear_all();
         }
         if !self.pick_status.is_empty() {
             ui.weak(&self.pick_status);
@@ -943,6 +916,179 @@ impl PlotDataWindow {
                 || self.group_traces.iter().any(|t| t.label == *label)
         });
         self.dirty = true;
+    }
+
+    /// Follow the UI theme: a Settings toggle re-themes the canvas (and
+    /// re-palettes the curves) on the next rebuild. The only writer of
+    /// `theme_dark`; called on every paint and before MCP reads the state.
+    fn sync_theme(&mut self, ctx: &egui::Context) {
+        let theme_dark = ctx.global_style().visuals.dark_mode;
+        if self.theme_dark != theme_dark {
+            self.theme_dark = theme_dark;
+            self.dirty = true;
+        }
+    }
+
+    /// "Add loaded groups": overlay every session group as the current graph
+    /// item, replacing the previously added set. The button is disabled for
+    /// the two `Err` cases; MCP reports them.
+    fn add_loaded_groups(&mut self, groups: &[XasGroup]) -> Result<String, String> {
+        if groups.is_empty() {
+            return Err("No loaded groups to add.".to_owned());
+        }
+        if !item_derivable(self.graph_item) {
+            return Err(format!(
+                "{:?} is a file product — Add loaded groups needs an xmu / chi graph item.",
+                self.graph_item.label()
+            ));
+        }
+        self.group_traces.clear();
+        let mut skipped = 0usize;
+        for g in groups {
+            match group_trace(g, self.graph_item) {
+                Some(t) => self.group_traces.push(t),
+                None => skipped += 1,
+            }
+        }
+        self.traces_changed();
+        self.pick_status = if skipped > 0 {
+            format!(
+                "Added {} group(s); {skipped} without data for this item.",
+                self.group_traces.len()
+            )
+        } else {
+            format!("Added {} group(s).", self.group_traces.len())
+        };
+        Ok(self.pick_status.clone())
+    }
+
+    /// "Clear All": the loaded files, the added groups and any sent fit.
+    fn clear_all(&mut self) {
+        self.loaded.clear();
+        self.group_traces.clear();
+        self.overlay = None;
+        self.show_overlay = false;
+        self.traces_changed();
+    }
+
+    /// "Clear fit": drop the sent Feffit fit.
+    fn clear_fit(&mut self) {
+        self.overlay = None;
+        self.show_overlay = false;
+        self.dirty = true;
+    }
+
+    /// MCP `plot_data`: the window's controls by name, in the order the
+    /// arguments are listed (graph item before the action, so "add_groups"
+    /// adds the item just chosen), then the window's text state. Opens the
+    /// window like the top-bar button. "send_fit" is the app's (it needs the
+    /// Feffit fit) and never arrives here.
+    pub fn apply_mcp(
+        &mut self,
+        ctx: &egui::Context,
+        a: &crate::mcp::PlotDataArgs,
+        groups: &[XasGroup],
+    ) -> Result<String, String> {
+        self.sync_theme(ctx);
+        let mut done = Vec::new();
+        if let Some(label) = &a.graph_item {
+            let found = FileType::ALL.into_iter().find_map(|ft| {
+                ft.items()
+                    .iter()
+                    .find(|gi| gi.label().eq_ignore_ascii_case(label))
+                    .map(|&gi| (ft, gi))
+            });
+            let Some((ft, gi)) = found else {
+                let all: Vec<String> = FileType::ALL
+                    .into_iter()
+                    .flat_map(|ft| ft.items().iter().map(|gi| gi.label()))
+                    .collect();
+                return Err(format!(
+                    "unknown graph item {label:?}; one of {}",
+                    all.join(", ")
+                ));
+            };
+            self.file_type = ft;
+            self.graph_item = gi;
+            self.refresh_available();
+            done.push(format!("graph item {} ({})", gi.label(), ft.label()));
+        }
+        if let Some(kw) = a.kweight {
+            if !(0..=3).contains(&kw) {
+                return Err(format!("kweight {kw} outside 0..=3"));
+            }
+            if self.kweight != kw {
+                self.kweight = kw;
+                if self.loaded.iter().any(|t| t.item.applies_kweight()) {
+                    self.reload_loaded();
+                }
+                self.dirty = true;
+            }
+            done.push(format!("kweight {kw}"));
+        }
+        if let Some(stack) = a.stack {
+            if !(0.0..=5.0).contains(&stack) {
+                return Err(format!("stack {stack} outside 0..=5"));
+            }
+            self.stack = stack;
+            self.dirty = true;
+            done.push(format!("stack {stack}"));
+        }
+        if let Some(v) = a.same_height {
+            self.same_height = v;
+            self.dirty = true;
+            done.push(format!("same_height {v}"));
+        }
+        if let Some(v) = a.swap_bg {
+            self.swap_bg = v;
+            self.dirty = true;
+            done.push(format!("swap_bg {v}"));
+        }
+        if let Some(v) = a.show_fit {
+            if self.overlay.is_none() {
+                return Err("No Feffit fit has been sent to Plot Data.".to_owned());
+            }
+            self.show_overlay = v;
+            self.dirty = true;
+            done.push(format!("show_fit {v}"));
+        }
+        if let Some(action) = &a.action {
+            match action.to_ascii_lowercase().as_str() {
+                "add_groups" => done.push(self.add_loaded_groups(groups)?),
+                "clear" => {
+                    self.clear_all();
+                    done.push("cleared".to_owned());
+                }
+                "clear_fit" => {
+                    self.clear_fit();
+                    done.push("fit cleared".to_owned());
+                }
+                other => {
+                    return Err(format!(
+                        "unknown action {other:?}; one of add_groups, clear, clear_fit, send_fit"
+                    ));
+                }
+            }
+        }
+        self.open = true;
+        let fit = match (&self.overlay, self.show_overlay) {
+            (None, _) => "none".to_owned(),
+            (Some(ov), false) => format!("{} (hidden)", ov.label),
+            (Some(ov), true) if overlay_shares_axis(ov, self.displayed_item()) => {
+                format!("{} (shown)", ov.label)
+            }
+            (Some(ov), true) => format!("{} (hidden: off-axis)", ov.label),
+        };
+        done.push(format!(
+            "displayed {} vs {}: {} file(s), {} group(s), fit {fit}, kweight {}, canvas {}",
+            self.displayed_item().label(),
+            self.displayed_item().x_label(),
+            self.loaded.len(),
+            self.group_traces.len(),
+            self.kweight,
+            if self.canvas_dark() { "dark" } else { "light" },
+        ));
+        Ok(done.join("; "))
     }
 
     /// Re-list the picker's folder under the current graph item, excluding the

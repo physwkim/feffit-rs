@@ -94,10 +94,54 @@ pub enum McpRequest {
         args: Box<InsituMapArgs>,
         reply: TextReply,
     },
+    OpenWindow {
+        name: String,
+        reply: TextReply,
+    },
+    CloseWindow {
+        name: String,
+        reply: TextReply,
+    },
+    SetTheme {
+        dark: bool,
+        reply: TextReply,
+    },
+    PlotData {
+        args: Box<PlotDataArgs>,
+        reply: TextReply,
+    },
+    FeffitGraph {
+        args: FeffitGraphArgs,
+        reply: TextReply,
+    },
     Screenshot {
         reply: PngReply,
     },
 }
+
+/// The pop-up windows `open_window` / `close_window` address, by name — the
+/// same windows the Tools menu, the top bar and the Log / Data buttons open.
+pub const WINDOW_NAMES: [&str; 19] = [
+    "open_data",
+    "data",
+    "log",
+    "plot_data",
+    "edit_mu",
+    "periodic_table",
+    "ion_chamber",
+    "powder",
+    "xanes",
+    "mback",
+    "wavelet",
+    "ke_convert",
+    "lcf",
+    "pca",
+    "time_resolved",
+    "insitu_map",
+    "plot_sites",
+    "feffit_batch",
+    "about",
+];
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct LoadDataArgs {
@@ -318,6 +362,53 @@ pub struct InsituMapArgs {
     /// (x first column, one named column per scan) — OriginPro-importable and
     /// re-openable via `file`.
     pub save: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct WindowArgs {
+    /// Window name (see [`WINDOW_NAMES`]): "open_data", "data", "log",
+    /// "plot_data", "edit_mu", "periodic_table", "ion_chamber", "powder",
+    /// "xanes", "mback", "wavelet", "ke_convert", "lcf", "pca",
+    /// "time_resolved", "insitu_map", "plot_sites", "feffit_batch", "about".
+    pub name: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SetThemeArgs {
+    /// `true` for the dark UI theme, `false` for the light one (Settings ›
+    /// Toggle dark / light). Every plot canvas follows the theme.
+    pub dark: bool,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PlotDataArgs {
+    /// A button of the window: "add_groups" (Add loaded groups — overlay every
+    /// session group as the graph item), "clear" (Clear All), "clear_fit"
+    /// (drop the sent Feffit fit), or "send_fit" (the Feffit tab's Send to Plot
+    /// Data: the last fit's data + model in the Feffit graph's space).
+    pub action: Option<String>,
+    /// Graph item by its combo label — "f", "norm", "f'", "f''" (xmu), "k.chi",
+    /// "r.chi", "k.dat", "r.dat", "q.dat", "k.fit", "r.fit", "q.fit", "e.bkg",
+    /// "k.bkg", … — selecting its file type too. Applied before `action`.
+    pub graph_item: Option<String>,
+    /// "Show Feffit fit (data + model)" for a sent fit.
+    pub show_fit: Option<bool>,
+    /// "Change BG color": swap the canvas against the UI theme.
+    pub swap_bg: Option<bool>,
+    /// G_kweight (0–3) applied to k-space curves.
+    pub kweight: Option<i32>,
+    /// Stacking offset between curves (data units, 0–5).
+    pub stack: Option<f64>,
+    /// "Same height": scale every curve to one peak-to-peak height.
+    pub same_height: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct FeffitGraphArgs {
+    /// The Feffit tab's graph space: "k", "r", "q" or "kq" (K+Q overlay).
+    pub space: String,
+    /// The complex-χ component for R / q: "re", "im", "mag" (Am) or "pha" (Ph).
+    pub part: Option<String>,
 }
 
 /// The per-connection MCP handler: forwards each tool call to the egui thread
@@ -543,6 +634,71 @@ impl XafsMcp {
         .await
     }
 
+    #[tool(
+        description = "Open a pop-up window by name (the Tools menu / top-bar / Log / Data windows), or raise it when it is already open. Names: open_data, data, log, plot_data, edit_mu, periodic_table, ion_chamber, powder, xanes, mback, wavelet, ke_convert, lcf, pca, time_resolved, insitu_map, plot_sites, feffit_batch, about."
+    )]
+    async fn open_window(
+        &self,
+        Parameters(a): Parameters<WindowArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::OpenWindow {
+            name: a.name,
+            reply,
+        })
+        .await
+    }
+
+    #[tool(description = "Close a pop-up window by name (same names as open_window).")]
+    async fn close_window(
+        &self,
+        Parameters(a): Parameters<WindowArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::CloseWindow {
+            name: a.name,
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Switch the UI theme (Settings › Toggle dark / light): dark = true or false. Every plot canvas follows."
+    )]
+    async fn set_theme(
+        &self,
+        Parameters(a): Parameters<SetThemeArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::SetTheme {
+            dark: a.dark,
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Drive the Plot Data window (opens it): `action` add_groups / clear / clear_fit / send_fit, `graph_item` by combo label (k.chi, r.chi, norm, …), and the display controls show_fit, swap_bg, kweight, stack, same_height. Only the given fields change."
+    )]
+    async fn plot_data(
+        &self,
+        Parameters(a): Parameters<PlotDataArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::PlotData {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Select the Feffit tab's graph: space k / r / q / kq and, for r / q, the component re / im / mag / pha; the Feffit graph replots (and send_fit uses this space)."
+    )]
+    async fn feffit_graph(
+        &self,
+        Parameters(a): Parameters<FeffitGraphArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::FeffitGraph { args: a, reply })
+            .await
+    }
+
     #[tool(description = "Capture a screenshot of the XAFSView main window as a PNG image.")]
     async fn screenshot(&self) -> Result<CallToolResult, ErrorData> {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -567,7 +723,7 @@ impl XafsMcp {
 
 #[tool_handler(
     name = "xafsview",
-    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot shows the current window."
+    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot shows the main window. open_window / close_window / set_theme / plot_data / feffit_graph drive the pop-up windows and the UI without the mouse."
 )]
 impl ServerHandler for XafsMcp {}
 

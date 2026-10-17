@@ -1151,6 +1151,16 @@ impl FeffitUi {
         (self.space, self.part)
     }
 
+    /// Select the graph space and, when given, the complex-χ component — what
+    /// the Graph box's selector clicks set (MCP `feffit_graph`); the caller
+    /// replots.
+    pub fn set_plot_selection(&mut self, space: PlotSpace, part: Option<PlotPart>) {
+        self.space = space;
+        if let Some(p) = part {
+            self.part = p;
+        }
+    }
+
     /// A plain-text fit report (the Feffit_txt view): statistics, free
     /// variables, derived constraints, and every path parameter with its
     /// propagated uncertainty. Empty string when no fit has been run.
