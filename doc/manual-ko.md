@@ -162,8 +162,9 @@ Autobk 탭의 **Edit μ(E)** 버튼(또는 Tools 메뉴)으로 엽니다.
 
 ![Fit report 탭](images/xv-fit-report.png)
 
-- **Save result** / **Load result**: 피팅 설정과 결과를 파일로 저장하고 다시
-  불러옵니다. **Load inp**는 예전 feffit `.inp`를 읽습니다.
+- **Save result**: 현재 Fit report 텍스트를 파일로 저장합니다. **Load result**는
+  저장해 둔 텍스트 파일을 팝업 창에 보여 줍니다(피팅 설정을 복원하지는
+  않습니다). **Load inp**는 예전 feffit `.inp`를 읽습니다.
 - **Send to Plot Data**: data·fit 곡선을 Plot Data 창으로 보냅니다.
 - **Batch…**: 같은 모델을 체크한 여러 group에 한꺼번에 적용하고 결과를 표로
   모읍니다.
