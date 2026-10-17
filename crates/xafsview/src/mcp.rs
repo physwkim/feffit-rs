@@ -368,8 +368,8 @@ impl XafsMcp {
         Parameters(a): Parameters<LoadDataArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let paths: Vec<std::path::PathBuf> = match (a.path, a.paths) {
-            (Some(p), None) => vec![p.into()],
-            (None, Some(v)) if !v.is_empty() => v.into_iter().map(Into::into).collect(),
+            (Some(p), None) => vec![native_path(&p)],
+            (None, Some(v)) if !v.is_empty() => v.iter().map(|p| native_path(p)).collect(),
             _ => {
                 return Err(ErrorData::invalid_params(
                     "give exactly one of `path` (one file) or `paths` (a non-empty batch)",
@@ -675,6 +675,17 @@ async fn serve(
     }
 }
 
+/// A filesystem path from an MCP string argument, in the platform's own
+/// spelling. Clients hand over paths as they hold them — on Windows typically
+/// with forward slashes (`C:/data/x.dat`) — and that spelling would otherwise
+/// travel into the session verbatim: the Folders tab showed such a Data folder
+/// with slashes. Re-joining the parsed components uses the native separator
+/// (and drops `.` components); on Unix this is the identity. Every MCP argument
+/// that names a file goes through here.
+pub fn native_path(s: &str) -> std::path::PathBuf {
+    std::path::Path::new(s).components().collect()
+}
+
 /// Encode an egui screenshot as PNG. The capture is opaque (alpha 255), so the
 /// premultiplied-sRGBA pixel bytes are valid straight RGBA.
 pub fn encode_png(img: &egui::ColorImage) -> Result<Vec<u8>, String> {
@@ -689,4 +700,26 @@ pub fn encode_png(img: &egui::ColorImage) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())?;
     writer.finish().map_err(|e| e.to_string())?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn native_path_respells_separators_and_drops_dot_components() {
+        // Compare spellings, not `Path` equality (which is component-wise and
+        // would call `C:/x` and `C:\x` equal).
+        let (win, unix) = (native_path("C:/data/./x.dat"), native_path("/d/./x.dat"));
+        if cfg!(windows) {
+            // The forward slashes an MCP client sends come out native.
+            assert_eq!(win.as_os_str(), r"C:\data\x.dat");
+            assert_eq!(unix.as_os_str(), r"\d\x.dat");
+        } else {
+            // Nothing to respell; the `.` component still goes.
+            assert_eq!(unix.as_os_str(), "/d/x.dat");
+            assert_eq!(native_path("rel/x.dat"), PathBuf::from("rel/x.dat"));
+        }
+    }
 }

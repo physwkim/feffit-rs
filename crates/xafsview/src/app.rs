@@ -701,8 +701,8 @@ impl XafsViewApp {
     /// MCP `add_path`: load the Feff path file and add it to the Feffit model
     /// with the given wiring overrides.
     fn mcp_add_path(&mut self, args: mcp::AddPathArgs) -> Result<String, String> {
-        let path = std::path::Path::new(&args.path);
-        let fp = feffit::feffdat::FeffPath::from_path(path)
+        let path = mcp::native_path(&args.path);
+        let fp = feffit::feffdat::FeffPath::from_path(&path)
             .map_err(|e| format!("Path load failed: {e}"))?;
         let label = args.label.unwrap_or_else(|| {
             path.file_name()

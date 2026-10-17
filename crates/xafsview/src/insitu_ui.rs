@@ -452,10 +452,12 @@ impl InsituWindow {
         args: &crate::mcp::InsituMapArgs,
     ) -> Result<String, String> {
         if let Some(file) = &args.file {
-            let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+            let file = crate::mcp::native_path(file);
+            let text =
+                std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             let map = parse_series_dat(&text)?;
             let n = map.labels.len();
-            self.set_map(map, format!("Opened {file}: {n} scan(s)."));
+            self.set_map(map, format!("Opened {}: {n} scan(s).", file.display()));
         } else {
             let channel = args.channel.as_deref().unwrap_or("rdf");
             match channel.to_ascii_lowercase().as_str() {
