@@ -63,13 +63,40 @@ pub(crate) const FIT_MODEL: Color32 = crate::plot::RED;
 /// Plot Data window's own graph.
 struct FitOverlay {
     label: String,
+    /// The graph item the fit's series is — [`GraphItem::FitK`], `FitR` or
+    /// `FitQ` — so the window's axis labels (and k-weight handling) follow the
+    /// sent space when nothing else is loaded, like a loaded `.fit` file's would.
+    item: GraphItem,
     x: Vec<f64>,
     data: Vec<f64>,
     model: Vec<f64>,
     /// `Some(kw)` when the series is k-space `kʷ·χ(k)` at the fit's k-weight
     /// `kw`; the draw re-weights it to the graph's G_kweight on a k-space graph.
     /// `None` for an R/q-space series, which has no k-weight to reconcile.
+    /// Derived from `item` in [`FitOverlay::new`], the only constructor.
     kweight: Option<i32>,
+}
+
+impl FitOverlay {
+    /// A sent fit's series as `item`, at the fit's k-weight `fit_kweight`
+    /// (meaningful only for a k-space item; see [`FitOverlay::kweight`]).
+    fn new(
+        label: String,
+        item: GraphItem,
+        x: Vec<f64>,
+        data: Vec<f64>,
+        model: Vec<f64>,
+        fit_kweight: i32,
+    ) -> Self {
+        Self {
+            label,
+            item,
+            x,
+            data,
+            model,
+            kweight: item.applies_kweight().then_some(fit_kweight),
+        }
+    }
 }
 
 /// A session group's curve added via "Add loaded groups": its y is kept
@@ -275,24 +302,20 @@ impl PlotDataWindow {
     }
 
     /// Take a Feffit fit's data + model curves (the Feffit form's "Send to plot
-    /// data"). The fit is drawn on top of the loaded files; untick "Show Feffit
-    /// fit" or "Clear fit" to remove it. `kweight` is the fit's k-weight for a
-    /// k-space series (see [`FitOverlay::kweight`]), `None` otherwise.
+    /// data") as the graph item `item` (`FitK`/`FitR`/`FitQ`) at the fit's
+    /// k-weight `fit_kweight`. The fit is drawn on top of the loaded files, and
+    /// owns the axis labels only when no file or group is loaded; untick "Show
+    /// Feffit fit" or "Clear fit" to remove it.
     pub fn set_fit_overlay(
         &mut self,
         label: String,
+        item: GraphItem,
         x: Vec<f64>,
         data: Vec<f64>,
         model: Vec<f64>,
-        kweight: Option<i32>,
+        fit_kweight: i32,
     ) {
-        self.overlay = Some(FitOverlay {
-            label,
-            x,
-            data,
-            model,
-            kweight,
-        });
+        self.overlay = Some(FitOverlay::new(label, item, x, data, model, fit_kweight));
         self.show_overlay = true;
         self.dirty = true;
     }
@@ -962,30 +985,32 @@ impl PlotDataWindow {
     /// even if the picker's selector has since moved); falls back to the selector
     /// when nothing is loaded.
     fn axis_labels(&self) -> (String, String) {
-        match self.loaded.first() {
-            Some(t) => match &t.axis {
-                Some((x, y)) => (x.clone(), y.clone()),
-                None => (t.item.x_label().to_owned(), t.item.y_label().to_owned()),
-            },
-            None => match self.group_traces.first() {
-                Some(t) => (t.item.x_label().to_owned(), t.item.y_label().to_owned()),
-                None => (
-                    self.graph_item.x_label().to_owned(),
-                    self.graph_item.y_label().to_owned(),
-                ),
-            },
+        // A loaded file may carry its own axis labels (a saved .result).
+        if let Some(t) = self.loaded.first()
+            && let Some((x, y)) = &t.axis
+        {
+            return (x.clone(), y.clone());
         }
+        let item = self.displayed_item();
+        (item.x_label().to_owned(), item.y_label().to_owned())
     }
 
-    /// The graph item the displayed curves were derived as — the same
-    /// precedence as [`axis_labels`](Self::axis_labels): the loaded files, then
-    /// the added groups, then the picker's selector when nothing is loaded.
+    /// The graph item the displayed curves were derived as — the precedence
+    /// behind [`axis_labels`](Self::axis_labels) too: the loaded files, then
+    /// the added groups, then a shown sent fit, then the picker's selector when
+    /// nothing at all is displayed.
     fn displayed_item(&self) -> GraphItem {
         self.loaded
             .first()
             .map(|t| t.item)
             .or_else(|| self.group_traces.first().map(|t| t.item))
+            .or_else(|| self.shown_overlay().map(|ov| ov.item))
             .unwrap_or(self.graph_item)
+    }
+
+    /// The sent fit, when there is one and "Show Feffit fit" is on.
+    fn shown_overlay(&self) -> Option<&FitOverlay> {
+        self.overlay.as_ref().filter(|_| self.show_overlay)
     }
 
     /// Build the displayed traces from the loaded files — palette colours,
@@ -1560,14 +1585,26 @@ mod tests {
         assert_eq!(stack_offset_y(y.clone(), 3, 0.0), y);
     }
 
-    fn overlay(x: Vec<f64>, data: Vec<f64>, model: Vec<f64>, kweight: Option<i32>) -> FitOverlay {
-        FitOverlay {
-            label: "fit".into(),
-            x,
-            data,
-            model,
-            kweight,
-        }
+    fn overlay(
+        item: GraphItem,
+        x: Vec<f64>,
+        data: Vec<f64>,
+        model: Vec<f64>,
+        fit_kweight: i32,
+    ) -> FitOverlay {
+        FitOverlay::new("fit".into(), item, x, data, model, fit_kweight)
+    }
+
+    #[test]
+    fn fit_overlay_keeps_a_kweight_only_for_a_k_space_item() {
+        // The k-weight to reconcile exists only for kʷ·χ(k); an R- or q-space
+        // series carries none, whatever the fit's k-weight was.
+        let k = overlay(GraphItem::FitK, vec![1.0], vec![1.0], vec![], 2);
+        assert_eq!((k.item, k.kweight), (GraphItem::FitK, Some(2)));
+        let r = overlay(GraphItem::FitR, vec![1.0], vec![1.0], vec![], 2);
+        assert_eq!((r.item, r.kweight), (GraphItem::FitR, None));
+        let q = overlay(GraphItem::FitQ, vec![1.0], vec![1.0], vec![], 3);
+        assert_eq!((q.item, q.kweight), (GraphItem::FitQ, None));
     }
 
     #[test]
@@ -1575,10 +1612,11 @@ mod tests {
         // A k²-weighted fit on a G_kweight = 3 k-space graph gains one power of k
         // (k = 0 stays 0); R-space (`kweight: None`) and a non-k graph are untouched.
         let ov = overlay(
+            GraphItem::FitK,
             vec![0.0, 1.0, 2.0],
             vec![0.0, 1.0, 4.0],
             vec![0.0, 2.0, 8.0],
-            Some(2),
+            2,
         );
         let (d, m) = overlay_curves(&ov, 3, true, false);
         assert_eq!(d, vec![0.0, 1.0, 8.0]);
@@ -1587,7 +1625,13 @@ mod tests {
         let (d, _) = overlay_curves(&ov, 1, true, false);
         assert_eq!(d, vec![0.0, 1.0, 2.0]);
         assert_eq!(overlay_curves(&ov, 3, false, false).0, vec![0.0, 1.0, 4.0]);
-        let r = overlay(vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 4.0], vec![], None);
+        let r = overlay(
+            GraphItem::FitR,
+            vec![0.0, 1.0, 2.0],
+            vec![0.0, 1.0, 4.0],
+            vec![],
+            2,
+        );
         assert_eq!(
             overlay_curves(&r, 3, true, false),
             (vec![0.0, 1.0, 4.0], vec![])
@@ -1599,10 +1643,11 @@ mod tests {
         // Data spans [0, 4] → [0, 1]; the model is scaled by that same span, so a
         // model twice the data stays twice as tall instead of also topping at 1.
         let ov = overlay(
+            GraphItem::FitR,
             vec![1.0, 2.0, 3.0],
             vec![0.0, 2.0, 4.0],
             vec![0.0, 4.0, 8.0],
-            None,
+            2,
         );
         let (d, m) = overlay_curves(&ov, 2, true, true);
         assert_eq!(d, vec![0.0, 0.5, 1.0]);

@@ -3190,12 +3190,18 @@ impl XafsViewApp {
         let (x, data_y, model_y, _xlabel, _ylabel) = p.series(space, part);
         // "Only FT" has no model — send an empty model so Plot Data draws data alone.
         let model_y = if has_model { model_y } else { Vec::new() };
-        // A k-space series is kʷ·χ(k) at the fit's k-weight; Plot Data re-weights
-        // it to its own G_kweight (the K+Q selection sends the k series).
+        // The series goes over as the matching .fit graph item, so Plot Data
+        // labels its axes for that space and, for k-space (kʷ·χ(k) at the fit's
+        // k-weight), re-weights to its own G_kweight. The K+Q selection sends
+        // the k series.
         use crate::feffit_ui::PlotSpace;
-        let kweight = matches!(space, PlotSpace::K | PlotSpace::KQ).then_some(p.kweight);
+        let item = match space {
+            PlotSpace::K | PlotSpace::KQ => crate::plot_files::GraphItem::FitK,
+            PlotSpace::R => crate::plot_files::GraphItem::FitR,
+            PlotSpace::Q => crate::plot_files::GraphItem::FitQ,
+        };
         self.plot_data
-            .set_fit_overlay(label, x, data_y, model_y, kweight);
+            .set_fit_overlay(label, item, x, data_y, model_y, p.kweight);
         // Pop the Plot Data window so the sent fit is visible right away.
         self.plot_data.open();
         self.status
