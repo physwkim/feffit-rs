@@ -60,7 +60,8 @@ pub(crate) const FIT_MODEL: Color32 = crate::plot::RED;
 
 /// A Feffit fit handed over from the Feffit tab's "Send to Plot Data": its data
 /// and model curves in the chosen space. Drawn on top of the loaded files on the
-/// Plot Data window's own graph.
+/// Plot Data window's own graph — only while that graph's x axis is the fit's
+/// own ([`overlay_shares_axis`]); an R-space fit never lands on a k axis.
 struct FitOverlay {
     label: String,
     /// The graph item the fit's series is — [`GraphItem::FitK`], `FitR` or
@@ -97,6 +98,13 @@ impl FitOverlay {
             kweight: item.applies_kweight().then_some(fit_kweight),
         }
     }
+}
+
+/// Whether a sent fit belongs on a graph displaying `displayed`: the two share
+/// an x axis (k, R, q or E). The one rule deciding whether the overlay is drawn,
+/// so an R-space fit and k-space files are never mixed on one axis.
+fn overlay_shares_axis(ov: &FitOverlay, displayed: GraphItem) -> bool {
+    ov.item.x_label() == displayed.x_label()
 }
 
 /// A session group's curve added via "Add loaded groups": its y is kept
@@ -426,6 +434,18 @@ impl PlotDataWindow {
             self.dirty = true;
         }
         ui.weak(label);
+        // Say why nothing is drawn when the files are in another space, instead
+        // of drawing the fit on an axis that is not its own.
+        if self.show_overlay
+            && let Some(ov) = &self.overlay
+            && !overlay_shares_axis(ov, self.displayed_item())
+        {
+            ui.weak(format!(
+                "hidden: the graph's x axis is {}, the fit's is {}",
+                self.displayed_item().x_label(),
+                ov.item.x_label()
+            ));
+        }
         if ui.button("Clear fit").clicked() {
             self.overlay = None;
             self.show_overlay = false;
@@ -1176,7 +1196,10 @@ impl PlotDataWindow {
         // (add_emphasized_curve) was too weak to spot. `dim` fades the rest.
         let dimming = highlighted.is_some();
         let stack = self.stack;
-        let show_overlay = self.show_overlay;
+        // The sent fit is drawn only on a graph whose x axis is its own.
+        let draw_overlay = self
+            .shown_overlay()
+            .is_some_and(|ov| overlay_shares_axis(ov, self.displayed_item()));
         let (g_kweight, k_graph, same_height) = (
             self.kweight,
             self.displayed_item().applies_kweight(),
@@ -1209,7 +1232,7 @@ impl PlotDataWindow {
 
         // A sent Feffit fit, drawn under the files (disjoint-field borrow: reads
         // `self.overlay`, writes `self.plot`).
-        if show_overlay
+        if draw_overlay
             && let Some(ov) = &self.overlay
             && !ov.x.is_empty()
         {
@@ -1616,6 +1639,25 @@ mod tests {
         fit_kweight: i32,
     ) -> FitOverlay {
         FitOverlay::new("fit".into(), item, x, data, model, fit_kweight)
+    }
+
+    /// A sent fit is drawn only on a graph sharing its x axis: each space
+    /// against its own and against a neighbour (k and q both in Å⁻¹ are still
+    /// different axes).
+    #[test]
+    fn overlay_is_drawn_only_on_its_own_x_axis() {
+        let fit = |item| overlay(item, vec![1.0], vec![1.0], vec![1.0], 2);
+        assert!(overlay_shares_axis(&fit(GraphItem::FitK), GraphItem::ChiK));
+        assert!(overlay_shares_axis(&fit(GraphItem::FitK), GraphItem::DatK));
+        assert!(overlay_shares_axis(&fit(GraphItem::FitR), GraphItem::ChiR));
+        assert!(overlay_shares_axis(&fit(GraphItem::FitQ), GraphItem::DatQ));
+        assert!(!overlay_shares_axis(&fit(GraphItem::FitR), GraphItem::ChiK));
+        assert!(!overlay_shares_axis(&fit(GraphItem::FitK), GraphItem::ChiR));
+        assert!(!overlay_shares_axis(&fit(GraphItem::FitK), GraphItem::DatQ));
+        assert!(!overlay_shares_axis(
+            &fit(GraphItem::FitR),
+            GraphItem::XmuNorm
+        ));
     }
 
     #[test]
