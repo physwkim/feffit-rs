@@ -10,7 +10,7 @@
 
 use std::fmt::Write as _;
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
@@ -139,12 +139,16 @@ impl TimeResolvedWindow {
         }
     }
 
-    /// Replace the table with the picked file series, extracting each file's
-    /// measurement timestamps from its header.
+    /// "Pick files…": replace the table with a dialog-picked file series.
     fn pick_files(&mut self) {
-        let Some(paths) = rfd::FileDialog::new().pick_files() else {
-            return;
-        };
+        if let Some(paths) = rfd::FileDialog::new().pick_files() {
+            self.set_files(&paths);
+        }
+    }
+
+    /// Replace the table with the file series `paths`, extracting each file's
+    /// measurement timestamps from its header.
+    fn set_files(&mut self, paths: &[PathBuf]) {
         self.rows = paths
             .iter()
             .map(|p| TimeRow {
@@ -167,6 +171,27 @@ impl TimeResolvedWindow {
         };
     }
 
+    /// MCP `time_resolved`: Clear, the file series, and Save as a single file,
+    /// in that order; returns the status line and the table as text.
+    pub fn apply_mcp(&mut self, a: &crate::mcp::TimeResolvedArgs) -> Result<String, String> {
+        self.open = true;
+        if a.clear == Some(true) {
+            self.rows.clear();
+            self.status.clear();
+        }
+        if let Some(files) = &a.files {
+            let paths: Vec<PathBuf> = files.iter().map(|f| crate::mcp::native_path(f)).collect();
+            self.set_files(&paths);
+        }
+        if let Some(save) = &a.save {
+            if self.rows.is_empty() {
+                return Err("no files listed — give `files` first".to_owned());
+            }
+            self.save_to(&crate::mcp::native_path(save))?;
+        }
+        Ok(format!("{}\n{}", self.status, self.table_text()))
+    }
+
     /// The rows with their times rebased to hours from the first scan that has a
     /// parsed timestamp (the original's first row starts at `0.000000`). Rows
     /// without a parsed timestamp carry `None`.
@@ -184,14 +209,32 @@ impl TimeResolvedWindow {
             .collect()
     }
 
-    /// Write the table to a single user-chosen text file.
+    /// "Save as a single file": write the table to a dialog-chosen text file.
     fn save_single_file(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
+        if let Some(path) = rfd::FileDialog::new()
             .set_file_name("measured_time.txt")
             .save_file()
-        else {
-            return;
+        {
+            // The outcome is on the status line either way.
+            let _ = self.save_to(&path);
+        }
+    }
+
+    /// Write the table to `path`, reporting the outcome on the status line and
+    /// returning it.
+    fn save_to(&mut self, path: &Path) -> Result<String, String> {
+        let result = std::fs::write(path, self.table_text())
+            .map(|()| format!("Saved {} row(s) to {}.", self.rows.len(), path.display()))
+            .map_err(|e| format!("Save failed: {e}"));
+        self.status = match &result {
+            Ok(m) | Err(m) => m.clone(),
         };
+        result
+    }
+
+    /// The table as the saved file's text: a two-line header, then one row per
+    /// file with its rebased start / finish hours (`n/a` without a timestamp).
+    fn table_text(&self) -> String {
         let mut s = String::new();
         s.push_str("# Extract XAS measured time — hours from the first scan\n");
         let _ = writeln!(s, "# {:<24}{:>18}{:>18}", "file", "start_hr", "finish_hr");
@@ -205,12 +248,7 @@ impl TimeResolvedWindow {
                 }
             }
         }
-        match std::fs::write(&path, s) {
-            Ok(()) => {
-                self.status = format!("Saved {} row(s) to {}.", self.rows.len(), path.display());
-            }
-            Err(e) => self.status = format!("Save failed: {e}"),
-        }
+        s
     }
 }
 
@@ -381,6 +419,41 @@ mod tests {
         assert_eq!(d[0].1, Some((0.0, 0.5)));
         assert_eq!(d[1].1, None);
         assert_eq!(d[2].1, Some((1.0, 1.5)));
+    }
+
+    #[test]
+    fn mcp_lists_saves_and_clears() {
+        let dir = std::env::temp_dir().join(format!("xafsview_timeres_mcp_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let p = dir.join("scan.000");
+        std::fs::write(&p, HEADER_10C).expect("write");
+        let out = dir.join("measured_time.txt");
+        let mut w = TimeResolvedWindow::default();
+        let a = crate::mcp::TimeResolvedArgs {
+            files: Some(vec![p.display().to_string()]),
+            clear: None,
+            save: Some(out.display().to_string()),
+        };
+        let text = w.apply_mcp(&a).unwrap();
+        assert!(text.starts_with("Saved 1 row(s) to "), "{text}");
+        assert!(text.contains("scan.000"), "{text}");
+        assert!(text.contains("0.000000"), "{text}");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), w.table_text());
+        let c = crate::mcp::TimeResolvedArgs {
+            files: None,
+            clear: Some(true),
+            save: None,
+        };
+        assert!(w.apply_mcp(&c).unwrap().trim().ends_with("finish_hr"));
+        assert!(w.rows.is_empty());
+        let s = crate::mcp::TimeResolvedArgs {
+            files: None,
+            clear: None,
+            save: Some(out.display().to_string()),
+        };
+        assert!(w.apply_mcp(&s).unwrap_err().contains("no files listed"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

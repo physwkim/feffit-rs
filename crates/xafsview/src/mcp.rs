@@ -170,6 +170,10 @@ pub enum McpRequest {
         args: KeConvertArgs,
         reply: TextReply,
     },
+    TimeResolved {
+        args: TimeResolvedArgs,
+        reply: TextReply,
+    },
     Screenshot {
         window: Option<String>,
         reply: PngReply,
@@ -750,6 +754,16 @@ pub struct KeConvertArgs {
     pub k: Option<f64>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct TimeResolvedArgs {
+    /// The time-resolved file series ("Pick files…"): replaces the table.
+    pub files: Option<Vec<String>>,
+    /// "Clear" the table.
+    pub clear: Option<bool>,
+    /// "Save as a single file" to this path.
+    pub save: Option<String>,
+}
+
 /// The per-connection MCP handler: forwards each tool call to the egui thread
 /// and awaits the oneshot. Cheap to clone (a channel sender + an egui context).
 #[derive(Clone)]
@@ -1236,6 +1250,17 @@ impl XafsMcp {
         Parameters(a): Parameters<KeConvertArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::KeConvert { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "The Extract XAS measured time window: give the file series (replaces the table), Clear, and/or Save as a single file; returns the start / finish table in hours from the first scan."
+    )]
+    async fn time_resolved(
+        &self,
+        Parameters(a): Parameters<TimeResolvedArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::TimeResolved { args: a, reply })
             .await
     }
 }

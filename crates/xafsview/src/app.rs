@@ -691,6 +691,9 @@ impl XafsViewApp {
                 let group_e0 = self.session.current_group().and_then(|g| g.e0);
                 let _ = reply.send(self.ke_convert.apply_mcp(&args, group_e0));
             }
+            mcp::McpRequest::TimeResolved { args, reply } => {
+                let _ = reply.send(self.time_resolved.apply_mcp(&args));
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }
