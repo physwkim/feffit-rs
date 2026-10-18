@@ -1148,12 +1148,9 @@ impl XafsViewApp {
             "lcf" => self.lcf.plot_mut(),
             "pca" => self.pca.plot_mut(),
             "insitu_map" => self.insitu.plot_mut(),
-            "wavelet" => {
-                return Err("the Wavelet window shows an image, not a 1-D graph".to_owned());
-            }
             other => {
                 return Err(format!(
-                    "no graph in window {other:?} (main, plot_data, xanes, mback, lcf, pca, insitu_map)"
+                    "no 1-D graph in window {other:?}; graphs: main, plot_data, xanes, mback, lcf, pca, insitu_map (wavelet shows an image, plot_sites a 3-D scene; edit_mu, time_resolved and the calculators are forms)"
                 ));
             }
         };
