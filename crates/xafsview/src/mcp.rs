@@ -150,6 +150,10 @@ pub enum McpRequest {
         args: Box<GraphArgs>,
         reply: TextReply,
     },
+    Log {
+        args: LogArgs,
+        reply: TextReply,
+    },
     Screenshot {
         window: Option<String>,
         reply: PngReply,
@@ -665,6 +669,14 @@ pub struct RunFeffArgs {
     pub backend: Option<String>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct LogArgs {
+    /// Return only the newest N messages (default: the whole log).
+    pub last: Option<usize>,
+    /// Press the Log window's "Clear" first.
+    pub clear: Option<bool>,
+}
+
 /// The per-connection MCP handler: forwards each tool call to the egui thread
 /// and awaits the oneshot. Cheap to clone (a channel sender + an egui context).
 #[derive(Clone)]
@@ -1094,6 +1106,14 @@ impl XafsMcp {
                 None,
             )),
         }
+    }
+
+    #[tool(
+        description = "The Log window's messages (INFO / ERROR, oldest first), optionally only the newest N, optionally after Clear."
+    )]
+    async fn log(&self, Parameters(a): Parameters<LogArgs>) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Log { args: a, reply })
+            .await
     }
 }
 

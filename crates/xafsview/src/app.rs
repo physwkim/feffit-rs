@@ -672,6 +672,12 @@ impl XafsViewApp {
                 ctx.request_repaint();
                 let _ = reply.send(r);
             }
+            mcp::McpRequest::Log { args, reply } => {
+                if args.clear == Some(true) {
+                    self.status.clear();
+                }
+                let _ = reply.send(Ok(self.status.text(args.last)));
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }

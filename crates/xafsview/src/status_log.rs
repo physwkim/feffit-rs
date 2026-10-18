@@ -81,6 +81,31 @@ impl StatusLog {
             .count()
     }
 
+    /// The Log window's "Clear": drop every logged message (the strip line
+    /// stays — it is the latest summary, not a log entry).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// The log as text, one `INFO: …` / `ERROR: …` line per message, oldest
+    /// first — the Log window's list for MCP `log`. `last` keeps only the
+    /// newest that many.
+    pub fn text(&self, last: Option<usize>) -> String {
+        let skip = last.map_or(0, |n| self.entries.len().saturating_sub(n));
+        self.entries
+            .iter()
+            .skip(skip)
+            .map(|e| {
+                let tag = match e.level {
+                    LogLevel::Info => "INFO",
+                    LogLevel::Error => "ERROR",
+                };
+                format!("{tag}: {}", e.message)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn set(&mut self, level: LogLevel, message: String) {
         self.line.clone_from(&message);
         self.push(level, message);
@@ -119,7 +144,7 @@ impl StatusLog {
                             self.error_count()
                         ));
                         if ui.button("Clear").clicked() {
-                            self.entries.clear();
+                            self.clear();
                         }
                     });
                 });
@@ -176,6 +201,20 @@ mod tests {
         assert_eq!(log.line(), "Batch: built 1, 2 failed");
         assert_eq!(log.entries.len(), 3, "details + summary all logged");
         assert_eq!(log.error_count(), 2);
+    }
+
+    #[test]
+    fn text_lists_newest_last_and_last_n_limits() {
+        let mut log = StatusLog::default();
+        log.info("one");
+        log.detail_error("two");
+        log.info("three");
+        assert_eq!(log.text(None), "INFO: one\nERROR: two\nINFO: three");
+        assert_eq!(log.text(Some(2)), "ERROR: two\nINFO: three");
+        assert_eq!(log.text(Some(0)), "");
+        log.clear();
+        assert_eq!(log.text(None), "");
+        assert_eq!(log.line(), "three", "Clear keeps the strip line");
     }
 
     #[test]
