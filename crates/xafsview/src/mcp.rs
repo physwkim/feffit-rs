@@ -151,6 +151,7 @@ pub enum McpRequest {
         reply: TextReply,
     },
     Screenshot {
+        window: Option<String>,
         reply: PngReply,
     },
 }
@@ -263,6 +264,14 @@ pub struct SetZoomArgs {
     /// `true` resets the view to the data bounds (the toolbar's Reset Zoom);
     /// no limits may be given alongside it.
     pub reset: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct ScreenshotArgs {
+    /// Which window: "main" (default), or an open pop-up by its `open_window`
+    /// name (plot_data, xanes, mback, lcf, pca, insitu_map, wavelet, edit_mu,
+    /// data, log, …).
+    pub window: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -1058,10 +1067,18 @@ impl XafsMcp {
         .await
     }
 
-    #[tool(description = "Capture a screenshot of the XAFSView main window as a PNG image.")]
-    async fn screenshot(&self) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        description = "Capture a window as a PNG image: the XAFSView main window, or with `window` an open pop-up (an open_window name)."
+    )]
+    async fn screenshot(
+        &self,
+        Parameters(a): Parameters<ScreenshotArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.send(McpRequest::Screenshot { reply: tx })?;
+        self.send(McpRequest::Screenshot {
+            window: a.window,
+            reply: tx,
+        })?;
         match rx.await {
             Ok(Ok(png)) => {
                 use base64::Engine as _;
@@ -1082,7 +1099,7 @@ impl XafsMcp {
 
 #[tool_handler(
     name = "xafsview",
-    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot shows the main window. open_window / close_window / set_theme / plot_data / feffit_graph / xanes / mback / lcf / pca / wavelet / edit_mu / build_feff_inp / run_feff drive the pop-up windows and the tabs without the mouse; graph makes the mouse gestures on a plot (zoom, box zoom, pan, click, band drag, legend click)."
+    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot captures the main window or, with `window`, an open pop-up. open_window / close_window / set_theme / plot_data / feffit_graph / xanes / mback / lcf / pca / wavelet / edit_mu / build_feff_inp / run_feff drive the pop-up windows and the tabs without the mouse; graph makes the mouse gestures on a plot (zoom, box zoom, pan, click, band drag, legend click)."
 )]
 impl ServerHandler for XafsMcp {}
 

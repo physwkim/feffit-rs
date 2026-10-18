@@ -71,6 +71,21 @@ impl Tab {
 
 /// The eframe application: the data [`Session`], the active tab, and the shared
 /// plot (one `rsplot::Plot1D` reused across the plot-bearing tabs).
+/// The pop-up an MCP `screenshot` targets: its detached-window id and MCP name.
+struct ShotWindow {
+    id: &'static str,
+    name: String,
+}
+
+/// An MCP `screenshot` awaiting its [`egui::Event::Screenshot`]: the viewport
+/// asked for and, for a pop-up, the window, so one closed before the capture
+/// fails the call instead of parking it.
+struct PendingShot {
+    viewport: egui::ViewportId,
+    window: Option<ShotWindow>,
+    reply: mcp::PngReply,
+}
+
 pub struct XafsViewApp {
     session: Session,
     tab: Tab,
@@ -218,8 +233,8 @@ pub struct XafsViewApp {
     /// A parked MCP `run_feff` reply: the Feff tab's run finishes on its own
     /// thread and is drained each frame while this is set.
     mcp_feff_reply: Option<mcp::TextReply>,
-    /// MCP `screenshot` replies awaiting the next [`egui::Event::Screenshot`].
-    mcp_shot_replies: Vec<mcp::PngReply>,
+    /// MCP `screenshot` replies awaiting their [`egui::Event::Screenshot`].
+    mcp_shot_replies: Vec<PendingShot>,
     /// Armed by the In-situ window's "Re-reduce & build" when its reduction
     /// job starts; [`finish_reduction`](Self::finish_reduction) consumes it to
     /// rebuild the map from the freshly reduced groups (cleared if the job
@@ -452,17 +467,43 @@ impl XafsViewApp {
     /// then handle every queued tool request. Runs at the top of each frame.
     fn poll_mcp(&mut self, ctx: &egui::Context) {
         if !self.mcp_shot_replies.is_empty() {
-            let image = ctx.input(|i| {
-                i.events.iter().find_map(|e| match e {
-                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
-                    _ => None,
-                })
+            // One event per captured viewport; a frame can carry several.
+            let shots: Vec<(egui::ViewportId, std::sync::Arc<egui::ColorImage>)> = ctx.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Screenshot {
+                            viewport_id, image, ..
+                        } => Some((*viewport_id, image.clone())),
+                        _ => None,
+                    })
+                    .collect()
             });
-            if let Some(image) = image {
+            for (viewport, image) in shots {
                 let png = mcp::encode_png(&image);
-                for reply in self.mcp_shot_replies.drain(..) {
-                    let _ = reply.send(png.clone());
+                let (done, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.mcp_shot_replies)
+                    .into_iter()
+                    .partition(|s| s.viewport == viewport);
+                self.mcp_shot_replies = rest;
+                for s in done {
+                    let _ = s.reply.send(png.clone());
                 }
+            }
+            // A pop-up closed between the request and its capture would never
+            // answer; fail the call instead.
+            let (closed, live): (Vec<_>, Vec<_>) = std::mem::take(&mut self.mcp_shot_replies)
+                .into_iter()
+                .partition(|s| {
+                    s.window.as_ref().is_some_and(|w| {
+                        crate::window::open_viewport_id(ctx, w.id) != Some(s.viewport)
+                    })
+                });
+            self.mcp_shot_replies = live;
+            for s in closed {
+                let name = s.window.map(|w| w.name).unwrap_or_default();
+                let _ = s
+                    .reply
+                    .send(Err(format!("{name} closed before the capture")));
             }
         }
         let Some((_, rx)) = &self.mcp else { return };
@@ -699,9 +740,23 @@ impl XafsViewApp {
                     }
                 }
             }
-            mcp::McpRequest::Screenshot { reply } => {
-                self.mcp_shot_replies.push(reply);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            mcp::McpRequest::Screenshot { window, reply } => {
+                match self.mcp_shot_target(window, ctx) {
+                    Ok((viewport, window)) => {
+                        ctx.send_viewport_cmd_to(
+                            viewport,
+                            egui::ViewportCommand::Screenshot(egui::UserData::default()),
+                        );
+                        self.mcp_shot_replies.push(PendingShot {
+                            viewport,
+                            window,
+                            reply,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
             }
         }
     }
@@ -806,31 +861,39 @@ impl XafsViewApp {
         ))
     }
 
-    /// MCP `open_window` / `close_window`: flip the open flag the menu item or
-    /// button flips — through the entry point that seeds the window where one
-    /// exists ("open_data") — and raise a window that is already open, since
-    /// setting a set flag changes nothing on screen.
-    fn mcp_window(
+    /// The viewport an MCP `screenshot` captures: the main window (no name or
+    /// "main"), or the named pop-up while it is open and has been drawn — a
+    /// window opened by the previous call has been; one opened this frame has
+    /// not. A pop-up comes with its detached id and name.
+    fn mcp_shot_target(
         &mut self,
-        name: &str,
-        open: bool,
+        window: Option<String>,
         ctx: &egui::Context,
-    ) -> Result<String, String> {
-        let name = name.to_ascii_lowercase();
-        // (open flag, detached-window id) per name.
-        let (flag, id): (&mut bool, &str) = match name.as_str() {
-            "open_data" => {
-                if open {
-                    // Seeds the staging pane and raises an open loader itself.
-                    self.open_new_file(ctx);
-                } else {
-                    self.open_data.open = false;
-                }
-                return Ok(format!(
-                    "{name}: {}",
-                    if open { "opened" } else { "closed" }
-                ));
-            }
+    ) -> Result<(egui::ViewportId, Option<ShotWindow>), String> {
+        let name = window
+            .map(|w| w.to_ascii_lowercase())
+            .filter(|w| w != "main");
+        let Some(name) = name else {
+            return Ok((egui::ViewportId::ROOT, None));
+        };
+        let (flag, id) = self.mcp_window_slot(&name)?;
+        if !*flag {
+            return Err(format!("{name} is closed — open_window first"));
+        }
+        match crate::window::open_viewport_id(ctx, id) {
+            Some(viewport) => Ok((viewport, Some(ShotWindow { id, name }))),
+            None => Err(format!(
+                "{name} has not been drawn yet — call screenshot again"
+            )),
+        }
+    }
+
+    /// The open flag and detached-window id behind an MCP window name
+    /// (lower-case). `open_data`'s *open* path goes through
+    /// [`Self::open_new_file`] instead, which seeds the loader.
+    fn mcp_window_slot(&mut self, name: &str) -> Result<(&mut bool, &'static str), String> {
+        Ok(match name {
+            "open_data" => (&mut self.open_data.open, Self::OPEN_DATA_WINDOW),
             "data" => (&mut self.data_window_open, "data_manager"),
             "log" => (&mut self.status.open, "status_log"),
             "plot_data" => (&mut self.plot_data.open, "plot_data"),
@@ -855,7 +918,33 @@ impl XafsViewApp {
                     mcp::WINDOW_NAMES
                 ));
             }
-        };
+        })
+    }
+
+    /// MCP `open_window` / `close_window`: flip the open flag the menu item or
+    /// button flips — through the entry point that seeds the window where one
+    /// exists ("open_data") — and raise a window that is already open, since
+    /// setting a set flag changes nothing on screen.
+    fn mcp_window(
+        &mut self,
+        name: &str,
+        open: bool,
+        ctx: &egui::Context,
+    ) -> Result<String, String> {
+        let name = name.to_ascii_lowercase();
+        if name == "open_data" {
+            if open {
+                // Seeds the staging pane and raises an open loader itself.
+                self.open_new_file(ctx);
+            } else {
+                self.open_data.open = false;
+            }
+            return Ok(format!(
+                "{name}: {}",
+                if open { "opened" } else { "closed" }
+            ));
+        }
+        let (flag, id) = self.mcp_window_slot(&name)?;
         let was_open = *flag;
         *flag = open;
         let outcome = match (open, was_open) {

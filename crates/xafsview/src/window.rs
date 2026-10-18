@@ -180,13 +180,18 @@ pub fn detached_panels(
 /// already set and [`detached_panels`] only creates a viewport, never raises
 /// one. A no-op while the window is closed (its next open creates it in front).
 pub fn focus(ctx: &egui::Context, id_source: &str) {
-    if let Some((true, generation)) =
-        ctx.data(|d| d.get_temp::<(bool, u64)>(open_state_id(id_source)))
-    {
-        ctx.send_viewport_cmd_to(
-            viewport_id(id_source, generation),
-            egui::ViewportCommand::Focus,
-        );
+    if let Some(id) = open_viewport_id(ctx, id_source) {
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Focus);
+    }
+}
+
+/// The viewport of the detached window `id_source` while it is open and has
+/// been shown at least once (its current generation); `None` while closed or
+/// before its first frame.
+pub fn open_viewport_id(ctx: &egui::Context, id_source: &str) -> Option<egui::ViewportId> {
+    match ctx.data(|d| d.get_temp::<(bool, u64)>(open_state_id(id_source))) {
+        Some((true, generation)) => Some(viewport_id(id_source, generation)),
+        _ => None,
     }
 }
 
