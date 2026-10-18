@@ -196,6 +196,10 @@ pub enum McpRequest {
     RunMultiAutobk {
         reply: TextReply,
     },
+    FeffitFile {
+        args: FeffitFileArgs,
+        reply: TextReply,
+    },
     Screenshot {
         window: Option<String>,
         reply: PngReply,
@@ -867,6 +871,17 @@ pub struct TheoryArgs {
     pub clear: Option<bool>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct FeffitFileArgs {
+    /// Feffit tab file button: "save_result" (write the fit report to `path`),
+    /// "load_result" (show a saved text file in the pop-up viewer) or
+    /// "load_inp" (import a UWXAFS feffit.inp: FT windows, fit mode, variables
+    /// and its paths, resolved next to the file or in the Atoms folder).
+    pub action: String,
+    /// The file.
+    pub path: String,
+}
+
 /// The per-connection MCP handler: forwards each tool call to the egui thread
 /// and awaits the oneshot. Cheap to clone (a channel sender + an egui context).
 #[derive(Clone)]
@@ -1424,6 +1439,17 @@ impl XafsMcp {
     )]
     async fn run_multi_autobk(&self) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::RunMultiAutobk { reply })
+            .await
+    }
+
+    #[tool(
+        description = "The Feffit tab's file buttons with an explicit path: Save result (the fit report), Load result (a text file into the pop-up viewer) or Load inp (import a UWXAFS feffit.inp)."
+    )]
+    async fn feffit_file(
+        &self,
+        Parameters(a): Parameters<FeffitFileArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::FeffitFile { args: a, reply })
             .await
     }
 }

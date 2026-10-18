@@ -719,6 +719,9 @@ impl XafsViewApp {
                     let _ = reply.send(Err(self.status.line().to_owned()));
                 }
             }
+            mcp::McpRequest::FeffitFile { args, reply } => {
+                let _ = reply.send(self.apply_mcp_feffit_file(&args));
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }
@@ -1393,6 +1396,20 @@ impl XafsViewApp {
             Some(t) => format!("theory: {} ({} points)", t.path.display(), t.k.len()),
             None => "theory: none".to_owned(),
         })
+    }
+
+    /// MCP `feffit_file`: the Feffit tab's Save result / Load result / Load inp
+    /// with an explicit path instead of the dialog.
+    fn apply_mcp_feffit_file(&mut self, a: &mcp::FeffitFileArgs) -> Result<String, String> {
+        let path = mcp::native_path(&a.path);
+        match a.action.to_ascii_lowercase().as_str() {
+            "save_result" => self.save_feffit_result_to(&path),
+            "load_result" => self.load_feffit_result_from(&path),
+            "load_inp" => self.load_feffit_inp_from(&path),
+            other => Err(format!(
+                "unknown action {other:?}; one of save_result, load_result, load_inp"
+            )),
+        }
     }
 
     /// Put an action's outcome on the status line: `Ok` as info, `Err` as an
@@ -4078,8 +4095,7 @@ impl XafsViewApp {
 
     /// Save the current fit report to a text file (the original's "Save result").
     fn save_feffit_result(&mut self) {
-        let text = self.feffit.report_text();
-        if text.is_empty() {
+        if self.feffit.report_text().is_empty() {
             self.status
                 .error("Run a fit first — there is no result to save.");
             return;
@@ -4101,12 +4117,23 @@ impl XafsViewApp {
             self.status.info("Save result cancelled.");
             return;
         };
-        match std::fs::write(&path, text) {
-            Ok(()) => self
-                .status
-                .info(format!("Saved fit result to {}", path.display())),
-            Err(e) => self.status.error(format!("Could not save result: {e}")),
-        }
+        // The outcome is on the status line.
+        let _ = self.save_feffit_result_to(&path);
+    }
+
+    /// Write the fit report to `path`, reporting the outcome on the status line
+    /// and returning it (the Save result dialog and MCP `feffit_file`).
+    fn save_feffit_result_to(&mut self, path: &std::path::Path) -> Result<String, String> {
+        let text = self.feffit.report_text();
+        let outcome = if text.is_empty() {
+            Err("Run a fit first — there is no result to save.".to_owned())
+        } else {
+            std::fs::write(path, text)
+                .map(|()| format!("Saved fit result to {}", path.display()))
+                .map_err(|e| format!("Could not save result: {e}"))
+        };
+        self.report_outcome(&outcome);
+        outcome
     }
 
     /// Load a saved result/text file into the Feffit pop-up viewer ("Load result").
@@ -4126,18 +4153,27 @@ impl XafsViewApp {
             self.status.info("Load result cancelled.");
             return;
         };
-        match feffit::textio::read_to_string_lenient(&path) {
+        // The outcome is on the status line.
+        let _ = self.load_feffit_result_from(&path);
+    }
+
+    /// Show `path`'s text in the Feffit pop-up viewer, reporting the outcome on
+    /// the status line and returning it (the Load result dialog and MCP
+    /// `feffit_file`).
+    fn load_feffit_result_from(&mut self, path: &std::path::Path) -> Result<String, String> {
+        let outcome = match feffit::textio::read_to_string_lenient(path) {
             Ok(content) => {
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "result".to_owned());
                 self.feffit.show_text(format!("Loaded: {name}"), content);
-                self.status
-                    .info(format!("Loaded result from {}", path.display()));
+                Ok(format!("Loaded result from {}", path.display()))
             }
-            Err(e) => self.status.error(format!("Could not load result: {e}")),
-        }
+            Err(e) => Err(format!("Could not load result: {e}")),
+        };
+        self.report_outcome(&outcome);
+        outcome
     }
 
     /// Import a UWXAFS `feffit.inp`: parse it, apply its FT windows / fit mode /
@@ -4159,11 +4195,22 @@ impl XafsViewApp {
             self.status.info("Load inp cancelled.");
             return;
         };
-        let content = match feffit::textio::read_to_string_lenient(&path) {
+        // The outcome is on the status line.
+        let _ = self.load_feffit_inp_from(&path);
+    }
+
+    /// Import the `feffit.inp` at `path` (see [`load_feffit_inp`]), reporting
+    /// the outcome on the status line and returning it — `Err` when the file
+    /// does not read or a path file is missing (the rest is still applied).
+    ///
+    /// [`load_feffit_inp`]: Self::load_feffit_inp
+    fn load_feffit_inp_from(&mut self, path: &std::path::Path) -> Result<String, String> {
+        let content = match feffit::textio::read_to_string_lenient(path) {
             Ok(c) => c,
             Err(e) => {
-                self.status.error(format!("Could not read inp: {e}"));
-                return;
+                let outcome = Err(format!("Could not read inp: {e}"));
+                self.report_outcome(&outcome);
+                return outcome;
             }
         };
 
@@ -4218,15 +4265,17 @@ impl XafsViewApp {
             }
         }
 
-        if missing == 0 {
-            self.status.info(format!(
+        let outcome = if missing == 0 {
+            Ok(format!(
                 "Loaded inp: {nvars} variable(s), {loaded}/{npaths} path(s)."
-            ));
+            ))
         } else {
-            self.status.error(format!(
+            Err(format!(
                 "Loaded inp: {nvars} variable(s), {loaded}/{npaths} path(s) ({missing} file(s) not found)."
-            ));
-        }
+            ))
+        };
+        self.report_outcome(&outcome);
+        outcome
     }
 
     /// The compact current-group selector in the Autobk sidebar: a combo to
