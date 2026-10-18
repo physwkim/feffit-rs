@@ -709,6 +709,16 @@ impl XafsViewApp {
             mcp::McpRequest::Theory { args, reply } => {
                 let _ = reply.send(self.apply_mcp_theory(&args));
             }
+            mcp::McpRequest::RunMultiAutobk { reply } => {
+                if self.jobs.busy() {
+                    let _ = reply.send(Err(JOB_BUSY.to_owned()));
+                } else if self.run_multi_autobk() {
+                    // Started: finish_multi_autobk answers with the summary.
+                    self.mcp_job_reply = Some(reply);
+                } else {
+                    let _ = reply.send(Err(self.status.line().to_owned()));
+                }
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }
@@ -2478,10 +2488,10 @@ impl XafsViewApp {
     /// them back on the main thread.
     ///
     /// [`finish_multi_autobk`]: Self::finish_multi_autobk
-    fn run_multi_autobk(&mut self) {
+    fn run_multi_autobk(&mut self) -> bool {
         if self.session.groups.is_empty() {
             self.status.error("No groups loaded.");
-            return;
+            return false;
         }
         let pre = self.reduction.pre_params();
         let bk = self.reduction.autobk_params();
@@ -2506,6 +2516,7 @@ impl XafsViewApp {
         if !started {
             self.status.error(JOB_BUSY);
         }
+        started
     }
 
     /// Apply a finished Multiple-AUTOBK job: put the reduced groups back into
@@ -2558,7 +2569,16 @@ impl XafsViewApp {
         let msg = format!(
             "Multiple AUTOBK: reduced {n} group(s); saved {saved} χ pair(s){fail}{drop_note}."
         );
-        if write_failed + dropped > 0 {
+        let failed = write_failed + dropped > 0;
+        // Answer a parked MCP run_multi_autobk with the same summary.
+        if let Some(reply) = self.mcp_job_reply.take() {
+            let _ = reply.send(if failed {
+                Err(msg.clone())
+            } else {
+                Ok(msg.clone())
+            });
+        }
+        if failed {
             self.status.error(msg);
         } else {
             self.status.info(msg);

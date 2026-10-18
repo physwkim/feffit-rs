@@ -193,6 +193,9 @@ pub enum McpRequest {
         args: TheoryArgs,
         reply: TextReply,
     },
+    RunMultiAutobk {
+        reply: TextReply,
+    },
     Screenshot {
         window: Option<String>,
         reply: PngReply,
@@ -1413,6 +1416,14 @@ impl XafsMcp {
         Parameters(a): Parameters<TheoryArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::Theory { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "The Autobk tab's Multiple AUTOBK: normalize → AUTOBK → FT every loaded group with the tab's current parameters and write each group's χ files; returns the summary when the job finishes."
+    )]
+    async fn run_multi_autobk(&self) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::RunMultiAutobk { reply })
             .await
     }
 }
