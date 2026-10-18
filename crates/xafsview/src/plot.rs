@@ -1162,11 +1162,13 @@ fn common_affixes(labels: &[&str]) -> (usize, usize) {
 
 /// `label` as a legend row shows it under the width check `fits`: whole when
 /// it fits; otherwise its core — what is left after the legend's common prefix
-/// and suffix `affixes` — between ellipses marking the dropped stem, so rows
-/// that differ only in "064" / "065" stay distinguishable; and when even that
-/// is too wide, the core elided from the middle so a long distinguishing part
-/// keeps both its ends. A label that is nothing but stem (an empty core) is
-/// treated as all core.
+/// and suffix `affixes` — kept intact, with the room beyond it given back to
+/// the stem (the prefix's end first, then the suffix's start) and ellipses
+/// marking what was dropped, so rows that differ only in "064" / "065" stay
+/// distinguishable and a long name still reads as "…Insitu_064 data" rather
+/// than a bare "…data"; and when even the core is too wide, the core elided
+/// from the middle so a long distinguishing part keeps both its ends. A label
+/// that is nothing but stem (an empty core) is treated as all core.
 fn elide_label(label: &str, affixes: (usize, usize), fits: impl Fn(&str) -> bool) -> String {
     if fits(label) {
         return label.to_owned();
@@ -1177,22 +1179,52 @@ fn elide_label(label: &str, affixes: (usize, usize), fits: impl Fn(&str) -> bool
     } else {
         0..label.len()
     };
-    let head = if core.start > 0 { "…" } else { "" };
-    let tail = if core.end < label.len() { "…" } else { "" };
+    let head: Vec<char> = label[..core.start].chars().collect();
+    let tail: Vec<char> = label[core.end..].chars().collect();
     let core: Vec<char> = label[core].chars().collect();
-    // keep = n shows the whole core; each step drops one more char from the
+    // "…<prefix end><core><suffix start>…" with `keep_h` / `keep_t` stem chars
+    // shown on each side; an ellipsis marks a side that dropped anything.
+    let assemble = |keep_h: usize, core_s: &str, keep_t: usize| -> String {
+        let h: String = head[head.len() - keep_h..].iter().collect();
+        let t: String = tail[..keep_t].iter().collect();
+        let lead = if keep_h < head.len() { "…" } else { "" };
+        let trail = if keep_t < tail.len() { "…" } else { "" };
+        format!("{lead}{h}{core_s}{t}{trail}")
+    };
+    let whole: String = core.iter().collect();
+    if fits(&assemble(0, &whole, 0)) {
+        let keep_h = largest(head.len(), |k| fits(&assemble(k, &whole, 0)));
+        let keep_t = largest(tail.len(), |k| fits(&assemble(keep_h, &whole, k)));
+        return assemble(keep_h, &whole, keep_t);
+    }
+    // Narrower than the core: each step drops one more char from the core's
     // middle, alternating sides so both ends survive as long as possible.
-    for keep in (0..=core.len()).rev() {
+    for keep in (0..core.len()).rev() {
         let (a, b) = (keep.div_ceil(2), keep / 2);
         let start: String = core[..a].iter().collect();
         let end: String = core[core.len() - b..].iter().collect();
-        let mid = if keep < core.len() { "…" } else { "" };
-        let cand = format!("{head}{start}{mid}{end}{tail}").replace("……", "…");
+        let cand = assemble(0, &format!("{start}…{end}"), 0).replace("……", "…");
         if fits(&cand) {
             return cand;
         }
     }
     "…".to_owned()
+}
+
+/// The largest `k` in `0..=n` with `ok(k)`, for an `ok` that holds at `0` and
+/// stays true up to the answer (a width check on a string that grows with
+/// `k`); binary search.
+fn largest(n: usize, ok: impl Fn(usize) -> bool) -> usize {
+    let (mut lo, mut hi) = (0usize, n);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if ok(mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
 }
 
 /// Draw the plain in-axes legend: one row per entry — a short line swatch in the
@@ -1570,6 +1602,19 @@ mod tests {
         assert_eq!(elide_label(label, affixes, fits(30)), label);
         // Too long: the stem goes, the scan number stays.
         assert_eq!(elide_label(label, affixes, fits(5)), "…064…");
+        // Room beyond the core goes back to the stem, from the prefix's end,
+        // then to the suffix once the whole prefix fits.
+        assert_eq!(elide_label(label, affixes, fits(12)), "…Insitu_064…");
+        assert_eq!(elide_label(label, affixes, fits(15)), "…S2_Insitu_064…");
+        assert_eq!(
+            elide_label(label, affixes, fits(23)),
+            "PGT_Mn_S2_Insitu_064.d…"
+        );
+        // A lone group's "data" / "fit" pair keeps its name, not just the role.
+        assert_eq!(
+            elide_label("PGT_Mn_S2_NCM50_W_Insitu_000 data", (29, 0), fits(16)),
+            "…Insitu_000 data"
+        );
         // Narrower than the core: the core itself gives from the middle.
         assert_eq!(elide_label(label, affixes, fits(4)), "…0…");
         // An all-stem label is elided as a whole, from the middle.
