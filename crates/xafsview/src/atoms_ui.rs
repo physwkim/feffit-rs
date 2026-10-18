@@ -953,16 +953,7 @@ impl PlotSitesWindow {
         if !self.open {
             return;
         }
-        if self.source != feff_inp {
-            self.parse_cluster(feff_inp);
-            self.source = feff_inp.to_owned();
-            self.dirty = true;
-        }
-        if self.paths_source.as_slice() != path_files {
-            self.parse_paths(path_files);
-            self.paths_source = path_files.to_vec();
-            self.dirty = true;
-        }
+        self.sync_sources(feff_inp, path_files);
 
         let mut open = self.open;
         // Own panel layout: the 3D scene fills the window, so the controls go
@@ -991,6 +982,145 @@ impl PlotSitesWindow {
             },
         );
         self.open = open;
+    }
+
+    /// Re-parse the cluster / the path files when the shared `feff.inp` or the
+    /// last FEFF run's file list changed, marking the scene for a rebuild.
+    fn sync_sources(&mut self, feff_inp: &str, path_files: &[PathBuf]) {
+        if self.source != feff_inp {
+            self.parse_cluster(feff_inp);
+            self.source = feff_inp.to_owned();
+            self.dirty = true;
+        }
+        if self.paths_source.as_slice() != path_files {
+            self.parse_paths(path_files);
+            self.paths_source = path_files.to_vec();
+            self.dirty = true;
+        }
+    }
+
+    /// MCP `plot_sites`: the control rows — Reset view / viewpoint, point size,
+    /// All shells / Shell #, View Path / Path # — range-checked like the
+    /// widgets, then the window's state as text. Syncs the sources first so the
+    /// reply describes the current `feff.inp` even before the window has drawn.
+    pub fn apply_mcp(
+        &mut self,
+        feff_inp: &str,
+        path_files: &[PathBuf],
+        a: &crate::mcp::PlotSitesArgs,
+    ) -> Result<String, String> {
+        self.open = true;
+        self.sync_sources(feff_inp, path_files);
+        if a.reset_view == Some(true) {
+            self.scene.reset_camera();
+        }
+        if let Some(v) = &a.viewpoint {
+            let face = match v.to_ascii_lowercase().as_str() {
+                "side" => rsplot::CameraFace::Side,
+                "front" => rsplot::CameraFace::Front,
+                "back" => rsplot::CameraFace::Back,
+                "top" => rsplot::CameraFace::Top,
+                "bottom" => rsplot::CameraFace::Bottom,
+                "right" => rsplot::CameraFace::Right,
+                "left" => rsplot::CameraFace::Left,
+                other => {
+                    return Err(format!(
+                        "unknown viewpoint {other:?}; one of side, front, back, top, bottom, right, left"
+                    ));
+                }
+            };
+            self.scene.set_viewpoint(face);
+        }
+        if let Some(p) = a.point_size {
+            if !(2.0..=30.0).contains(&p) {
+                return Err(format!("point_size {p} outside 2..=30"));
+            }
+            self.point_size = p;
+            self.dirty = true;
+        }
+        if let Some(all) = a.all_shells {
+            self.all_shells = all;
+            self.dirty = true;
+        }
+        if let Some(n) = a.shell_count {
+            let nsh = self.shells.len();
+            if nsh == 0 {
+                return Err("no shells: the feff.inp has no cluster".to_owned());
+            }
+            if !(1..=nsh).contains(&n) {
+                return Err(format!("shell_count {n} outside 1..={nsh}"));
+            }
+            self.shell_count = n;
+            self.dirty = true;
+        }
+        if a.view_path.is_some() || a.path_idx.is_some() {
+            if self.paths.is_empty() {
+                return Err("no path files: run FEFF (run_feff) to enable View Path".to_owned());
+            }
+            if let Some(on) = a.view_path {
+                self.view_path = on;
+                self.dirty = true;
+            }
+            if let Some(i) = a.path_idx {
+                let last = self.paths.len() - 1;
+                if i > last {
+                    return Err(format!("path_idx {i} outside 0..={last}"));
+                }
+                self.path_idx = i;
+                self.dirty = true;
+            }
+        }
+        Ok(self.state_text())
+    }
+
+    /// The window as text: the cluster (or its parse error), the potential
+    /// legend, the shells and the current selection, the marker size, and the
+    /// View Path state with the selected path's geometry.
+    fn state_text(&self) -> String {
+        let mut s = match &self.error {
+            Some(e) => format!("cluster: error: {e}\n"),
+            None => format!("cluster: {} atoms\n", self.atoms.len()),
+        };
+        let legend: Vec<String> = self
+            .legend
+            .iter()
+            .map(|(ipot, tag, count)| format!("ipot {ipot} = {tag} ({count})"))
+            .collect();
+        s.push_str(&format!("potentials: {}\n", legend.join(", ")));
+        let radii: Vec<String> = self.shells.iter().map(|r| format!("{r:.3}")).collect();
+        s.push_str(&format!(
+            "shells (Å): [{}]; all shells = {}; shell # = {}\npoint size = {}\n",
+            radii.join(", "),
+            self.all_shells,
+            self.shell_count.clamp(1, self.shells.len().max(1)),
+            self.point_size
+        ));
+        if self.paths.is_empty() {
+            s.push_str("paths: none (run FEFF to enable View Path)");
+        } else {
+            s.push_str(&format!(
+                "paths: {}; view path = {}; path # = {}",
+                self.paths.len(),
+                self.view_path,
+                self.path_idx
+            ));
+            if let Some(p) = self.paths.get(self.path_idx) {
+                s.push_str(&format!(
+                    "\n  reff = {:.3} Å, nleg = {}, degen = {}, {}",
+                    p.reff,
+                    p.nleg,
+                    p.degen,
+                    path_label(p)
+                ));
+                for g in &p.geom {
+                    s.push_str(&format!(
+                        "\n  {:<6} ipot {} ({:.4}, {:.4}, {:.4})",
+                        g.label, g.ipot, g.x, g.y, g.z
+                    ));
+                }
+            }
+        }
+        s
     }
 
     /// The window's control rows: view reset / viewpoint, marker size, shell

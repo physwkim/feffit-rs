@@ -186,6 +186,10 @@ pub enum McpRequest {
         args: TimeResolvedArgs,
         reply: TextReply,
     },
+    PlotSites {
+        args: PlotSitesArgs,
+        reply: TextReply,
+    },
     About {
         reply: TextReply,
     },
@@ -867,6 +871,24 @@ pub struct TimeResolvedArgs {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PlotSitesArgs {
+    /// "Reset view".
+    pub reset_view: Option<bool>,
+    /// Viewpoint menu: side, front, back, top, bottom, right or left.
+    pub viewpoint: Option<String>,
+    /// Atom marker size (2–30).
+    pub point_size: Option<f32>,
+    /// "All shells" on / off.
+    pub all_shells: Option<bool>,
+    /// "Shell #": how many shells to draw (1..=shell count; All shells off).
+    pub shell_count: Option<usize>,
+    /// "View Path" overlay on / off (needs a FEFF run's path files).
+    pub view_path: Option<bool>,
+    /// "Path #": 0-based index into the last FEFF run's path files.
+    pub path_idx: Option<usize>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct TheoryArgs {
     /// FEFF chi.dat to load as the Theory χ(k) standard (the Autobk Data box's
     /// Theory "Load…").
@@ -1461,6 +1483,17 @@ impl XafsMcp {
         Parameters(a): Parameters<TimeResolvedArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::TimeResolved { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "The Plot Sites window (3-D feff.inp cluster): reset view / viewpoint, point size, shell selection, View Path overlay and path index; returns the cluster summary (atoms, potentials, shells, paths)."
+    )]
+    async fn plot_sites(
+        &self,
+        Parameters(a): Parameters<PlotSitesArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::PlotSites { args: a, reply })
             .await
     }
 

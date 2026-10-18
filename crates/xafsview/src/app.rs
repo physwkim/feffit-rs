@@ -703,6 +703,10 @@ impl XafsViewApp {
             mcp::McpRequest::TimeResolved { args, reply } => {
                 let _ = reply.send(self.time_resolved.apply_mcp(&args));
             }
+            mcp::McpRequest::PlotSites { args, reply } => {
+                let files = self.feff_tab.last_path_files();
+                let _ = reply.send(self.plot_sites.apply_mcp(&self.feff_inp, &files, &args));
+            }
             mcp::McpRequest::About { reply } => {
                 let _ = reply.send(Ok(about_text()));
             }
