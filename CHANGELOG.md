@@ -5,6 +5,80 @@ here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/
 the release version tracks the `xafsview` binary. The `feffit` library crate is
 versioned independently.
 
+## [0.3.0] - 2026-10-18
+
+### Added
+
+- **MCP tools for every window and tab** — 30 new tools beside the 0.2.0
+  set, each calling the function its button or menu item calls, so an agent
+  can drive and check the whole GUI without synthetic mouse input:
+  `open_window` / `close_window` / `set_theme`; `plot_data` and
+  `feffit_graph` for the Plot Data window; `folders`, `data`, `open_data`,
+  `theory`, `run_multi_autobk`, `set_path`, `feffit_file`, `feffit_batch`,
+  `build_feff_inp`, `run_feff` and `plot_sites` for the tabs; `xanes`,
+  `mback`, `lcf`, `pca`, `wavelet`, `edit_mu`, `time_resolved`,
+  `periodic_table`, `ion_chamber`, `powder`, `ke_convert`, `log` and `about`
+  for the Tools windows; and `graph`, which makes the mouse gestures on any
+  1-D plot (zoom, box zoom, pan, click, band drag, legend click). `set_graph`
+  / `feffit_graph` gain `show_range`, `insitu_map` gains `scan` / `x` for a
+  map-cell click, and `edit_mu remove_point` falls back to the pinned pick.
+- **`screenshot(window=…)`** captures an open pop-up window. eframe 0.36.2 is
+  vendored with a one-hunk patch for it: its immediate viewports dropped the
+  screenshot command.
+- **Korean quick-start manual** with screenshots, `doc/manual-ko.md`, linked
+  from the README.
+
+### Changed
+
+- **rsplot 0.6.1**: per-curve storage-buffer bindings (DX12/WARP read every
+  draw's uniform block from the last one bound, so overlaid curves came out
+  in one colour) and target-encoding colour fixes that brighten the Linux
+  rendering to the Color32 values.
+- **Solid scroll bars** in every theme: a height-capped list (the legend,
+  results footers, Plot Data's lists, the import and browser lists) shows
+  its bar whenever it overflows, as Qt does, instead of only on hover.
+- Side panels keep their width: their controls sit in a both-axis scroll
+  area, so a row that cannot wrap scrolls instead of widening the panel every
+  frame; the Autobk panel opens at 460 px and the In-situ reference combo
+  truncates to the room left.
+- An MCP session no longer expires after five idle minutes.
+
+### Fixed
+
+- `feffit`: a k-space fit with data ending below the fit's kmax (an AUTOBK
+  kmax under the Feffit one) panicked with index out of bounds; a k-range
+  holding no data, or fewer points than variables, is now an error in every
+  fit space instead of a panic or NaN statistics; `pre_edge` and
+  `mback_norm` return an error on an empty normalization range instead of
+  panicking.
+- Run FEFF failed on Windows with a Config error: the FEFF10 stage-worker
+  hook now runs first in `main`.
+- MCP path arguments are respelled natively, so a forward-slash Windows path
+  no longer travels into the session as `C:/…`.
+- The Open-data window's Autobk Start writes the AUTOBK files (`k.chi`,
+  `r.chi`, `e.bkg`, `k.bkg`) per reduced group, as the Autobk tab's Start
+  does and the manual promises.
+- With "auto pre/norm" on, the disabled Pre1/Pre2/Nor1/Nor2/Nnorm fields
+  show the ranges the reduction used; leaving auto seeds the manual fields
+  from them.
+- Legend labels elide around their distinguishing core — the prefix and
+  suffix all rows share are cut on token boundaries — and a lone fit's rows
+  keep the label stem.
+- Plot Data: a fit sent from the Feffit tab is drawn only on its own x axis
+  and its item decides the axes of an otherwise empty window; each overlaid
+  Feffit group gets two colours of its own; the canvas follows the dark/light
+  theme.
+- In-situ map: the profile axes are labelled from the map, not the last
+  curve.
+- An Edit μ(E) edit re-reduces the current group, so E0 and the k/R graphs
+  stay live instead of blank until the next AUTOBK run.
+- Open New file raises the loader window when it is already open behind the
+  main window.
+- An MCP screenshot of a pop-up could wait forever on a slow GPU (wgpu runs
+  the readback callback only on a later GPU submit): the app keeps
+  repainting while a shot is pending and fails one after five seconds.
+- The `graph` tool refuses every non-graph window with one message.
+
 ## [0.2.0] - 2026-10-16
 
 ### Added
@@ -211,6 +285,7 @@ Earlier releases predate this changelog; see the GitHub release notes.
 
 See the GitHub release notes.
 
+[0.3.0]: https://github.com/physwkim/feffit-rs/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/physwkim/feffit-rs/compare/0.1.5...0.2.0
 [0.1.5]: https://github.com/physwkim/feffit-rs/compare/0.1.4...0.1.5
 [0.1.4]: https://github.com/physwkim/feffit-rs/compare/0.1.3...0.1.4

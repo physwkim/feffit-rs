@@ -1,6 +1,6 @@
 # XAFSView 간단 사용 설명서
 
-XAFSView 0.2.0 기준입니다. PLS-II 10C 빔라인에서 측정한 XAFS 데이터를
+XAFSView 0.3.0 기준입니다. PLS-II 10C 빔라인에서 측정한 XAFS 데이터를
 μ(E) 생성 → 배경 제거(AUTOBK) → EXAFS 피팅(FEFFIT) → in-situ 맵까지
 처리하는 핵심 흐름만 다룹니다. 세부 옵션은 프로그램 안에서 항목 위에 마우스를
 올리면 나오는 설명을 참고하세요.
