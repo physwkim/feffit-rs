@@ -403,6 +403,21 @@ pub struct InsituWindow {
 }
 
 impl InsituWindow {
+    /// The profile plot under the map, for gestures made without the pointer
+    /// (MCP `graph`).
+    pub fn plot_mut(&mut self) -> &mut crate::plot::Plot {
+        &mut self.plot
+    }
+
+    /// Select map cell `c = (scan row, x column)` — what a click or drag on
+    /// the map lands on — and re-profile the plot under the map when it moved.
+    fn select_cell(&mut self, c: (usize, usize)) {
+        if self.sel != Some(c) {
+            self.sel = Some(c);
+            self.plot_dirty = true;
+        }
+    }
+
     /// Build the window with its own profile plot (`PlotId` 8).
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 8);
@@ -458,7 +473,9 @@ impl InsituWindow {
             let map = parse_series_dat(&text)?;
             let n = map.labels.len();
             self.set_map(map, format!("Opened {}: {n} scan(s).", file.display()));
-        } else {
+        } else if args.channel.is_some() || self.map.is_none() {
+            // A call that names no map (no `channel` / `file`) acts on the shown
+            // one — rebuilding would drop its reference and selection.
             let channel = args.channel.as_deref().unwrap_or("rdf");
             match channel.to_ascii_lowercase().as_str() {
                 "rdf" => self.channel = SeriesKind::Rdf,
@@ -496,6 +513,32 @@ impl InsituWindow {
             self.texture = None;
             self.plot_dirty = true;
         }
+        if args.scan.is_some() || args.x.is_some() {
+            let map = self.map.as_ref().expect("map was just set");
+            let (n, m) = (map.labels.len(), map.x.len());
+            if n == 0 || m == 0 {
+                return Err("the map is empty".to_owned());
+            }
+            let (ci, cj) = self.sel.unwrap_or((0, 0));
+            let i = match args.scan {
+                Some(s) if s == 0 || s > n => {
+                    return Err(format!("scan {s} out of range (1..={n})"));
+                }
+                Some(s) => s - 1,
+                None => ci.min(n - 1),
+            };
+            let j = match args.x {
+                Some(x) if !x.is_finite() => return Err("`x` must be finite".to_owned()),
+                Some(x) => map
+                    .x
+                    .iter()
+                    .enumerate()
+                    .min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs()))
+                    .map_or(0, |(j, _)| j),
+                None => cj.min(m - 1),
+            };
+            self.select_cell((i, j));
+        }
         let map = self.map.as_ref().expect("map was just set");
         let mut report = format!(
             "{} map: {} scan(s) × {} point(s), x {:.4}–{:.4}",
@@ -512,6 +555,16 @@ impl InsituWindow {
         let _ = write!(report, ", value {lo:.4}–{hi:.4}");
         if let Some(r) = self.reference {
             let _ = write!(report, ", reference scan {} ({})", r + 1, map.labels[r]);
+        }
+        if let Some((i, j)) = self.sel {
+            let _ = write!(
+                report,
+                "; selected scan {} ({}), x = {:.4}, value = {:.5}",
+                i + 1,
+                map.labels[i],
+                map.x[j],
+                map.display(self.reference, i, j)
+            );
         }
         if let Some(path) = &args.save {
             let dat = map.to_dat(self.reference);
@@ -938,11 +991,7 @@ impl InsituWindow {
         if (resp.clicked() || resp.dragged() || resp.drag_stopped())
             && let Some(pos) = resp.interact_pointer_pos()
         {
-            let c = cell_at(pos);
-            if self.sel != Some(c) {
-                self.sel = Some(c);
-                self.plot_dirty = true;
-            }
+            self.select_cell(cell_at(pos));
         }
 
         // Mark the profiled line on the map (on a dark underlay so it reads on

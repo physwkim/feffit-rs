@@ -255,6 +255,11 @@ pub struct PlotDataWindow {
 }
 
 impl PlotDataWindow {
+    /// The window's plot, for gestures made without the pointer (MCP `graph`).
+    pub fn plot_mut(&mut self) -> &mut crate::plot::Plot {
+        &mut self.plot
+    }
+
     /// Build the window state with its own plot (id 7, distinct from the main
     /// plot's 0 and the other windows' ids). Closed until opened from the top bar.
     pub fn new(render_state: &RenderState) -> Self {

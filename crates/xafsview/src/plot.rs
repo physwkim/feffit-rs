@@ -270,6 +270,10 @@ pub struct Plot {
     /// ([`set_light`](Self::set_light), Plot Data's "Change BG color"); such a
     /// plot no longer follows the egui theme.
     theme_override: Option<bool>,
+    /// The data-area transform of the last [`show`] frame, so a gesture made
+    /// without the pointer ([`gesture`]) maps its data coordinates through
+    /// the same pixel space the pointer path uses. `None` until first drawn.
+    last_transform: Option<rsplot::Transform>,
 }
 
 /// Emphasized-curve styling: the default curve width is 1.0; 3.0 reads as
@@ -277,6 +281,10 @@ pub struct Plot {
 /// and the high z keeps the thick line on top of the other curves.
 const EMPH_WIDTH: f32 = 3.0;
 const EMPH_Z: f32 = 100.0;
+
+/// How far (egui points) a left-click may land from a curve's nearest vertex
+/// and still pick it (see [`show`] and [`gesture`]).
+const PICK_THRESHOLD_PX: f32 = 40.0;
 
 /// One curve recorded during a declare session — the desired end state, diffed
 /// against the retained curves by legend label on commit (duplicate labels pair
@@ -329,6 +337,7 @@ impl Plot {
             empty_hint: None,
             theme_synced: None,
             theme_override: None,
+            last_transform: None,
         }
     }
 
@@ -704,6 +713,174 @@ pub fn take_legend_click(plot: &mut Plot) -> Option<String> {
     plot.legend_clicked.take()
 }
 
+/// A pointer gesture on a plot, named so it can be made without the pointer
+/// (the MCP `graph` tool). Coordinates are in the plot's data space.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gesture {
+    /// The toolbar's Zoom in: shrink the view about its centre.
+    ZoomIn,
+    /// The toolbar's Zoom out: grow the view about its centre.
+    ZoomOut,
+    /// A left-drag rectangle in Zoom mode, released: zoom to the box.
+    ZoomBox { x0: f64, y0: f64, x1: f64, y1: f64 },
+    /// A pan drag that moves the view by `(dx, dy)` data units.
+    Pan { dx: f64, dy: f64 },
+    /// The toolbar's Zoom back: the previous view, or the data bounds when
+    /// there is none.
+    ZoomBack,
+    /// The toolbar's Reset zoom: the data bounds.
+    Reset,
+    /// A left-click on the data area at `(x, y)`: pins the nearest curve's
+    /// readout, or clears it when no curve is within reach.
+    Click { x: f64, y: f64 },
+    /// An FT-window band edge drag released with the band at `[min, max]`.
+    DragWindow { min: f64, max: f64 },
+    /// A click on the legend row `label`.
+    LegendClick { label: String },
+    /// No gesture: report the view only.
+    View,
+}
+
+/// Make gesture `g` on `plot` through the code its pointer version runs —
+/// rsplot's toolbar actions and gesture maths for the view, [`show`]'s own
+/// click, band-drag and legend-click handling for the rest — then report the
+/// view: the axis limits, the pinned pick and the band. The owner consumes the
+/// result on its next frame exactly as after a real gesture
+/// ([`take_window_drag`], [`take_legend_click`], [`Plot::last_pick`]). The
+/// plot must have been drawn once so its data↔pixel transform is known.
+pub fn gesture(plot: &mut Plot, g: Gesture) -> Result<String, String> {
+    let t = plot
+        .last_transform
+        .ok_or("the plot has not been drawn yet; open its window first")?;
+    let finite = |v: f64, name: &str| {
+        v.is_finite()
+            .then_some(v)
+            .ok_or_else(|| format!("`{name}` must be finite"))
+    };
+    match g {
+        Gesture::ZoomIn => rsplot::actions::control::zoom_in(&mut plot.inner),
+        Gesture::ZoomOut => rsplot::actions::control::zoom_out(&mut plot.inner),
+        Gesture::ZoomBack => {
+            rsplot::actions::control::zoom_back(&mut plot.inner);
+        }
+        Gesture::Reset => plot.inner.reset_zoom(),
+        Gesture::ZoomBox { x0, y0, x1, y1 } => {
+            for (v, n) in [(x0, "x"), (y0, "y"), (x1, "x2"), (y1, "y2")] {
+                finite(v, n)?;
+            }
+            // rsplot takes a box-zoom release only when the dragged rectangle
+            // covers 5 px² on screen (silx SURFACE_THRESHOLD).
+            let (a, b) = (t.data_to_pixel(x0, y0), t.data_to_pixel(x1, y1));
+            if ((a.x - b.x) * (a.y - b.y)).abs() < 5.0 {
+                return Err(
+                    "the zoom box covers less than 5 px² on screen; a drag that small is ignored"
+                        .to_owned(),
+                );
+            }
+            let (current, y2, keep_aspect, zoom_x, zoom_y) = {
+                let core = plot.inner.plot_mut();
+                core.push_limits();
+                (
+                    core.limits,
+                    core.y2,
+                    core.keep_aspect,
+                    core.zoom_x_enabled(),
+                    core.zoom_y_enabled(),
+                )
+            };
+            let boxed = rsplot::widget::interaction::box_zoom(x0, y0, x1, y1);
+            let (nx0, nx1, ny0, ny1) = if keep_aspect {
+                boxed
+            } else {
+                rsplot::widget::interaction::constrain_zoom_axes(boxed, current, zoom_x, zoom_y)
+            };
+            plot.inner.set_limits(nx0, nx1, ny0, ny1, y2);
+        }
+        Gesture::Pan { dx, dy } => {
+            finite(dx, "dx")?;
+            finite(dy, "dy")?;
+            // The drag that carries the view by (dx, dy): the content moves the
+            // other way, so the pixel delta runs from the shifted point back
+            // to the original one.
+            let (cx, cy) = t.pixel_to_data(t.area.center());
+            let delta = t.data_to_pixel(cx, cy) - t.data_to_pixel(cx + dx, cy + dy);
+            let (current, y2, x_scale, y_scale) = {
+                let core = plot.inner.plot_mut();
+                core.push_limits();
+                (core.limits, core.y2, core.x_scale, core.y_scale)
+            };
+            let ((nx0, nx1, ny0, ny1), next_y2) = rsplot::widget::interaction::pan_view(
+                (current, y2),
+                t.area,
+                delta,
+                x_scale,
+                y_scale,
+            );
+            plot.inner.set_limits(nx0, nx1, ny0, ny1, next_y2);
+        }
+        Gesture::Click { x, y } => {
+            finite(x, "x")?;
+            finite(y, "y")?;
+            let pos = t.data_to_pixel(x, y);
+            if !t.area.contains(pos) {
+                return Err(format!("({x}, {y}) lies outside the data area"));
+            }
+            plot.last_pick = nearest_pick(&plot.pick_curves, &t, pos, PICK_THRESHOLD_PX);
+        }
+        Gesture::DragWindow { min, max } => {
+            finite(min, "min")?;
+            finite(max, "max")?;
+            let idx = plot.window_roi.ok_or(
+                "no FT-window band on this graph (turn on Show k/R range on a k or R graph)",
+            )?;
+            // What rsplot's edge drag does to the band, then what `show` does
+            // when the button is released.
+            if let Some(managed) = plot.inner.rois_mut().get_mut(idx) {
+                managed.roi = Roi::VRange { x: (min, max) };
+            }
+            let w = AxisWindow { min, max };
+            plot.window_target = Some(w);
+            plot.window_dragged = Some(w);
+            plot.window_dragging = false;
+        }
+        Gesture::LegendClick { label } => {
+            if !plot.legend.iter().any(|(l, _, _)| *l == label) {
+                let names: Vec<&str> = plot.legend.iter().map(|(l, _, _)| l.as_str()).collect();
+                return Err(format!(
+                    "no legend entry {label:?}; entries: {}",
+                    names.join(", ")
+                ));
+            }
+            plot.legend_clicked = Some(label);
+        }
+        Gesture::View => {}
+    }
+    Ok(view_report(plot))
+}
+
+/// The view as one line: the axis limits, the pinned pick, the FT-window band
+/// and the curve count.
+fn view_report(plot: &Plot) -> String {
+    use std::fmt::Write;
+    let (xmin, xmax) = plot.inner.x_limits();
+    let (ymin, ymax) = plot
+        .inner
+        .y_limits(rsplot::YAxis::Left)
+        .unwrap_or((f64::NAN, f64::NAN));
+    let mut s = format!("x = [{xmin:.6}, {xmax:.6}], y = [{ymin:.6}, {ymax:.6}]");
+    match &plot.last_pick {
+        Some(p) => {
+            let _ = write!(s, "; pick: {} at ({:.6}, {:.6})", p.label, p.x, p.y);
+        }
+        None => s.push_str("; pick: none"),
+    }
+    if let Some(w) = plot.window_target {
+        let _ = write!(s, "; window: [{:.4}, {:.4}]", w.min, w.max);
+    }
+    let _ = write!(s, "; {} curve(s)", plot.legend.len());
+    s
+}
+
 /// Render `plot` as one unit: its toolbar on top, then the plot canvas filling
 /// the full width with the legend *overlaid* in the top-right corner of the data
 /// area (matplotlib-style), mapping each curve's color/symbol to the name set
@@ -794,6 +971,7 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
     // `PlotResponse::transform` carries the data-area rectangle (screen points)
     // that we anchor the legend overlay to and map the pointer through.
     let transform = resp.transform;
+    plot.last_transform = Some(transform);
     let area = transform.area;
 
     // The readout and legend text colours contrast with the plot's data-area
@@ -821,7 +999,6 @@ pub fn show(plot: &mut Plot, ui: &mut egui::Ui) {
         && let Some(pos) = resp.response.interact_pointer_pos()
         && area.contains(pos)
     {
-        const PICK_THRESHOLD_PX: f32 = 40.0;
         plot.last_pick = nearest_pick(&plot.pick_curves, &transform, pos, PICK_THRESHOLD_PX);
     }
     if let Some(pick) = &plot.last_pick {

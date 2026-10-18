@@ -114,6 +114,11 @@ pub struct MbackWindow {
 }
 
 impl MbackWindow {
+    /// The window's plot, for gestures made without the pointer (MCP `graph`).
+    pub fn plot_mut(&mut self) -> &mut crate::plot::Plot {
+        &mut self.plot
+    }
+
     /// Build the window with its own plot (`PlotId` 6).
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 6);

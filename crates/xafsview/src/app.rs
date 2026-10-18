@@ -625,6 +625,12 @@ impl XafsViewApp {
             mcp::McpRequest::InsituMap { args, reply } => {
                 let _ = reply.send(self.insitu.apply_mcp(&self.session.groups, &args));
             }
+            mcp::McpRequest::Graph { args, reply } => {
+                let r = self.apply_mcp_gesture(&args);
+                // The owner consumes the gesture's effect on its next frame.
+                ctx.request_repaint();
+                let _ = reply.send(r);
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }
@@ -923,10 +929,86 @@ impl XafsViewApp {
             }),
         };
         self.feffit.set_plot_selection(space, part);
+        if let Some(show) = args.show_range {
+            self.feffit.show_range = show;
+        }
         self.replot_feffit();
         let (space, part) = self.feffit.plot_selection();
         let (xlabel, ylabel) = crate::feffit_ui::space_labels(space, part);
-        Ok(format!("feffit graph: {ylabel} vs {xlabel}"))
+        Ok(format!(
+            "feffit graph: {ylabel} vs {xlabel}; show k/R range = {}",
+            self.feffit.show_range
+        ))
+    }
+
+    /// MCP `graph`: a pointer gesture on the named window's graph, made through
+    /// the code the pointer path runs ([`crate::plot::gesture`]); the owner
+    /// consumes its effect (pick, band, legend click) on its next frame exactly
+    /// as after a real gesture.
+    fn apply_mcp_gesture(&mut self, a: &mcp::GraphArgs) -> Result<String, String> {
+        use crate::plot::Gesture;
+        let need = |v: Option<f64>, name: &str| {
+            v.ok_or_else(|| format!("graph {:?} needs `{name}`", a.action))
+        };
+        let g = match a.action.to_ascii_lowercase().as_str() {
+            "view" => Gesture::View,
+            "zoom_in" => Gesture::ZoomIn,
+            "zoom_out" => Gesture::ZoomOut,
+            "zoom_back" => Gesture::ZoomBack,
+            "reset" => Gesture::Reset,
+            "zoom_box" => Gesture::ZoomBox {
+                x0: need(a.x, "x")?,
+                y0: need(a.y, "y")?,
+                x1: need(a.x2, "x2")?,
+                y1: need(a.y2, "y2")?,
+            },
+            "pan" => {
+                if a.dx.is_none() && a.dy.is_none() {
+                    return Err("graph \"pan\" needs `dx` and/or `dy`".to_owned());
+                }
+                Gesture::Pan {
+                    dx: a.dx.unwrap_or(0.0),
+                    dy: a.dy.unwrap_or(0.0),
+                }
+            }
+            "click" => Gesture::Click {
+                x: need(a.x, "x")?,
+                y: need(a.y, "y")?,
+            },
+            "drag_window" => Gesture::DragWindow {
+                min: need(a.min, "min")?,
+                max: need(a.max, "max")?,
+            },
+            "legend_click" => Gesture::LegendClick {
+                label: a
+                    .label
+                    .clone()
+                    .ok_or("graph \"legend_click\" needs `label`")?,
+            },
+            other => {
+                return Err(format!(
+                    "unknown graph action {other:?} (view, zoom_in, zoom_out, zoom_box, pan, zoom_back, reset, click, drag_window, legend_click)"
+                ));
+            }
+        };
+        let plot = match a.window.as_deref().unwrap_or("main") {
+            "main" => &mut self.plot,
+            "plot_data" => self.plot_data.plot_mut(),
+            "xanes" => self.xanes.plot_mut(),
+            "mback" => self.mback.plot_mut(),
+            "lcf" => self.lcf.plot_mut(),
+            "pca" => self.pca.plot_mut(),
+            "insitu_map" => self.insitu.plot_mut(),
+            "wavelet" => {
+                return Err("the Wavelet window shows an image, not a 1-D graph".to_owned());
+            }
+            other => {
+                return Err(format!(
+                    "no graph in window {other:?} (main, plot_data, xanes, mback, lcf, pca, insitu_map)"
+                ));
+            }
+        };
+        crate::plot::gesture(plot, g)
     }
 
     /// MCP `edit_mu`: the named Edit μ(E) button as its [`CleanAction`], through
@@ -939,7 +1021,14 @@ impl XafsViewApp {
         let action = match a.action.to_ascii_lowercase().as_str() {
             "find" => CleanAction::AutoFind(a.nsig.unwrap_or(10.0)),
             "remove_auto" => CleanAction::AutoDeglitch(a.nsig.unwrap_or(10.0)),
-            "remove_point" => CleanAction::DeglitchPoint(need(a.energy, "energy")?),
+            "remove_point" => CleanAction::DeglitchPoint(match a.energy {
+                Some(e) => e,
+                // The window's "use clicked": the pinned pick, when it is on
+                // the current group's μ(E) (see `graph` click).
+                None => self.picked_energy().ok_or(
+                    "edit_mu \"remove_point\" needs `energy`, or a pinned pick on the current group's μ(E) (graph action \"click\" on the Autobk energy graph)",
+                )?,
+            }),
             "remove_range" => {
                 let side = match a.side.as_deref().map(str::to_ascii_lowercase).as_deref() {
                     None | Some("above") => RangeSide::Above,
@@ -1009,11 +1098,15 @@ impl XafsViewApp {
         if let Some(all) = args.show_all_groups {
             self.show_all_groups = all;
         }
+        if let Some(show) = args.show_range {
+            self.reduction.show_range = show;
+        }
         self.replot_active_tab();
         Ok(format!(
-            "graph = {:?}; show all groups = {}",
+            "graph = {:?}; show all groups = {}; show k/R range = {}",
             self.reduction.graph.label(),
-            self.show_all_groups
+            self.show_all_groups,
+            self.reduction.show_range
         ))
     }
 
@@ -2642,6 +2735,26 @@ impl XafsViewApp {
     /// ([`overlay_other_groups`](Self::overlay_other_groups)), so any other
     /// group's label marks one; a label the current group shares with another
     /// group is taken as the current group's own curve.
+    /// Edit μ(E)'s "use clicked": the last clicked data point's energy, only
+    /// when it is an energy of the group being edited — the shared plot must
+    /// be showing the Autobk tab's graph (the Feffit tab draws k/R/q on the
+    /// same plot) in an energy space, and the clicked curve must be the current
+    /// group's, not another group's Show-all overlay.
+    fn picked_energy(&self) -> Option<f64> {
+        (self.tab == Tab::Autobk && self.reduction.graph.x_is_energy())
+            .then(|| self.plot.last_pick())
+            .flatten()
+            .filter(|(label, _)| {
+                !self.show_all_groups
+                    || Self::pick_is_current_group(
+                        &self.session.groups,
+                        self.session.current,
+                        label,
+                    )
+            })
+            .map(|(_, x)| x)
+    }
+
     fn pick_is_current_group(groups: &[XasGroup], cur: Option<usize>, label: &str) -> bool {
         let is_current = cur
             .and_then(|i| groups.get(i))
@@ -4773,23 +4886,7 @@ impl eframe::App for XafsViewApp {
         let npts = self.session.current_group().map_or(0, |g| g.len());
         let can_undo = !self.clean_undo.is_empty();
         let n_checked = self.session.selected.len();
-        // "use clicked" takes the last clicked data point only when it is an
-        // energy of the group being edited: the shared plot must be showing
-        // the Autobk tab's graph (the Feffit tab draws k/R/q on the same
-        // plot) in an energy space, and the clicked curve must be the current
-        // group's, not another group's Show-all overlay.
-        let picked = (self.tab == Tab::Autobk && self.reduction.graph.x_is_energy())
-            .then(|| self.plot.last_pick())
-            .flatten()
-            .filter(|(label, _)| {
-                !self.show_all_groups
-                    || Self::pick_is_current_group(
-                        &self.session.groups,
-                        self.session.current,
-                        label,
-                    )
-            })
-            .map(|(_, x)| x);
+        let picked = self.picked_energy();
         if let Some(action) =
             self.edit_xmu
                 .show(ui.ctx(), has_group, npts, can_undo, n_checked, picked)

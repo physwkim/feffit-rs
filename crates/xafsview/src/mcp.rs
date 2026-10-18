@@ -146,6 +146,10 @@ pub enum McpRequest {
         backend: Option<String>,
         reply: TextReply,
     },
+    Graph {
+        args: Box<GraphArgs>,
+        reply: TextReply,
+    },
     Screenshot {
         reply: PngReply,
     },
@@ -242,6 +246,10 @@ pub struct SetGraphArgs {
     /// Overlay every loaded group's curve for the graph type, not just the
     /// current one (the "Show all groups" checkbox).
     pub show_all_groups: Option<bool>,
+    /// Show the draggable FT-window band — kmin/kmax on *K.CHI, rmin/rmax on
+    /// *R.CHI (the "Show k/R range" checkbox); `graph` action "drag_window"
+    /// then moves it.
+    pub show_range: Option<bool>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -255,6 +263,32 @@ pub struct SetZoomArgs {
     /// `true` resets the view to the data bounds (the toolbar's Reset Zoom);
     /// no limits may be given alongside it.
     pub reset: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct GraphArgs {
+    /// Which window's graph: "main" (default — the shared Autobk / Feffit
+    /// plot), "plot_data", "xanes", "mback", "lcf", "pca" or "insitu_map" (the
+    /// profile plot under the map).
+    pub window: Option<String>,
+    /// The gesture: "view" (report only); "zoom_in" / "zoom_out" (the toolbar
+    /// buttons, about the view centre); "zoom_box" (a Zoom-mode drag from
+    /// (`x`, `y`) to (`x2`, `y2`)); "pan" (a drag that moves the view by `dx`,
+    /// `dy`); "zoom_back"; "reset"; "click" (a left-click at (`x`, `y`): pins
+    /// the nearest curve's readout, which edit_mu remove_point then uses);
+    /// "drag_window" (drag the FT-window band's edges to [`min`, `max`]);
+    /// "legend_click" (click the legend row `label`, e.g. Plot Data's
+    /// highlight). Coordinates are data units of the graph's axes.
+    pub action: String,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub x2: Option<f64>,
+    pub y2: Option<f64>,
+    pub dx: Option<f64>,
+    pub dy: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub label: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -372,8 +406,10 @@ pub struct ParamSpec {
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct InsituMapArgs {
     /// Map channel built from the loaded groups, in series (load) order:
-    /// "rdf" (default — each group's |χ(R)| from the forward FT) or "xanes"
-    /// (normalized μ(E) interpolated onto a common energy grid).
+    /// "rdf" (each group's |χ(R)| from the forward FT) or "xanes" (normalized
+    /// μ(E) interpolated onto a common energy grid). Omitted while a map is
+    /// shown, that map is kept (so `reference`, `scan`, `x` and `save` act on
+    /// it); with no map yet, "rdf" is built.
     pub channel: Option<String>,
     /// Instead of the loaded groups, open a BL10C series .dat file: RDF
     /// (x + one column per scan) or XANES ((E, μ) column pairs).
@@ -394,6 +430,12 @@ pub struct InsituMapArgs {
     /// (x first column, one named column per scan) — OriginPro-importable and
     /// re-openable via `file`.
     pub save: Option<String>,
+    /// Select a map cell as a click on the map does: `scan` (1-based, series
+    /// order) picks the row and `x` the nearest column; the profile plot under
+    /// the map follows. Either alone keeps the other coordinate of the current
+    /// selection (the first row / column when there is none).
+    pub scan: Option<usize>,
+    pub x: Option<f64>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -441,6 +483,10 @@ pub struct FeffitGraphArgs {
     pub space: String,
     /// The complex-χ component for R / q: "re", "im", "mag" (Am) or "pha" (Ph).
     pub part: Option<String>,
+    /// Show the draggable fit-range band — kmin/kmax on k / q, rmin/rmax on R
+    /// (the "Show k/R range" checkbox); `graph` action "drag_window" then
+    /// moves it.
+    pub show_range: Option<bool>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -728,7 +774,7 @@ impl XafsMcp {
     }
 
     #[tool(
-        description = "Switch the plotted graph type (XMU + BKG, *K.CHI, *R.CHI, *Q.CHI, derivatives, Normalize) and/or toggle the all-groups overlay — what screenshot then shows."
+        description = "Switch the plotted graph type (XMU + BKG, *K.CHI, *R.CHI, *Q.CHI, derivatives, Normalize), toggle the all-groups overlay, and/or `show_range` (the draggable k/R FT-window band) — what screenshot then shows."
     )]
     async fn set_graph(
         &self,
@@ -834,6 +880,20 @@ impl XafsMcp {
     }
 
     #[tool(
+        description = "Make a pointer gesture on a graph without the mouse — zoom in / out, box zoom, pan (drag), zoom back / reset, a click on the data (pins the nearest-point readout), an FT-window band drag, or a legend click — on the main plot or a pop-up window's plot, through the same code the mouse runs; reports the view (axis limits, pinned pick, band). `action` \"view\" only reports."
+    )]
+    async fn graph(
+        &self,
+        Parameters(a): Parameters<GraphArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Graph {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
         description = "Open a pop-up window by name (the Tools menu / top-bar / Log / Data windows), or raise it when it is already open. Names: open_data, data, log, plot_data, edit_mu, periodic_table, ion_chamber, powder, xanes, mback, wavelet, ke_convert, lcf, pca, time_resolved, insitu_map, plot_sites, feffit_batch, about."
     )]
     async fn open_window(
@@ -888,7 +948,7 @@ impl XafsMcp {
     }
 
     #[tool(
-        description = "Select the Feffit tab's graph: space k / r / q / kq and, for r / q, the component re / im / mag / pha; the Feffit graph replots (and send_fit uses this space)."
+        description = "Select the Feffit tab's graph: space k / r / q / kq and, for r / q, the component re / im / mag / pha; `show_range` toggles the draggable fit-range band. The Feffit graph replots (and send_fit uses this space)."
     )]
     async fn feffit_graph(
         &self,
@@ -1022,7 +1082,7 @@ impl XafsMcp {
 
 #[tool_handler(
     name = "xafsview",
-    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot shows the main window. open_window / close_window / set_theme / plot_data / feffit_graph / xanes / mback / lcf / pca / wavelet / edit_mu / build_feff_inp / run_feff drive the pop-up windows and the tabs without the mouse."
+    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot shows the main window. open_window / close_window / set_theme / plot_data / feffit_graph / xanes / mback / lcf / pca / wavelet / edit_mu / build_feff_inp / run_feff drive the pop-up windows and the tabs without the mouse; graph makes the mouse gestures on a plot (zoom, box zoom, pan, click, band drag, legend click)."
 )]
 impl ServerHandler for XafsMcp {}
 

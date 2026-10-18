@@ -113,6 +113,11 @@ pub struct LcfWindow {
 }
 
 impl LcfWindow {
+    /// The window's plot, for gestures made without the pointer (MCP `graph`).
+    pub fn plot_mut(&mut self) -> &mut crate::plot::Plot {
+        &mut self.plot
+    }
+
     /// Build the window with its own plot (`PlotId` 3).
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 3);
@@ -469,6 +474,11 @@ pub struct PcaWindow {
 }
 
 impl PcaWindow {
+    /// The window's plot, for gestures made without the pointer (MCP `graph`).
+    pub fn plot_mut(&mut self) -> &mut crate::plot::Plot {
+        &mut self.plot
+    }
+
     /// Build the window with its own plot (`PlotId` 4).
     pub fn new(render_state: &RenderState) -> Self {
         let mut plot = crate::plot::Plot::new(render_state, 4);
