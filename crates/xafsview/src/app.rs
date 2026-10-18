@@ -694,6 +694,9 @@ impl XafsViewApp {
             mcp::McpRequest::TimeResolved { args, reply } => {
                 let _ = reply.send(self.time_resolved.apply_mcp(&args));
             }
+            mcp::McpRequest::About { reply } => {
+                let _ = reply.send(Ok(about_text()));
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }
@@ -3260,16 +3263,9 @@ impl XafsViewApp {
             [440.0, 200.0],
             |ui| {
                 ui.heading("XAFSView");
-                ui.label(format!(
-                    "feffit-rs port · version {}",
-                    env!("CARGO_PKG_VERSION")
-                ));
+                ui.label(about_version());
                 ui.separator();
-                ui.label(
-                    "A Rust reimplementation of the XAFSView GUI on the feffit-rs engines \
-                     (pre-edge / normalize, AUTOBK, FEFFIT, LCF / PCA, FEFF8L / FEFF10), \
-                     with larch-parity math.",
-                );
+                ui.label(ABOUT_BLURB);
             },
         );
     }
@@ -5171,6 +5167,21 @@ fn set_project_folders(folders: &mut Folders, root: &std::path::Path) -> Vec<Str
 /// Label-column width of the Folders form rows ("Sub base folder" is the
 /// widest label).
 const FOLDER_LABEL_W: f32 = 110.0;
+
+/// The About window's description.
+const ABOUT_BLURB: &str = "A Rust reimplementation of the XAFSView GUI on the feffit-rs engines \
+                           (pre-edge / normalize, AUTOBK, FEFFIT, LCF / PCA, FEFF8L / FEFF10), \
+                           with larch-parity math.";
+
+/// The About window's version line.
+fn about_version() -> String {
+    format!("feffit-rs port · version {}", env!("CARGO_PKG_VERSION"))
+}
+
+/// The About window as text (MCP `about`).
+fn about_text() -> String {
+    format!("XAFSView\n{}\n{ABOUT_BLURB}", about_version())
+}
 
 /// Label-column width of the Autobk Data box rows (Group / Title / Data File /
 /// Output file / Theory share one aligned column).

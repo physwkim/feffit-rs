@@ -174,6 +174,9 @@ pub enum McpRequest {
         args: TimeResolvedArgs,
         reply: TextReply,
     },
+    About {
+        reply: TextReply,
+    },
     Screenshot {
         window: Option<String>,
         reply: PngReply,
@@ -1262,6 +1265,11 @@ impl XafsMcp {
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::TimeResolved { args: a, reply })
             .await
+    }
+
+    #[tool(description = "The About window's text: program name, version and description.")]
+    async fn about(&self) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::About { reply }).await
     }
 }
 
