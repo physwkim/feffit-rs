@@ -338,8 +338,12 @@ impl DataSet {
         let mut out = Vec::new();
         match trans.fitspace {
             FitSpace::K => {
-                let iqmin = itrunc(0.0f64.max(0.01 + trans.kmin / trans.kstep));
-                let iqmax = itrunc(nfft_half.min(0.01 + trans.kmax / trans.kstep));
+                // `diff` ends at the data's last k (`model_k`), which can lie
+                // below `kmax` (an AUTOBK kmax under the fit's); larch's
+                // `[iqmin:iqmax]` slice stops there, so clip rather than index
+                // past it.
+                let iqmax = itrunc(nfft_half.min(0.01 + trans.kmax / trans.kstep)).min(diff.len());
+                let iqmin = itrunc(0.0f64.max(0.01 + trans.kmin / trans.kstep)).min(iqmax);
                 let k = trans.k_grid();
                 for (i, &kw) in trans.kweight.iter().enumerate() {
                     let eps = self.epsilon_k[i];
