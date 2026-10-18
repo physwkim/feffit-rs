@@ -84,7 +84,15 @@ struct PendingShot {
     viewport: egui::ViewportId,
     window: Option<ShotWindow>,
     reply: mcp::PngReply,
+    /// When the capture was requested; see [`SHOT_TIMEOUT`].
+    since: std::time::Instant,
 }
+
+/// The longest an MCP `screenshot` stays parked. The capture normally lands
+/// within a few frames; a painter that cannot read its surface back (an
+/// unsupported surface format logs an error and sends no event) would
+/// otherwise hang the call, and with it the client's session.
+const SHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct XafsViewApp {
     session: Session,
@@ -505,11 +513,32 @@ impl XafsViewApp {
                     .reply
                     .send(Err(format!("{name} closed before the capture")));
             }
+            let now = std::time::Instant::now();
+            let (late, live): (Vec<_>, Vec<_>) = std::mem::take(&mut self.mcp_shot_replies)
+                .into_iter()
+                .partition(|s| now.duration_since(s.since) > SHOT_TIMEOUT);
+            self.mcp_shot_replies = live;
+            for s in late {
+                let _ = s
+                    .reply
+                    .send(Err(format!("no capture arrived within {SHOT_TIMEOUT:?}")));
+            }
         }
-        let Some((_, rx)) = &self.mcp else { return };
-        let requests: Vec<mcp::McpRequest> = rx.try_iter().collect();
-        for req in requests {
-            self.handle_mcp_request(req, ctx);
+        if let Some((_, rx)) = &self.mcp {
+            let requests: Vec<mcp::McpRequest> = rx.try_iter().collect();
+            for req in requests {
+                self.handle_mcp_request(req, ctx);
+            }
+        }
+        // A capture takes frames the app does not otherwise schedule: the
+        // viewport is captured on the frame after the command, wgpu runs the
+        // readback callback on the GPU submit after that, and the event is
+        // delivered on the frame after the callback. Only that callback asks
+        // for a repaint, and it never runs while nothing submits — an idle app
+        // left the shot parked until some other input drew a frame. Keep the
+        // frames coming until every parked shot is answered.
+        if !self.mcp_shot_replies.is_empty() {
+            ctx.request_repaint();
         }
     }
 
@@ -811,6 +840,7 @@ impl XafsViewApp {
                             viewport,
                             window,
                             reply,
+                            since: std::time::Instant::now(),
                         });
                     }
                     Err(e) => {
