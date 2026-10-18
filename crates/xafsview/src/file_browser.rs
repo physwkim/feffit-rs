@@ -100,6 +100,43 @@ impl FileBrowser {
         self.sel_hi.clear();
     }
 
+    /// Sub-folders of the browsed folder, sorted by name (the nav chips).
+    pub fn subdirs(&self) -> &[PathBuf] {
+        &self.subdirs
+    }
+
+    /// The *Available* listing: the browsed folder's files the host's
+    /// predicate kept, minus the staged ones.
+    pub fn available(&self) -> &[PathBuf] {
+        &self.available
+    }
+
+    /// `=>`: stage `paths` (a path already staged is not duplicated) and
+    /// re-list the folder under `keep`.
+    pub fn stage(&mut self, paths: Vec<PathBuf>, keep: impl Fn(&Path) -> bool) {
+        for p in paths {
+            if !self.staged.contains(&p) {
+                self.staged.push(p);
+            }
+        }
+        self.avail_hi.clear();
+        self.refresh(keep);
+    }
+
+    /// `<=`: pull `paths` back out of the staged set and re-list the folder.
+    pub fn unstage(&mut self, paths: &[PathBuf], keep: impl Fn(&Path) -> bool) {
+        self.staged.retain(|p| !paths.contains(p));
+        self.sel_hi.clear();
+        self.refresh(keep);
+    }
+
+    /// "Clear all": empty the staged set and re-list the folder.
+    pub fn clear_staged(&mut self, keep: impl Fn(&Path) -> bool) {
+        self.staged.clear();
+        self.sel_hi.clear();
+        self.refresh(keep);
+    }
+
     /// Take the staged paths, leaving the set empty.
     pub fn take_staged(&mut self) -> Vec<PathBuf> {
         self.sel_hi.clear();
@@ -324,19 +361,12 @@ impl FileBrowser {
                 .filter(|p| self.avail_hi.contains(*p))
                 .cloned()
                 .collect();
-            for p in moving {
-                if !self.staged.contains(&p) {
-                    self.staged.push(p);
-                }
-            }
-            self.avail_hi.clear();
-            self.refresh(&keep);
+            self.stage(moving, &keep);
             changed = true;
         }
         if do_remove {
-            self.staged.retain(|p| !self.sel_hi.contains(p));
-            self.sel_hi.clear();
-            self.refresh(&keep);
+            let leaving: Vec<PathBuf> = self.sel_hi.iter().cloned().collect();
+            self.unstage(&leaving, &keep);
             changed = true;
         }
         if do_sort {
@@ -344,9 +374,7 @@ impl FileBrowser {
             self.sel_anchor = None;
         }
         if do_clear {
-            self.staged.clear();
-            self.sel_hi.clear();
-            self.refresh(&keep);
+            self.clear_staged(&keep);
             changed = true;
         }
         if do_delete {
@@ -502,6 +530,31 @@ mod tests {
         fb.refresh(|_| true);
         assert_eq!(fb.available, vec![sub.join("b.000")]);
         assert_eq!(fb.staged(), [d.join("a.000")]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn stage_unstage_and_clear_relist_the_folder() {
+        let d = tmpdir("stage");
+        std::fs::write(d.join("a.000"), "1 2\n").expect("w");
+        std::fs::write(d.join("b.000"), "1 2\n").expect("w");
+        let mut fb = FileBrowser::new("t");
+        fb.set_dir(Some(d.clone()));
+        fb.refresh(|_| true);
+        assert_eq!(fb.available().len(), 2);
+
+        fb.stage(vec![d.join("a.000"), d.join("a.000")], |_| true);
+        assert_eq!(fb.staged(), [d.join("a.000")], "no duplicate");
+        assert_eq!(fb.available(), [d.join("b.000")]);
+
+        fb.unstage(&[d.join("a.000")], |_| true);
+        assert!(fb.staged().is_empty());
+        assert_eq!(fb.available().len(), 2);
+
+        fb.stage(vec![d.join("b.000")], |_| true);
+        fb.clear_staged(|_| true);
+        assert!(fb.staged().is_empty());
+        assert_eq!(fb.available().len(), 2);
         let _ = std::fs::remove_dir_all(&d);
     }
 

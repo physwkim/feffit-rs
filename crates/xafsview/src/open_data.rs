@@ -79,6 +79,95 @@ impl OpenDataBrowser {
         self.browser.take_staged()
     }
 
+    /// MCP `open_data`: the browser half — Browse to `dir`, stage / unstage
+    /// `stage` / `unstage` (absolute paths, or names in the browsed folder),
+    /// Clear all. A staged file must exist and pass the raw-scan listing rule,
+    /// as it would have to appear in Available Data to be staged by hand.
+    pub fn apply_mcp(
+        &mut self,
+        dir: Option<PathBuf>,
+        stage: &[String],
+        unstage: &[String],
+        clear: bool,
+    ) -> Result<(), String> {
+        if let Some(d) = dir {
+            if !d.is_dir() {
+                return Err(format!("{} is not a folder", d.display()));
+            }
+            self.browser.set_dir(Some(d));
+            self.browser.refresh(raw_scans);
+        }
+        if clear {
+            self.browser.clear_staged(raw_scans);
+        }
+        if !unstage.is_empty() {
+            let paths: Vec<PathBuf> = unstage.iter().map(|f| self.resolve(f)).collect();
+            self.browser.unstage(&paths, raw_scans);
+        }
+        if !stage.is_empty() {
+            let mut paths = Vec::with_capacity(stage.len());
+            for f in stage {
+                let p = self.resolve(f);
+                if !p.is_file() {
+                    return Err(format!("{} is not a file", p.display()));
+                }
+                if !raw_scans(&p) {
+                    return Err(format!(
+                        "{} is not a raw scan file (this app's .xmu/.chi/.dat/.fit/.bkg outputs and non-table files are not listed)",
+                        p.display()
+                    ));
+                }
+                paths.push(p);
+            }
+            self.browser.stage(paths, raw_scans);
+        }
+        Ok(())
+    }
+
+    /// A file argument as a path: absolute as given, a bare name against the
+    /// browsed folder.
+    fn resolve(&self, f: &str) -> PathBuf {
+        let p = crate::mcp::native_path(f);
+        match (p.is_absolute(), self.browser.dir()) {
+            (false, Some(dir)) => dir.join(p),
+            _ => p,
+        }
+    }
+
+    /// The browser as text: the folder, its sub-folders, the Available Data
+    /// names and the Selected Data paths.
+    pub fn state_text(&self) -> String {
+        let names = |paths: &[PathBuf]| -> String {
+            if paths.is_empty() {
+                "(none)".to_owned()
+            } else {
+                paths
+                    .iter()
+                    .map(|p| file_name_of(p))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        };
+        let staged = if self.browser.staged().is_empty() {
+            "(none)".to_owned()
+        } else {
+            self.browser
+                .staged()
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        format!(
+            "folder: {}\nsub-folders: {}\navailable: {}\nstaged: {staged}",
+            self.browser
+                .dir()
+                .map_or_else(|| "(none)".to_owned(), |d| d.display().to_string()),
+            names(self.browser.subdirs()),
+            names(self.browser.available())
+        )
+    }
+
     /// Render the nav bar, sub-folders, and the two-pane staging list. Mutates the
     /// staged set; the caller reads [`representative`](Self::representative) /
     /// [`has_staged`](Self::has_staged) / [`take_staged`](Self::take_staged).
@@ -171,6 +260,47 @@ mod tests {
         assert!(!is_output_file("PGT_Mn_S2_NCM50_W_Insitu.000"));
         assert!(!is_output_file("scan.001"));
         assert!(!is_output_file("data.txt"));
+    }
+
+    #[test]
+    fn mcp_stages_raw_scans_by_name_and_rejects_outputs() {
+        let d = std::env::temp_dir().join(format!("xafsview_od_mcp_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub")).expect("mkdir");
+        std::fs::write(d.join("scan.000"), "# h\n6539.0 100 50\n").expect("w");
+        std::fs::write(d.join("scan.xmu"), "6539.0 1.0\n").expect("w");
+
+        let mut od = OpenDataBrowser::default();
+        od.apply_mcp(Some(d.clone()), &["scan.000".into()], &[], false)
+            .unwrap();
+        assert_eq!(od.representative(), Some(&d.join("scan.000")));
+        let text = od.state_text();
+        assert!(text.contains("sub-folders: sub"), "{text}");
+        assert!(text.contains("available: (none)"), "{text}");
+        assert!(
+            text.contains("staged: ") && text.contains("scan.000"),
+            "{text}"
+        );
+
+        let err = od
+            .apply_mcp(None, &["scan.xmu".into()], &[], false)
+            .unwrap_err();
+        assert!(err.contains("not a raw scan file"), "{err}");
+        let err = od
+            .apply_mcp(None, &["missing.000".into()], &[], false)
+            .unwrap_err();
+        assert!(err.contains("not a file"), "{err}");
+
+        od.apply_mcp(None, &[], &["scan.000".into()], false)
+            .unwrap();
+        assert!(!od.has_staged());
+        assert!(od.state_text().contains("available: scan.000"));
+        assert!(
+            od.apply_mcp(Some(d.join("nope")), &[], &[], false)
+                .unwrap_err()
+                .contains("not a folder")
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

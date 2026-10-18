@@ -158,6 +158,10 @@ pub enum McpRequest {
         args: DataArgs,
         reply: TextReply,
     },
+    OpenData {
+        args: Box<OpenDataArgs>,
+        reply: TextReply,
+    },
     Log {
         args: LogArgs,
         reply: TextReply,
@@ -734,6 +738,45 @@ pub struct DataArgs {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct OpenDataArgs {
+    /// Folder to browse (the nav bar's Browse…); the Available list follows it.
+    pub dir: Option<String>,
+    /// Files to stage into Selected Data (`=>`): absolute paths, or file names
+    /// in the browsed folder. Raw scan files only, as the listing.
+    pub stage: Option<Vec<String>>,
+    /// Files to pull back out of Selected Data (`<=`), same forms as `stage`.
+    pub unstage: Option<Vec<String>>,
+    /// Empty Selected Data ("Clear all").
+    pub clear: Option<bool>,
+    /// Reading format — Mode: "transmission", "fluorescence", "reference" or
+    /// "raw" (precomputed μ). The columns are chosen on the first staged file
+    /// and apply to every staged file.
+    pub mode: Option<String>,
+    /// Energy column: a 0-based index or the column label.
+    pub energy: Option<String>,
+    /// I₀ column (transmission / fluorescence).
+    pub i0: Option<String>,
+    /// Iₜ column (transmission / reference).
+    pub it: Option<String>,
+    /// I_ref column (reference).
+    pub iref: Option<String>,
+    /// μ column (raw).
+    pub mu: Option<String>,
+    /// Fluorescence channels to sum — replaces the checked set.
+    pub channels: Option<Vec<String>>,
+    /// Header lines to skip, overriding auto-detection; -1 returns to auto.
+    pub header_lines: Option<i64>,
+    /// "Output file numbering" for the batch .xmu files.
+    pub number_outputs: Option<bool>,
+    /// "Clamp non-positive counts to 1".
+    pub clamp_monitors: Option<bool>,
+    /// Press "Autobk Start": build μ(E) from every staged file not already
+    /// loaded, then AUTOBK them (a background job — the call returns its
+    /// summary).
+    pub start: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct LogArgs {
     /// Return only the newest N messages (default: the whole log).
     pub last: Option<usize>,
@@ -1259,6 +1302,20 @@ impl XafsMcp {
     async fn data(&self, Parameters(a): Parameters<DataArgs>) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::Data { args: a, reply })
             .await
+    }
+
+    #[tool(
+        description = "The Open data window: browse a folder, stage / unstage raw scan files, set the reading format (mode, columns, header lines, numbering, clamping) on the first staged file, and press Autobk Start; returns the browser and reading-format state."
+    )]
+    async fn open_data(
+        &self,
+        Parameters(a): Parameters<OpenDataArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::OpenData {
+            args: Box::new(a),
+            reply,
+        })
+        .await
     }
 
     #[tool(

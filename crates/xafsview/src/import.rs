@@ -150,6 +150,143 @@ impl ImportState {
         }
     }
 
+    /// MCP `open_data`: the reading-format chooser's controls — Mode, the role
+    /// columns (an index or a column label), the fluorescence channel set, the
+    /// header-line override, numbering and clamping.
+    pub fn apply_mcp(&mut self, a: &crate::mcp::OpenDataArgs) -> Result<(), String> {
+        if let Some(n) = a.header_lines {
+            let max = (self.file.header.len() + self.file.nrows()) as i64;
+            self.header_skip = match n {
+                -1 => None,
+                0..=i64::MAX if n <= max => Some(n as usize),
+                _ => return Err(format!("header_lines {n} outside -1..={max} (-1 = auto)")),
+            };
+            self.reread_with_skip();
+        }
+        if let Some(m) = &a.mode {
+            self.mode = match m.to_ascii_lowercase().as_str() {
+                "transmission" => ImportMode::Transmission,
+                "fluorescence" => ImportMode::Fluorescence,
+                "reference" => ImportMode::Reference,
+                "raw" => ImportMode::Raw,
+                other => {
+                    return Err(format!(
+                        "unknown mode {other:?}; one of transmission, fluorescence, reference, raw"
+                    ));
+                }
+            };
+        }
+        for (arg, name) in [
+            (&a.energy, "energy"),
+            (&a.i0, "i0"),
+            (&a.it, "it"),
+            (&a.iref, "iref"),
+            (&a.mu, "mu"),
+        ] {
+            if let Some(col) = arg {
+                let idx = self.column_index(col, name)?;
+                match name {
+                    "energy" => self.energy = idx,
+                    "i0" => self.i0 = idx,
+                    "it" => self.it = idx,
+                    "iref" => self.iref = idx,
+                    _ => self.mu_col = idx,
+                }
+            }
+        }
+        if let Some(chs) = &a.channels {
+            let mut on = vec![false; self.channels.len()];
+            for c in chs {
+                on[self.column_index(c, "channels")?] = true;
+            }
+            self.channels = on;
+        }
+        if let Some(v) = a.number_outputs {
+            self.number_outputs = v;
+        }
+        if let Some(v) = a.clamp_monitors {
+            self.clamp_monitors = v;
+        }
+        Ok(())
+    }
+
+    /// A column given as a 0-based index or a label (exact, then
+    /// case-insensitive), for the field `name`.
+    fn column_index(&self, col: &str, name: &str) -> Result<usize, String> {
+        let labels = &self.file.labels;
+        if let Ok(i) = col.trim().parse::<usize>() {
+            return if i < labels.len() {
+                Ok(i)
+            } else {
+                Err(format!(
+                    "{name}: column index {i} out of range ({} columns)",
+                    labels.len()
+                ))
+            };
+        }
+        labels
+            .iter()
+            .position(|l| l == col)
+            .or_else(|| labels.iter().position(|l| l.eq_ignore_ascii_case(col)))
+            .ok_or_else(|| format!("{name}: no column {col:?}; columns are {labels:?}"))
+    }
+
+    /// The chooser's state as text: file, header lines, shape, Mode, the role
+    /// columns as `index:label`, and the two flags.
+    pub fn summary(&self) -> String {
+        let col = |i: usize| -> String {
+            format!(
+                "{i}:{}",
+                self.file.labels.get(i).map(String::as_str).unwrap_or("?")
+            )
+        };
+        let roles = match self.mode {
+            ImportMode::Transmission => format!(
+                "transmission: energy {}, i0 {}, it {}",
+                col(self.energy),
+                col(self.i0),
+                col(self.it)
+            ),
+            ImportMode::Fluorescence => {
+                let chs: Vec<String> = self
+                    .channels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, on)| **on)
+                    .map(|(i, _)| col(i))
+                    .collect();
+                format!(
+                    "fluorescence: energy {}, i0 {}, channels [{}]",
+                    col(self.energy),
+                    col(self.i0),
+                    chs.join(", ")
+                )
+            }
+            ImportMode::Reference => format!(
+                "reference: energy {}, it {}, iref {}",
+                col(self.energy),
+                col(self.it),
+                col(self.iref)
+            ),
+            ImportMode::Raw => format!("raw: energy {}, mu {}", col(self.energy), col(self.mu_col)),
+        };
+        let header = match self.header_skip {
+            Some(n) => format!("{n} (forced; auto {})", self.file.header.len()),
+            None => format!("{} (auto)", self.file.header.len()),
+        };
+        format!(
+            "file: {}\nheader lines: {header}; {} columns × {} data points\nmode: {roles}\nnumber outputs = {}; clamp monitors = {}",
+            self.file
+                .path
+                .as_ref()
+                .map_or_else(|| "(text)".to_owned(), |p| p.display().to_string()),
+            self.file.ncols(),
+            self.file.nrows(),
+            self.number_outputs,
+            self.clamp_monitors
+        )
+    }
+
     /// Render the reading-format chooser (header-line count, full-file preview,
     /// Mode, column roles). The Open-data window's "Autobk Start" builds μ(E) from
     /// the current selection, so this renders controls only.
@@ -354,6 +491,60 @@ mod tests {
             MuSpec::Raw { energy, mu } => assert_eq!((energy, mu), (0, 1)),
             _ => panic!("expected Raw spec"),
         }
+    }
+
+    #[test]
+    fn mcp_sets_mode_and_columns_by_index_or_label() {
+        let cf = ColumnFile::from_text("# e i0 c1 c2 c3\n1 100 1 2 3\n2 200 4 5 6\n").unwrap();
+        let mut st = ImportState::new(cf);
+        let args = |mode: &str, energy: &str, chs: Vec<&str>| crate::mcp::OpenDataArgs {
+            dir: None,
+            stage: None,
+            unstage: None,
+            clear: None,
+            mode: Some(mode.into()),
+            energy: Some(energy.into()),
+            i0: Some("I0".into()),
+            it: None,
+            iref: None,
+            mu: None,
+            channels: Some(chs.into_iter().map(String::from).collect()),
+            header_lines: None,
+            number_outputs: Some(true),
+            clamp_monitors: None,
+            start: None,
+        };
+        st.apply_mcp(&args("fluorescence", "0", vec!["c1", "4"]))
+            .unwrap();
+        match st.to_spec() {
+            MuSpec::Fluorescence {
+                energy,
+                i0,
+                channels,
+            } => assert_eq!((energy, i0, channels), (0, 1, vec![2, 4])),
+            _ => panic!("expected Fluorescence spec"),
+        }
+        assert!(st.number_outputs);
+        let text = st.summary();
+        assert!(
+            text.contains("mode: fluorescence: energy 0:e, i0 1:i0, channels [2:c1, 4:c3]"),
+            "{text}"
+        );
+        assert!(
+            st.apply_mcp(&args("raw", "9", vec![]))
+                .unwrap_err()
+                .contains("out of range")
+        );
+        assert!(
+            st.apply_mcp(&args("raw", "nope", vec![]))
+                .unwrap_err()
+                .contains("no column")
+        );
+        assert!(
+            st.apply_mcp(&args("xafs", "0", vec![]))
+                .unwrap_err()
+                .contains("unknown mode")
+        );
     }
 
     #[test]

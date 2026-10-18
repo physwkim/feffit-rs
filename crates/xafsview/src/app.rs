@@ -678,6 +678,9 @@ impl XafsViewApp {
             mcp::McpRequest::Data { args, reply } => {
                 let _ = reply.send(self.apply_mcp_data(&args));
             }
+            mcp::McpRequest::OpenData { args, reply } => {
+                self.apply_mcp_open_data(*args, reply, ctx)
+            }
             mcp::McpRequest::Log { args, reply } => {
                 if args.clear == Some(true) {
                     self.status.clear();
@@ -1273,6 +1276,97 @@ impl XafsViewApp {
         s
     }
 
+    /// MCP `open_data`: the loader (opened through its own entry point, which
+    /// seeds the staged pane with the loaded files), its browser half
+    /// ([`OpenDataBrowser::apply_mcp`]), the reading-format chooser on the
+    /// representative ([`ImportState::apply_mcp`]), then Autobk Start — the
+    /// batch μ(E) job, whose summary answers the parked reply.
+    fn apply_mcp_open_data(
+        &mut self,
+        a: mcp::OpenDataArgs,
+        reply: mcp::TextReply,
+        ctx: &egui::Context,
+    ) {
+        let state = match self.mcp_open_data_state(&a, ctx) {
+            Ok(text) => text,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        if a.start != Some(true) {
+            let _ = reply.send(Ok(state));
+            return;
+        }
+        if !self.open_data.has_staged() {
+            let _ = reply.send(Err(format!(
+                "nothing staged — stage raw scan files first\n{state}"
+            )));
+            return;
+        }
+        if self.jobs.busy() {
+            let _ = reply.send(Err(JOB_BUSY.to_owned()));
+            return;
+        }
+        if self.open_data_start() == 0 {
+            let _ = reply.send(Ok(format!(
+                "Autobk Start: every staged file is already loaded, nothing to build.\n{state}"
+            )));
+        } else if self.jobs.busy() {
+            self.mcp_job_reply = Some(reply);
+        } else {
+            let _ = reply.send(Err(self.status.line().to_owned()));
+        }
+    }
+
+    /// The synchronous part of MCP `open_data` (everything but Autobk Start),
+    /// returning the window's state text.
+    fn mcp_open_data_state(
+        &mut self,
+        a: &mcp::OpenDataArgs,
+        ctx: &egui::Context,
+    ) -> Result<String, String> {
+        if !self.open_data.open {
+            self.open_new_file(ctx);
+        }
+        let none = Vec::new();
+        self.open_data.apply_mcp(
+            a.dir.as_deref().map(mcp::native_path),
+            a.stage.as_ref().unwrap_or(&none),
+            a.unstage.as_ref().unwrap_or(&none),
+            a.clear == Some(true),
+        )?;
+        let rep = self.open_data.representative().cloned();
+        self.sync_import_to_representative();
+        if rep.is_some() && self.import.as_ref().and_then(|i| i.file.path.clone()) != rep {
+            // The representative did not read; the status line has the reason.
+            return Err(self.status.line().to_owned());
+        }
+        let wants_columns = a.mode.is_some()
+            || a.energy.is_some()
+            || a.i0.is_some()
+            || a.it.is_some()
+            || a.iref.is_some()
+            || a.mu.is_some()
+            || a.channels.is_some()
+            || a.header_lines.is_some()
+            || a.number_outputs.is_some()
+            || a.clamp_monitors.is_some();
+        let import = match self.import.as_mut() {
+            Some(imp) => {
+                if wants_columns {
+                    imp.apply_mcp(a)?;
+                }
+                imp.summary()
+            }
+            None if wants_columns => {
+                return Err("stage a raw scan file first to set its columns".to_owned());
+            }
+            None => "(no file staged — no reading format)".to_owned(),
+        };
+        Ok(format!("{}\n{import}", self.open_data.state_text()))
+    }
+
     /// Put an action's outcome on the status line: `Ok` as info, `Err` as an
     /// error. For the actions a button and an MCP tool share, so both report
     /// the same way.
@@ -1789,9 +1883,16 @@ impl XafsViewApp {
         // viewport cannot clip it.
         self.open_data.confirm_delete(ctx);
 
-        // Keep the reading-format chooser pointed at the representative (first
-        // staged) file: re-read only when it changes, so the user's column picks
-        // persist while the representative stays put.
+        self.sync_import_to_representative();
+        if do_start {
+            self.open_data_start();
+        }
+    }
+
+    /// Keep the reading-format chooser pointed at the representative (first
+    /// staged) file: re-read only when it changes, so the user's column picks
+    /// persist while the representative stays put.
+    fn sync_import_to_representative(&mut self) {
         let rep = self.open_data.representative().cloned();
         let cur = self.import.as_ref().and_then(|i| i.file.path.clone());
         if rep != cur {
@@ -1803,33 +1904,39 @@ impl XafsViewApp {
                 None => self.import = None,
             }
         }
+    }
 
-        // Build + reduce every staged file with the representative's mapping.
-        // Guard on a seeded import so a failed representative read never drops the
-        // staged set (the re-read above seeds it whenever anything is staged).
-        if do_start && self.import.is_some() {
-            let staged = self.open_data.take_staged();
-            // The Selected pane is seeded with the already-loaded files, so build
-            // only the newly-staged ones — rebuilding an existing group would
-            // duplicate it. Groups are keyed by their source path.
-            let loaded: std::collections::HashSet<std::path::PathBuf> = self
-                .session
-                .groups
-                .iter()
-                .filter_map(|g| g.filename.clone())
-                .collect();
-            let to_build: Vec<std::path::PathBuf> =
-                staged.into_iter().filter(|p| !loaded.contains(p)).collect();
-            // Track the folder the data came from (as the old single-file open
-            // did), so outputs and the next open default to it.
-            if let Some(first) = to_build.first() {
-                self.set_data_dir_from(first);
-            }
-            self.open_data.open = false;
-            if !to_build.is_empty() {
-                self.build_xmu_from_paths(to_build);
-            }
+    /// The loader's "Autobk Start": build + reduce every staged file with the
+    /// representative's mapping, on the batch job, and close the loader. Only
+    /// the newly-staged files are built — the Selected pane is seeded with the
+    /// already-loaded files, and rebuilding an existing group would duplicate
+    /// it (groups are keyed by source path). Guarded on a seeded import so a
+    /// failed representative read never drops the staged set. Returns how many
+    /// files went to the job (0 = nothing new, or no import).
+    fn open_data_start(&mut self) -> usize {
+        if self.import.is_none() {
+            return 0;
         }
+        let staged = self.open_data.take_staged();
+        let loaded: std::collections::HashSet<std::path::PathBuf> = self
+            .session
+            .groups
+            .iter()
+            .filter_map(|g| g.filename.clone())
+            .collect();
+        let to_build: Vec<std::path::PathBuf> =
+            staged.into_iter().filter(|p| !loaded.contains(p)).collect();
+        // Track the folder the data came from (as the old single-file open
+        // did), so outputs and the next open default to it.
+        if let Some(first) = to_build.first() {
+            self.set_data_dir_from(first);
+        }
+        self.open_data.open = false;
+        let n = to_build.len();
+        if n > 0 {
+            self.build_xmu_from_paths(to_build);
+        }
+        n
     }
 
     /// Load a FEFF `chi.dat` as the **Theory** standard — the `k_std`/`chi_std`
