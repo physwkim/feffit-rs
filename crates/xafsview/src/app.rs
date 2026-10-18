@@ -2307,11 +2307,9 @@ impl XafsViewApp {
                 .position(|g| g.label == prev.label)
             {
                 Some(idx) => {
-                    let msg = format!("Undid last edit on {}.", prev.label);
+                    let mut msg = format!("Undid last edit on {}.", prev.label);
                     self.session.groups[idx] = prev;
-                    self.plot.set_x_markers(&[], GLITCH_MARKER);
-                    self.plot_data.mark_dirty();
-                    self.replot_active_tab();
+                    self.after_mu_edit(idx, &mut msg);
                     Ok(msg)
                 }
                 None => Err(format!(
@@ -2328,7 +2326,7 @@ impl XafsViewApp {
             return Err("Load a spectrum to edit.".to_owned());
         }
         let snapshot = g.clone();
-        let (changed, msg) = match action {
+        let (changed, mut msg) = match action {
             CleanAction::AutoDeglitch(nsig) => {
                 let n = feffit::xasdata::auto_deglitch(g, nsig);
                 if n > 0 {
@@ -2371,11 +2369,30 @@ impl XafsViewApp {
         if self.clean_undo.len() > UNDO_CAP {
             self.clean_undo.remove(0);
         }
-        // Any edit moves the data the candidate markers pointed at.
+        let edited = self.session.current.expect("current_group_mut succeeded");
+        self.after_mu_edit(edited, &mut msg);
+        Ok(msg)
+    }
+
+    /// What follows a μ(E) edit, or its undo, once group `edited` holds the
+    /// new spectrum. Any edit moves the data the glitch-candidate markers
+    /// pointed at. And the edit cleared the group's derived arrays
+    /// ([`XasGroup::clear_derived`]: e0, χ(k), the FTs), which left the Autobk
+    /// fields at "0.0 eV" and the k/R graphs blank until the next AUTOBK run;
+    /// so the current group gets the same live-preview reduction a finished
+    /// Autobk parameter edit gets ([`recompute_reduction`]: no χ file is
+    /// written), with the result's E₀ and k-point count appended to `msg`.
+    /// An undo that restored another group only replots.
+    fn after_mu_edit(&mut self, edited: usize, msg: &mut String) {
         self.plot.set_x_markers(&[], GLITCH_MARKER);
+        if self.session.current == Some(edited)
+            && let Some((e0, n)) = self.recompute_reduction()
+        {
+            msg.push_str(&format!(" E₀ = {e0:.2} eV, {n} k-points."));
+            return;
+        }
         self.plot_data.mark_dirty();
         self.replot_active_tab();
-        Ok(msg)
     }
 
     /// Preview automatic glitch candidates on the current group: switch the

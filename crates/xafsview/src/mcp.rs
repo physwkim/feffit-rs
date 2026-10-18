@@ -957,7 +957,7 @@ impl XafsMcp {
     }
 
     #[tool(
-        description = "Press an Edit μ(E) button on the current group: find / remove_auto (automatic glitches at `nsig` σ), remove_point (`energy`), remove_range (`side`, `e1`, `e2`), trim (`lo`, `hi`), smooth (`sigma`, `form`), or undo. Re-run run_autobk after an edit."
+        description = "Press an Edit μ(E) button on the current group: find / remove_auto (automatic glitches at `nsig` σ), remove_point (`energy`, or the graph's pinned pick when omitted), remove_range (`side`, `e1`, `e2`), trim (`lo`, `hi`), smooth (`sigma`, `form`), or undo. Each edit re-reduces the current group as a live preview (E₀ and k-point count in the reply; no χ file is written) — run_autobk writes the files."
     )]
     async fn edit_mu(
         &self,
