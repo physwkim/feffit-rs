@@ -1542,6 +1542,120 @@ impl FeffitUi {
         self.paths_mut().push(row);
     }
 
+    /// MCP `set_path`: one path row's controls — Init, the include checkbox,
+    /// the selection, the per-path locals, the shared wiring and the s02
+    /// override — then the row's state as text. Edits the row in place like
+    /// the tab's widgets do (the list itself is unchanged, so a guess snapshot
+    /// stays valid).
+    pub fn apply_mcp_path(&mut self, a: &crate::mcp::SetPathArgs) -> Result<String, String> {
+        let n = self.paths.len();
+        let idx = a.index;
+        if idx >= n {
+            return Err(format!(
+                "path index {idx} out of range ({n} path(s) loaded)"
+            ));
+        }
+        for (slot, arg) in [
+            (LOC_N, &a.n),
+            (LOC_SIG, &a.sigma2),
+            (LOC_THIRD, &a.third),
+            (LOC_FOURTH, &a.fourth),
+        ] {
+            if let Some(l) = arg
+                && let Some(k) = &l.kind
+            {
+                parse_kind(k).map_err(|e| format!("{}: {e}", PATH_LOCALS[slot].0))?;
+            }
+        }
+        let row = &mut self.paths[idx];
+        if a.init == Some(true) {
+            row.reset_specs();
+        }
+        if let Some(on) = a.enabled {
+            row.enabled = on;
+        }
+        for (slot, arg) in [
+            (LOC_N, &a.n),
+            (LOC_SIG, &a.sigma2),
+            (LOC_THIRD, &a.third),
+            (LOC_FOURTH, &a.fourth),
+        ] {
+            let Some(l) = arg else { continue };
+            let loc = &mut row.locals[slot];
+            if let Some(on) = l.enabled {
+                loc.enabled = on;
+            }
+            if let Some(k) = &l.kind {
+                loc.kind = parse_kind(k)?;
+            }
+            if let Some(v) = l.value {
+                loc.value = v;
+            }
+            if let Some(e) = &l.expr {
+                loc.expr = e.clone();
+            }
+            if loc.enabled && loc.kind == ParamKind::Expr && loc.expr.trim().is_empty() {
+                return Err(format!(
+                    "{}{}: kind \"expr\" needs an expression",
+                    PATH_LOCALS[slot].0,
+                    idx + 1
+                ));
+            }
+        }
+        for (arg, field) in [
+            (&a.degen, &mut row.degen),
+            (&a.e0, &mut row.e0),
+            (&a.ei, &mut row.ei),
+            (&a.deltar, &mut row.deltar),
+        ] {
+            if let Some(v) = arg {
+                *field = v.clone();
+            }
+        }
+        if let Some(s02) = &a.s02 {
+            row.s02_override = (!s02.trim().is_empty()).then(|| s02.clone());
+        }
+        if a.select == Some(true) {
+            self.selected_path = idx;
+        }
+        Ok(self.path_text(idx))
+    }
+
+    /// One path row as text: label, geometry, the include / selected flags,
+    /// each per-path local, the shared wiring and the s02 override.
+    fn path_text(&self, idx: usize) -> String {
+        let p = &self.paths[idx];
+        let mut s = format!(
+            "path {idx} \"{}\": reff = {:.4} Å, nleg = {}, enabled = {}, selected = {}\n",
+            p.label,
+            p.reff,
+            p.nleg,
+            p.enabled,
+            idx == self.selected_path
+        );
+        for (li, (base, _)) in PATH_LOCALS.iter().enumerate() {
+            let loc = &p.locals[li];
+            let value = match loc.kind {
+                ParamKind::Expr => format!("expr \"{}\"", loc.expr),
+                k => format!("{} {}", kind_name(k), loc.value),
+            };
+            s.push_str(&format!(
+                "  {base}{}: {} {value}\n",
+                idx + 1,
+                if loc.enabled { "on " } else { "off" }
+            ));
+        }
+        s.push_str(&format!(
+            "  degen = {}; e0 = {}; deltar = {}; ei = {}; s02 = {}",
+            p.degen,
+            p.e0,
+            p.deltar,
+            p.ei,
+            p.s02_override.as_deref().unwrap_or("amp·N (derived)")
+        ));
+        s
+    }
+
     /// Whether any enabled path is loaded (the fit needs at least one).
     pub fn has_enabled_path(&self) -> bool {
         self.paths.iter().any(|p| p.enabled)
@@ -2334,6 +2448,17 @@ fn kind_name(k: ParamKind) -> &'static str {
     }
 }
 
+/// A kind selector label — the tab's "guess" / "set" / "expr", or larch's
+/// "vary" / "fixed" as MCP `set_params` spells them.
+fn parse_kind(k: &str) -> Result<ParamKind, String> {
+    match k.to_ascii_lowercase().as_str() {
+        "guess" | "vary" => Ok(ParamKind::Vary),
+        "set" | "fixed" => Ok(ParamKind::Fixed),
+        "expr" => Ok(ParamKind::Expr),
+        other => Err(format!("unknown kind {other:?}; one of guess, set, expr")),
+    }
+}
+
 fn window_name(w: Window) -> &'static str {
     match w {
         Window::Hanning => "Hanning",
@@ -2981,6 +3106,78 @@ mod tests {
         assert_eq!(ui.paths[0].locals[LOC_SIG].value, best_sig1);
         assert!(ui.undo_guess());
         assert_eq!(ui.paths[0].locals[LOC_SIG].value, before);
+    }
+
+    #[test]
+    fn set_path_edits_the_row_in_place_and_validates() {
+        let mut ui = feffit_ui_with_paths();
+        let local = |kind: &str, value: Option<f64>, expr: Option<&str>| crate::mcp::PathLocalArg {
+            enabled: Some(true),
+            kind: Some(kind.into()),
+            value,
+            expr: expr.map(String::from),
+        };
+        let mut a = crate::mcp::SetPathArgs {
+            index: 1,
+            init: None,
+            enabled: Some(false),
+            select: Some(true),
+            n: Some(local("set", Some(2.0), None)),
+            sigma2: Some(local("expr", None, Some("sig1*1.5"))),
+            third: None,
+            fourth: None,
+            degen: None,
+            e0: Some("del_e0+1".into()),
+            ei: None,
+            deltar: None,
+            s02: Some("0.8".into()),
+        };
+        let text = ui.apply_mcp_path(&a).unwrap();
+        assert!(text.starts_with("path 1 \"feff0002.dat\""), "{text}");
+        assert!(text.contains("enabled = false, selected = true"), "{text}");
+        assert!(text.contains("N2: on  set 2"), "{text}");
+        assert!(text.contains("sig2: on  expr \"sig1*1.5\""), "{text}");
+        assert!(
+            text.contains("e0 = del_e0+1") && text.contains("s02 = 0.8"),
+            "{text}"
+        );
+        assert_eq!(ui.selected_path, 1);
+        assert!(!ui.paths[1].enabled);
+        assert!(ui.paths[1].locals[LOC_N].kind == ParamKind::Fixed);
+
+        // "" drops the s02 override; Init restores the starter wiring.
+        a.s02 = Some(String::new());
+        a.init = Some(true);
+        a.n = None;
+        a.sigma2 = None;
+        a.e0 = None;
+        let text = ui.apply_mcp_path(&a).unwrap();
+        assert!(
+            text.contains("e0 = del_e0;") && text.contains("amp·N (derived)"),
+            "{text}"
+        );
+
+        // A bad kind is refused before anything is written.
+        a.init = None;
+        a.third = Some(local("free", Some(0.0), None));
+        let before = ui.paths[1].clone();
+        assert!(ui.apply_mcp_path(&a).unwrap_err().contains("unknown kind"));
+        let after = &ui.paths[1];
+        assert!(
+            after.locals == before.locals
+                && after.enabled == before.enabled
+                && after.e0 == before.e0
+                && after.s02_override == before.s02_override,
+            "nothing applied on a refused call"
+        );
+        a.third = Some(local("expr", None, None));
+        assert!(
+            ui.apply_mcp_path(&a)
+                .unwrap_err()
+                .contains("needs an expression")
+        );
+        a.index = 7;
+        assert!(ui.apply_mcp_path(&a).unwrap_err().contains("out of range"));
     }
 
     #[test]

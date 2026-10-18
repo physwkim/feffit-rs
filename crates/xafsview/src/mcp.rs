@@ -200,6 +200,10 @@ pub enum McpRequest {
         args: FeffitFileArgs,
         reply: TextReply,
     },
+    SetPath {
+        args: Box<SetPathArgs>,
+        reply: TextReply,
+    },
     Screenshot {
         window: Option<String>,
         reply: PngReply,
@@ -882,6 +886,48 @@ pub struct FeffitFileArgs {
     pub path: String,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PathLocalArg {
+    /// Use this parameter in the fit (the row's checkbox).
+    pub enabled: Option<bool>,
+    /// "guess" (refined), "set" (held fixed) or "expr".
+    pub kind: Option<String>,
+    /// Starting / fixed value.
+    pub value: Option<f64>,
+    /// Expression over the other variables (kind "expr").
+    pub expr: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SetPathArgs {
+    /// Path-list index (0-based, in add order).
+    pub index: usize,
+    /// "Init" first: reset the path's parameters to the starter wiring.
+    pub init: Option<bool>,
+    /// Include the path in the fit (its checkbox).
+    pub enabled: Option<bool>,
+    /// Select the row, so its parameter block shows in the tab.
+    pub select: Option<bool>,
+    /// Per-path parameter N (coordination factor; amplitude is amp·N).
+    pub n: Option<PathLocalArg>,
+    /// Per-path σ² (Å²).
+    pub sigma2: Option<PathLocalArg>,
+    /// Per-path third cumulant.
+    pub third: Option<PathLocalArg>,
+    /// Per-path fourth cumulant.
+    pub fourth: Option<PathLocalArg>,
+    /// Shared wiring: degeneracy expression.
+    pub degen: Option<String>,
+    /// Shared wiring: E₀ shift expression (default "del_e0").
+    pub e0: Option<String>,
+    /// Shared wiring: Ei expression.
+    pub ei: Option<String>,
+    /// Shared wiring: Δr expression (default "alpha*reff").
+    pub deltar: Option<String>,
+    /// Per-path amplitude override expression; "" removes it (back to amp·N).
+    pub s02: Option<String>,
+}
+
 /// The per-connection MCP handler: forwards each tool call to the egui thread
 /// and awaits the oneshot. Cheap to clone (a channel sender + an egui context).
 #[derive(Clone)]
@@ -1451,6 +1497,20 @@ impl XafsMcp {
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::FeffitFile { args: a, reply })
             .await
+    }
+
+    #[tool(
+        description = "Edit one Feffit path's row: its include-in-fit checkbox, selection, Init, the per-path parameters N / σ² / third / fourth (enabled, guess / set / expr, value, expression), the shared wiring (degen, e0, ei, deltar) and the s02 override; returns the path's state."
+    )]
+    async fn set_path(
+        &self,
+        Parameters(a): Parameters<SetPathArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::SetPath {
+            args: Box::new(a),
+            reply,
+        })
+        .await
     }
 }
 

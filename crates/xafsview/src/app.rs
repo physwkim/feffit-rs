@@ -722,6 +722,9 @@ impl XafsViewApp {
             mcp::McpRequest::FeffitFile { args, reply } => {
                 let _ = reply.send(self.apply_mcp_feffit_file(&args));
             }
+            mcp::McpRequest::SetPath { args, reply } => {
+                let _ = reply.send(self.feffit.apply_mcp_path(&args));
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }
