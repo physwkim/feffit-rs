@@ -675,6 +675,9 @@ impl XafsViewApp {
             mcp::McpRequest::Folders { args, reply } => {
                 let _ = reply.send(self.apply_mcp_folders(*args));
             }
+            mcp::McpRequest::Data { args, reply } => {
+                let _ = reply.send(self.apply_mcp_data(&args));
+            }
             mcp::McpRequest::Log { args, reply } => {
                 if args.clear == Some(true) {
                     self.status.clear();
@@ -1180,6 +1183,94 @@ impl XafsViewApp {
         })
         .collect::<Vec<_>>()
         .join("\n")
+    }
+
+    /// MCP `data`: the Data window's row click (current), All / None, Move
+    /// current up / down and Clear all — the session calls the window makes,
+    /// with its bookkeeping (check anchor, Plot Data traces, replot); returns
+    /// the group list.
+    fn apply_mcp_data(&mut self, a: &mcp::DataArgs) -> Result<String, String> {
+        let n = self.session.groups.len();
+        let mut changed = false;
+        if let Some(i) = a.current {
+            if i >= n {
+                return Err(format!(
+                    "group index {i} out of range ({n} group(s) loaded)"
+                ));
+            }
+            self.session.current = Some(i);
+            changed = true;
+        }
+        if let Some(c) = &a.check {
+            match c.to_ascii_lowercase().as_str() {
+                "all" => self.session.select_all(),
+                "none" => self.session.clear_selected(),
+                other => return Err(format!("unknown check {other:?}; all or none")),
+            }
+            changed = true;
+        }
+        if let Some(m) = &a.move_current {
+            let up = match m.to_ascii_lowercase().as_str() {
+                "up" => true,
+                "down" => false,
+                other => return Err(format!("unknown move_current {other:?}; up or down")),
+            };
+            let Some(c) = self.session.current else {
+                return Err("no current group to move".to_owned());
+            };
+            if !self.session.move_group(c, up) {
+                return Err(format!(
+                    "group {c} is already at the {}",
+                    if up { "top" } else { "bottom" }
+                ));
+            }
+            self.data_check_anchor = None;
+            self.plot_data.mark_dirty();
+            self.data_window_reveal = true;
+            changed = true;
+        }
+        if a.clear_all == Some(true) {
+            self.session.groups.clear();
+            self.session.current = None;
+            self.session.clear_selected();
+            self.data_check_anchor = None;
+            self.plot_data.mark_dirty();
+            changed = true;
+        }
+        if changed {
+            self.replot_active_tab();
+        }
+        Ok(self.data_text())
+    }
+
+    /// The Data window's list as text: the check count, the current group,
+    /// then one `>`-marked / `[x]`-checked row per group.
+    fn data_text(&self) -> String {
+        let n = self.session.groups.len();
+        let mut s = format!(
+            "{} of {n} checked for Run; current = {}",
+            self.session.selected.len(),
+            self.session
+                .current
+                .map_or_else(|| "none".to_owned(), |c| c.to_string())
+        );
+        for (i, g) in self.session.groups.iter().enumerate() {
+            s.push_str(&format!(
+                "\n{}{i:>3} [{}] {}",
+                if self.session.current == Some(i) {
+                    ">"
+                } else {
+                    " "
+                },
+                if self.session.is_selected(i) {
+                    "x"
+                } else {
+                    " "
+                },
+                g.label
+            ));
+        }
+        s
     }
 
     /// Put an action's outcome on the status line: `Ok` as info, `Err` as an

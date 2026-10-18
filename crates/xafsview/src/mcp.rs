@@ -154,6 +154,10 @@ pub enum McpRequest {
         args: Box<FoldersArgs>,
         reply: TextReply,
     },
+    Data {
+        args: DataArgs,
+        reply: TextReply,
+    },
     Log {
         args: LogArgs,
         reply: TextReply,
@@ -716,6 +720,20 @@ pub struct FoldersArgs {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct DataArgs {
+    /// Make this group (index as shown by get_results) the current one — the
+    /// Data window's row click.
+    pub current: Option<usize>,
+    /// The window's All / None buttons: "all" checks every group for Run,
+    /// "none" unchecks them all.
+    pub check: Option<String>,
+    /// Move the current group one row "up" or "down" (the series order).
+    pub move_current: Option<String>,
+    /// "Clear all": remove every group.
+    pub clear_all: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct LogArgs {
     /// Return only the newest N messages (default: the whole log).
     pub last: Option<usize>,
@@ -1233,6 +1251,14 @@ impl XafsMcp {
             reply,
         })
         .await
+    }
+
+    #[tool(
+        description = "The Data window: switch the current group, check All / None for Run, move the current group up / down, Clear all; returns the group list with its checks and the current marker."
+    )]
+    async fn data(&self, Parameters(a): Parameters<DataArgs>) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Data { args: a, reply })
+            .await
     }
 
     #[tool(
