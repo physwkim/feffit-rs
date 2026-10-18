@@ -126,6 +126,16 @@ pub fn fixed_viewport_scroll(height: f32) -> egui::ScrollArea {
         .max_height(height)
 }
 
+/// The `ScrollArea` holding a resizable side panel's controls. A `Panel`
+/// persists its content's width as its own, so one row wider than the panel —
+/// a long group name in a `horizontal` — pushed the panel out a little more
+/// every frame. Scrolling on both axes keeps the content inside the width the
+/// user set: text still wraps at that width, and a row that cannot wrap
+/// scrolls instead of widening the panel.
+pub fn panel_scroll() -> egui::ScrollArea {
+    egui::ScrollArea::both().auto_shrink(false)
+}
+
 /// [`detached`] without the [`egui::CentralPanel`] wrap, for windows whose body
 /// builds its own `SidePanel`/`CentralPanel` layout on the viewport root (the
 /// panels' frames then supply the margins). Every other window goes through

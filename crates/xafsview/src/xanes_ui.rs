@@ -102,7 +102,7 @@ impl XanesWindow {
                     .resizable(true)
                     .default_size(300.0)
                     .show(ui, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui, groups));
+                        crate::window::panel_scroll().show(ui, |ui| self.controls(ui, groups));
                     });
                 crate::window::fill_with_footer(
                     ui,

@@ -396,7 +396,7 @@ impl PlotDataWindow {
                     .resizable(true)
                     .default_size(300.0)
                     .show(ui, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
+                        crate::window::panel_scroll().show(ui, |ui| {
                             self.controls_column(ui, groups);
                         });
                     });

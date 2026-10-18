@@ -2984,7 +2984,7 @@ impl XafsViewApp {
                     ui.add_space(2.0);
                 });
                 egui::CentralPanel::default().show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    crate::window::panel_scroll().show(ui, |ui| {
                         // `controls` hosts the Graph section's "Show all fits" checkbox
                         // (shown only for >1 group); computing the group count up front
                         // lets it gate that checkbox and this Data… row alike.
@@ -4118,7 +4118,10 @@ impl XafsViewApp {
 
         egui::Panel::left("autobk_controls")
             .resizable(true)
-            .default_size(360.0)
+            // Wide enough for the two-column parameter form at its natural
+            // width: the panel no longer grows to fit it (see
+            // `window::panel_scroll`).
+            .default_size(460.0)
             .show(ui, |ui| {
                 // The action row, pinned below the scrolling form so the
                 // primary Start stays visible however long the form is.
@@ -4166,7 +4169,7 @@ impl XafsViewApp {
                     ui.add_space(2.0);
                 });
                 egui::CentralPanel::default().show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    crate::window::panel_scroll().show(ui, |ui| {
                         ui.heading("Autobk");
 
                         // --- Data: active group, per-group info, loading mode ---

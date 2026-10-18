@@ -657,7 +657,7 @@ impl InsituWindow {
                     .resizable(true)
                     .default_size(300.0)
                     .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
+                        crate::window::panel_scroll()
                             .show(ui, |ui| action = self.controls(ui, groups));
                     });
                 egui::CentralPanel::default().show(ui, |ui| self.map_pane(ui));

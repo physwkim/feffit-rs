@@ -155,7 +155,7 @@ impl MbackWindow {
                     .resizable(true)
                     .default_size(280.0)
                     .show(ui, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui, groups));
+                        crate::window::panel_scroll().show(ui, |ui| self.controls(ui, groups));
                     });
                 crate::window::fill_with_footer(
                     ui,
