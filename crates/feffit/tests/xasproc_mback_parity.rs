@@ -137,7 +137,7 @@ fn mback_norm_matches_larch() {
     let (energy, mu) = load_xmu();
     let r = load_ref(energy.len());
 
-    let mn = mback_norm(&energy, &mu, &r.f2, &MbackNormParams::defaults());
+    let mn = mback_norm(&energy, &mu, &r.f2, &MbackNormParams::defaults()).expect("mback_norm");
 
     let mut w = 0.0_f64;
     w = w.max(check_scalar(

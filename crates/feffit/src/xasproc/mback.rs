@@ -330,6 +330,51 @@ pub enum Edge {
     L1,
 }
 
+/// Why [`mback_norm`] refused to fit.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MbackNormError {
+    /// The post-edge weight ramp spans `[e0 + norm1, e0 + norm2]`, and `norm2`
+    /// ended at or below `norm1`. With `next_edge` set, the L2/L3 cap at that
+    /// edge (eV) pulled `norm2` down: the edge lies below the data's `e0`, so
+    /// the spectrum is not the chosen edge of the chosen element. (larch fails
+    /// the same input inside `numpy.linspace` with a negative sample count.)
+    EmptyNormRange {
+        e0: f64,
+        norm1: f64,
+        norm2: f64,
+        next_edge: Option<f64>,
+    },
+}
+
+impl std::fmt::Display for MbackNormError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MbackNormError::EmptyNormRange {
+                e0,
+                norm1,
+                norm2,
+                next_edge,
+            } => {
+                write!(
+                    f,
+                    "empty normalization range: norm1 = {norm1:.1} eV, norm2 = {norm2:.1} eV \
+                     relative to e0 = {e0:.1} eV"
+                )?;
+                if let Some(en) = next_edge {
+                    write!(
+                        f,
+                        " (norm2 was capped at the next-higher edge, {en:.1} eV, which lies \
+                         below e0: wrong element or edge for this spectrum)"
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for MbackNormError {}
+
 /// Output of [`mback_norm`], on the deduplicated energy grid.
 #[derive(Debug, Clone)]
 pub struct MbackNorm {
@@ -358,7 +403,16 @@ pub struct MbackNorm {
 /// `f2` is the tabulated `f''(E)` on the deduplicated `energy` grid
 /// (`xraydb.f2_chantler(z, energy)`). Runs `pre_edge` internally for the
 /// polynomial normalization and edge ranges.
-pub fn mback_norm(energy_in: &[f64], mu_in: &[f64], f2: &[f64], p: &MbackNormParams) -> MbackNorm {
+///
+/// Fails with [`MbackNormError::EmptyNormRange`] when the resolved
+/// normalization range has `norm2 <= norm1` — in practice when an L2/L3 cap at
+/// the next-higher edge lands below `e0`.
+pub fn mback_norm(
+    energy_in: &[f64],
+    mu_in: &[f64],
+    f2: &[f64],
+    p: &MbackNormParams,
+) -> Result<MbackNorm, MbackNormError> {
     let energy = remove_dups(energy_in, TINY_ENERGY);
     let n = energy.len();
     assert!(n > 1, "energy array must have at least 2 points");
@@ -400,13 +454,24 @@ pub fn mback_norm(energy_in: &[f64], mu_in: &[f64], f2: &[f64], p: &MbackNormPar
         norm2 = emax - e0 - norm2;
     }
     // avoid L2 and higher edges
-    match p.edge {
-        Edge::L3 | Edge::L2 => {
-            if let Some(en) = p.next_edge_energy {
-                norm2 = norm2.min(en - e0);
-            }
-        }
-        _ => {}
+    let next_edge = match p.edge {
+        Edge::L3 | Edge::L2 => p.next_edge_energy,
+        Edge::K | Edge::L1 => None,
+    };
+    if let Some(en) = next_edge {
+        norm2 = norm2.min(en - e0);
+    }
+    // `norm1 < norm2` is what makes `inor1 < inor2` below: `index_of` is
+    // monotone in its value, so the weight ramp slice is non-empty exactly
+    // when the range is. Checked here, on the values, so no index arithmetic
+    // can invert.
+    if norm2 <= norm1 {
+        return Err(MbackNormError::EmptyNormRange {
+            e0,
+            norm1,
+            norm2,
+            next_edge,
+        });
     }
 
     let ipre2 = index_of(&energy, e0 + pre2);
@@ -459,7 +524,7 @@ pub fn mback_norm(energy_in: &[f64], mu_in: &[f64], f2: &[f64], p: &MbackNormPar
     let step_new = pre_f2.edge_step;
     let norm: Vec<f64> = mu_pre.iter().map(|&m| m / step_new).collect();
 
-    MbackNorm {
+    Ok(MbackNorm {
         norm,
         edge_step: step_new,
         edge_step_poly: pe.edge_step,
@@ -469,5 +534,85 @@ pub fn mback_norm(energy_in: &[f64], mu_in: &[f64], f2: &[f64], p: &MbackNormPar
         offset,
         scale,
         weights,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A synthetic K edge at 6539 eV on a 6400–7000 eV grid, with a `f2` of the
+    /// same step shape (the fit only has to run, not match larch).
+    fn edge_spectrum() -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+        let energy: Vec<f64> = (0..301).map(|i| 6400.0 + 2.0 * i as f64).collect();
+        let step = |e: f64, lo: f64, hi: f64| {
+            if e < 6539.0 {
+                lo + 1e-5 * (e - 6400.0)
+            } else {
+                hi - 2e-5 * (e - 6539.0)
+            }
+        };
+        let mu = energy.iter().map(|&e| step(e, 0.1, 1.1)).collect();
+        let f2 = energy.iter().map(|&e| step(e, 0.5, 4.0)).collect();
+        (energy, mu, f2)
+    }
+
+    /// The L3 cap at a next-higher edge below `e0` (Mn L2 at 650 eV against Mn
+    /// K data) empties the normalization range: an error naming the cap, not
+    /// a reversed weight-ramp slice.
+    #[test]
+    fn mback_norm_rejects_a_next_edge_below_e0() {
+        let (energy, mu, f2) = edge_spectrum();
+        let p = MbackNormParams {
+            e0: Some(6539.0),
+            edge: Edge::L3,
+            next_edge_energy: Some(650.0),
+            ..MbackNormParams::defaults()
+        };
+        let err = mback_norm(&energy, &mu, &f2, &p).unwrap_err();
+        match err {
+            MbackNormError::EmptyNormRange {
+                e0,
+                norm2,
+                next_edge,
+                ..
+            } => {
+                assert_eq!(e0, 6539.0);
+                assert_eq!(next_edge, Some(650.0));
+                assert!(norm2 < 0.0, "capped norm2 {norm2}");
+            }
+        }
+        assert!(err.to_string().contains("650.0 eV"), "{err}");
+    }
+
+    /// Boundary on the range itself: `norm2 == norm1` is empty, the first grid
+    /// step above it is not (and the ramp then covers that one step).
+    #[test]
+    fn mback_norm_norm_range_boundary() {
+        let (energy, mu, f2) = edge_spectrum();
+        let at = |norm2: f64| {
+            mback_norm(
+                &energy,
+                &mu,
+                &f2,
+                &MbackNormParams {
+                    e0: Some(6539.0),
+                    norm1: Some(100.0),
+                    norm2: Some(norm2),
+                    ..MbackNormParams::defaults()
+                },
+            )
+        };
+        assert!(matches!(
+            at(100.0),
+            Err(MbackNormError::EmptyNormRange {
+                next_edge: None,
+                ..
+            })
+        ));
+        let ok = at(102.0).expect("one grid step is a valid range");
+        // The ramp is `linspace(0.1, 1.0, 2)` over that step.
+        assert!(ok.weights.contains(&0.1), "{:?}", ok.weights);
+        assert!(ok.edge_step.is_finite());
     }
 }

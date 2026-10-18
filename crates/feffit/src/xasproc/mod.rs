@@ -28,7 +28,9 @@ pub use deconvolve::{ConvParams, DeconvForm, DeconvParams, xas_convolve, xas_dec
 pub use diffkk::{DiffKK, diffkk};
 pub use e0::{find_e0, find_energy_step};
 pub use lincombo::{Lincombo, LincomboParams, groups2matrix, lincombo_fit};
-pub use mback::{Edge, Mback, MbackNorm, MbackNormParams, MbackParams, mback, mback_norm};
+pub use mback::{
+    Edge, Mback, MbackNorm, MbackNormError, MbackNormParams, MbackParams, mback, mback_norm,
+};
 pub use pca::{PcaFit, PcaModel, pca_fit, pca_train};
 pub use preedge::{PreEdge, PreEdgeParams, pre_edge};
 pub use rebin::{RebinMethod, RebinParams, Rebinned, rebin_xafs, sort_xafs};

@@ -339,7 +339,13 @@ impl MbackWindow {
             next_edge_energy,
             ..Default::default()
         };
-        let mb: MbackNorm = mback_norm(&g.energy, &g.mu, &f2, &params);
+        let mb: MbackNorm = match mback_norm(&g.energy, &g.mu, &f2, &params) {
+            Ok(mb) => mb,
+            Err(e) => {
+                self.error = Some(format!("MBACK: {e}"));
+                return;
+            }
+        };
         self.result = Some(MbackResult {
             norm: mb.norm,
             edge_step: mb.edge_step,

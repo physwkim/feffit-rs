@@ -39,7 +39,7 @@ pub use xmu::{
 // batch tools) can drive reduction through `xasdata` alone.
 pub use crate::xafsft::Window;
 pub use crate::xasproc::mathutils::{interp_cubic, interp_linear};
-pub use crate::xasproc::mback::{Edge, MbackNorm, MbackNormParams, mback_norm};
+pub use crate::xasproc::mback::{Edge, MbackNorm, MbackNormError, MbackNormParams, mback_norm};
 pub use crate::xasproc::xanes::{arctan_step, centroid, peak, valley, x_at_y};
 pub use crate::xasproc::{
     AutobkParams, Lincombo, LincomboParams, PcaFit, PcaModel, PreEdgeParams, groups2matrix,
