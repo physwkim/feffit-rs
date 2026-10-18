@@ -1684,7 +1684,8 @@ impl XafsViewApp {
     /// and refresh the plots. This is the live-preview path used when an Autobk
     /// parameter changes: it does NOT write χ files to disk — that stays the
     /// explicit "Autobk Start" action. Returns `(E₀, k-point count)`, or `None`
-    /// when there is no μ(E) to reduce.
+    /// when there is no μ(E) to reduce or the normalization range is empty (the
+    /// error goes to the status line; the group keeps its last reduction).
     fn recompute_reduction(&mut self) -> Option<(f64, usize)> {
         let pre = self.reduction.pre_params();
         let bk = self.reduction.autobk_params();
@@ -1697,7 +1698,10 @@ impl XafsViewApp {
             }
             // normalize / autobk_group also record the pre-edge range and rbkg
             // they used onto the group (for the output provenance header).
-            feffit::xasdata::normalize(g, &pre);
+            if let Err(e) = feffit::xasdata::normalize(g, &pre) {
+                self.status.error(format!("Normalize: {e}"));
+                return None;
+            }
             feffit::xasdata::autobk_group(g, &bk, 1.0);
             feffit::xasdata::xftf_group(g, &ft);
             feffit::xasdata::xftr_group(g, &xr);
@@ -1752,16 +1756,34 @@ impl XafsViewApp {
         let total = items.len();
         let started = self.jobs.start("AUTOBK", total, move |job| {
             use rayon::prelude::*;
-            let mut items = items;
             let done = std::sync::atomic::AtomicUsize::new(0);
-            items.par_iter_mut().for_each(|g| {
-                feffit::xasdata::normalize(g, &pre);
-                feffit::xasdata::autobk_group(g, &bk, 1.0);
-                feffit::xasdata::xftf_group(g, &ft);
-                feffit::xasdata::xftr_group(g, &xr);
-                job.progress(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
-            });
-            Box::new(move |app: &mut Self| app.finish_reduction(items, targets_len, current_label))
+            // A group whose normalization range is empty is reported instead of
+            // reduced: it must neither be written nor counted.
+            let outcomes: Vec<Result<XasGroup, String>> = items
+                .into_par_iter()
+                .map(|mut g| {
+                    let r = feffit::xasdata::normalize(&mut g, &pre)
+                        .map_err(|e| format!("{}: {e}", g.label));
+                    if r.is_ok() {
+                        feffit::xasdata::autobk_group(&mut g, &bk, 1.0);
+                        feffit::xasdata::xftf_group(&mut g, &ft);
+                        feffit::xasdata::xftr_group(&mut g, &xr);
+                    }
+                    job.progress(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
+                    r.map(|()| g)
+                })
+                .collect();
+            let mut reduced = Vec::with_capacity(outcomes.len());
+            let mut failed = Vec::new();
+            for o in outcomes {
+                match o {
+                    Ok(g) => reduced.push(g),
+                    Err(e) => failed.push(e),
+                }
+            }
+            Box::new(move |app: &mut Self| {
+                app.finish_reduction(reduced, failed, targets_len, current_label)
+            })
         });
         if !started {
             self.status.error(JOB_BUSY);
@@ -1777,11 +1799,15 @@ impl XafsViewApp {
     fn finish_reduction(
         &mut self,
         reduced_groups: Vec<XasGroup>,
+        failed: Vec<String>,
         targets_len: usize,
         current_label: Option<String>,
     ) {
         let reduced = reduced_groups.len();
         let single = targets_len == 1;
+        for f in &failed {
+            self.status.detail_error(format!("AUTOBK skipped {f}"));
+        }
         let mut current_info: Option<(f64, usize)> = None;
         let mut dropped = 0usize;
         let mut saved = 0usize;
@@ -1838,20 +1864,29 @@ impl XafsViewApp {
         } else {
             String::new()
         };
-        let msg = match (single, current_info, single_paths) {
-            (true, Some((e0, npts)), Some((kp, rp))) => format!(
-                "AUTOBK done: E₀ = {e0:.2} eV, {npts} k-points · saved {} + {}",
-                file_name_of(&kp),
-                file_name_of(&rp)
-            ),
-            (true, Some((e0, npts)), None) => {
-                format!("AUTOBK done: E₀ = {e0:.2} eV, {npts} k-points{fail}")
-            }
-            _ => format!(
-                "AUTOBK: reduced {reduced} group(s); saved {saved} χ pair(s){fail}{drop_note}"
-            ),
+        let skip_note = if failed.is_empty() {
+            String::new()
+        } else {
+            format!(", {} skipped (normalization failed)", failed.len())
         };
-        let ok = write_failed + dropped == 0;
+        let msg = if single && let Some(f) = failed.first() {
+            format!("AUTOBK: {f}")
+        } else {
+            match (single, current_info, single_paths) {
+                (true, Some((e0, npts)), Some((kp, rp))) => format!(
+                    "AUTOBK done: E₀ = {e0:.2} eV, {npts} k-points · saved {} + {}",
+                    file_name_of(&kp),
+                    file_name_of(&rp)
+                ),
+                (true, Some((e0, npts)), None) => {
+                    format!("AUTOBK done: E₀ = {e0:.2} eV, {npts} k-points{fail}")
+                }
+                _ => format!(
+                    "AUTOBK: reduced {reduced} group(s); saved {saved} χ pair(s){fail}{drop_note}{skip_note}"
+                ),
+            }
+        };
+        let ok = write_failed + dropped + failed.len() == 0;
         if ok {
             self.status.info(msg);
         } else {

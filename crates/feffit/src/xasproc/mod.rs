@@ -32,6 +32,6 @@ pub use mback::{
     Edge, Mback, MbackNorm, MbackNormError, MbackNormParams, MbackParams, mback, mback_norm,
 };
 pub use pca::{PcaFit, PcaModel, pca_fit, pca_train};
-pub use preedge::{PreEdge, PreEdgeParams, pre_edge};
+pub use preedge::{PreEdge, PreEdgeError, PreEdgeParams, pre_edge};
 pub use rebin::{RebinMethod, RebinParams, Rebinned, rebin_xafs, sort_xafs};
 pub use xanes::{arctan_step, centroid, peak, valley, x_at_y};

@@ -95,13 +95,16 @@ pub fn reduce_all(
     // builds its own FFT planner — no shared state), so fan the slow
     // normalize → AUTOBK → FT chain across cores. `count()` drives the `map`
     // side effects and returns the number of groups actually reduced.
+    // A group whose normalization range is empty is left as it was and not
+    // counted.
     groups
         .par_iter_mut()
         .filter(|g| !g.mu.is_empty())
-        .map(|g| {
-            normalize(g, pre);
-            autobk_group(g, bk, err_sigma);
-            xftf_group(g, ft);
+        .filter_map(|g| {
+            normalize(g, pre).ok().map(|()| {
+                autobk_group(g, bk, err_sigma);
+                xftf_group(g, ft);
+            })
         })
         .count()
 }

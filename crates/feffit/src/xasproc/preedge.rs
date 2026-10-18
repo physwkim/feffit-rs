@@ -91,6 +91,33 @@ pub struct PreEdge {
     pub pre2: f64,
 }
 
+/// Why [`pre_edge`] could not fit the post-edge normalization polynomial.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreEdgeError {
+    /// The post-edge fit range `[e0 + norm1, e0 + norm2]` holds fewer than two
+    /// data points and starts below the third point. larch widens such a range
+    /// by taking the two points below its end (`p1 = p1 - 2`); here that slice
+    /// is `energy[-2:p2]` / `energy[-1:p2]` in numpy — empty — and
+    /// `numpy.polyfit` raises on it. Reached only through typed `e0` /
+    /// `norm1` / `norm2` that put the range at the very start of the data.
+    EmptyNormRange { e0: f64, norm1: f64, norm2: f64 },
+}
+
+impl std::fmt::Display for PreEdgeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreEdgeError::EmptyNormRange { e0, norm1, norm2 } => write!(
+                f,
+                "empty normalization range: norm1 = {norm1:.1} eV, norm2 = {norm2:.1} eV \
+                 relative to e0 = {e0:.1} eV cover fewer than 2 data points, with none \
+                 below to widen into"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PreEdgeError {}
+
 /// Result of the inner `preedge` (no flattening / derivatives).
 pub(crate) struct PreedgeCore {
     pub(crate) energy: Vec<f64>,
@@ -111,7 +138,11 @@ pub(crate) struct PreedgeCore {
 }
 
 /// `larch.xafs.pre_edge.preedge`: the pure-numeric pre/post-edge fit.
-pub(crate) fn preedge_core(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) -> PreedgeCore {
+pub(crate) fn preedge_core(
+    energy_in: &[f64],
+    mu_in: &[f64],
+    p: &PreEdgeParams,
+) -> Result<PreedgeCore, PreEdgeError> {
     let (energy, mu) = remove_nans2(energy_in, mu_in);
     let energy = remove_dups(&energy, TINY_ENERGY);
     let n = energy.len();
@@ -210,13 +241,18 @@ pub(crate) fn preedge_core(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) 
     // ---- normalization (post-edge) fit ----
     p1 = index_of(&energy, norm1 + e0);
     p2 = index_nearest(&energy, norm2 + e0);
-    if p1 > n - 3 {
-        p1 = n - 3;
-    }
-    if (p2 as i64 - p1 as i64) < 2 {
+    p1 = p1.min(n.saturating_sub(3));
+    if p2 < p1 + 2 {
+        // larch: `p1 = p1 - 2` — widen a range of fewer than two points down
+        // to the two points below its end and fit a constant. Below index 2
+        // that numpy slice is empty and polyfit raises; stop here rather than
+        // underflow the index.
+        if p1 < 2 {
+            return Err(PreEdgeError::EmptyNormRange { e0, norm1, norm2 });
+        }
         p1 -= 2;
         nnorm = 0;
-    } else if (p2 as i64 - p1 as i64) < 5 {
+    } else if p2 < p1 + 5 {
         nnorm = nnorm.min(1);
     }
     let presub: Vec<f64> = (p1..p2).map(|i| mu[i] - pre_edge[i]).collect();
@@ -239,7 +275,7 @@ pub(crate) fn preedge_core(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) 
         .map(|(&m, &pe)| (m - pe) / edge_step)
         .collect();
 
-    PreedgeCore {
+    Ok(PreedgeCore {
         energy,
         e0,
         ie0,
@@ -255,12 +291,17 @@ pub(crate) fn preedge_core(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) 
         norm2,
         pre1,
         pre2,
-    }
+    })
 }
 
 /// `larch.xafs.pre_edge.pre_edge`: full pre-edge subtraction + normalization,
-/// adding the flattened spectrum and first/second derivatives.
-pub fn pre_edge(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) -> PreEdge {
+/// adding the flattened spectrum and first/second derivatives. `Err` when the
+/// post-edge range is empty (see [`PreEdgeError`]); larch raises there.
+pub fn pre_edge(
+    energy_in: &[f64],
+    mu_in: &[f64],
+    p: &PreEdgeParams,
+) -> Result<PreEdge, PreEdgeError> {
     let (mut energy, mut mu) = remove_nans2(energy_in, mu_in);
     // sort if out of order
     let mut order: Vec<usize> = (0..energy.len()).collect();
@@ -275,7 +316,7 @@ pub fn pre_edge(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) -> PreEdge 
     }
     energy = remove_dups(&energy, TINY_ENERGY);
 
-    let core = preedge_core(&energy, &mu, p);
+    let core = preedge_core(&energy, &mu, p)?;
     let ie0 = core.ie0;
 
     // flattened spectrum: subtract (post_edge - pre_edge)/edge_step, pinned at ie0
@@ -305,7 +346,7 @@ pub fn pre_edge(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) -> PreEdge 
         gd.iter().zip(&ge).map(|(a, b)| a / b).collect::<Vec<_>>()
     };
 
-    PreEdge {
+    Ok(PreEdge {
         energy: core.energy,
         e0: core.e0,
         edge_step: core.edge_step,
@@ -323,5 +364,5 @@ pub fn pre_edge(energy_in: &[f64], mu_in: &[f64], p: &PreEdgeParams) -> PreEdge 
         norm2: core.norm2,
         pre1: core.pre1,
         pre2: core.pre2,
-    }
+    })
 }

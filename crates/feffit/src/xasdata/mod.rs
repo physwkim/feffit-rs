@@ -42,6 +42,6 @@ pub use crate::xasproc::mathutils::{interp_cubic, interp_linear};
 pub use crate::xasproc::mback::{Edge, MbackNorm, MbackNormError, MbackNormParams, mback_norm};
 pub use crate::xasproc::xanes::{arctan_step, centroid, peak, valley, x_at_y};
 pub use crate::xasproc::{
-    AutobkParams, Lincombo, LincomboParams, PcaFit, PcaModel, PreEdgeParams, groups2matrix,
-    lincombo_fit, pca_fit, pca_train,
+    AutobkParams, Lincombo, LincomboParams, PcaFit, PcaModel, PreEdgeError, PreEdgeParams,
+    groups2matrix, lincombo_fit, pca_fit, pca_train,
 };

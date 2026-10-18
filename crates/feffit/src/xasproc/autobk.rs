@@ -361,7 +361,8 @@ pub fn autobk(energy_in: &[f64], mu_in: &[f64], p: &AutobkParams) -> Autobk {
     let mut ek0 = p.ek0.filter(|&e| e >= emin && e <= emax);
     let mut edge_step = p.edge_step;
     if ek0.is_none() || edge_step.is_none() {
-        let pe = pre_edge(&energy, &mu, &PreEdgeParams::default());
+        let pe = pre_edge(&energy, &mu, &PreEdgeParams::default())
+            .unwrap_or_else(|e| panic!("autobk: auto-range pre_edge failed: {e}"));
         if ek0.is_none() {
             ek0 = Some(pe.e0);
         }

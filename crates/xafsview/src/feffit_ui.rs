@@ -2400,7 +2400,7 @@ mod tests {
         )
         .unwrap();
         let mut g = XasGroup::from_mu("cu", energy, mu);
-        normalize(&mut g, &PreEdgeParams::default());
+        normalize(&mut g, &PreEdgeParams::default()).unwrap();
         autobk_group(&mut g, &AutobkParams::default(), 0.0);
         (g.k.clone().unwrap(), g.chi.clone().unwrap())
     }

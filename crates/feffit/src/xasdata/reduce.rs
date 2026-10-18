@@ -9,16 +9,19 @@
 use num_complex::Complex64;
 
 use crate::xafsft::{Window, xftf, xftr};
-use crate::xasproc::{AutobkParams, PreEdgeParams, autobk, autobk_delta_chi, pre_edge};
+use crate::xasproc::{
+    AutobkParams, PreEdgeError, PreEdgeParams, autobk, autobk_delta_chi, pre_edge,
+};
 
 use crate::xasdata::group::XasGroup;
 
 /// Pre-edge subtraction + edge-step normalization.
 ///
 /// Fills `e0`, `edge_step`, `pre_edge`, `post_edge`, `norm`, `flat`, and
-/// `dmude`. If `params.e0` is `None`, `pre_edge` finds the edge itself.
-pub fn normalize(group: &mut XasGroup, params: &PreEdgeParams) {
-    let out = pre_edge(&group.energy, &group.mu, params);
+/// `dmude`. If `params.e0` is `None`, `pre_edge` finds the edge itself. On an
+/// empty normalization range the group is left as it was and the error returned.
+pub fn normalize(group: &mut XasGroup, params: &PreEdgeParams) -> Result<(), PreEdgeError> {
+    let out = pre_edge(&group.energy, &group.mu, params)?;
     group.e0 = Some(out.e0);
     group.edge_step = Some(out.edge_step);
     // Record the (resolved, e0-relative) pre-edge and normalization ranges and
@@ -34,6 +37,7 @@ pub fn normalize(group: &mut XasGroup, params: &PreEdgeParams) {
     group.norm = Some(out.norm);
     group.flat = Some(out.flat);
     group.dmude = Some(out.dmude);
+    Ok(())
 }
 
 /// AUTOBK background removal.

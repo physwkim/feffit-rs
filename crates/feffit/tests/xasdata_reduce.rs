@@ -28,7 +28,7 @@ fn cu_group() -> XasGroup {
 fn normalize_fills_edge_and_norm() {
     let mut g = cu_group();
     let params = PreEdgeParams::default();
-    normalize(&mut g, &params);
+    normalize(&mut g, &params).unwrap();
 
     // Physical sanity: the Cu K edge sits near 8979 eV with a positive jump.
     let e0 = g.e0.expect("e0");
@@ -56,7 +56,7 @@ fn normalize_fills_edge_and_norm() {
     );
 
     // Orchestration contract: the group fields must equal a direct pre_edge call.
-    let direct = feffit::xasproc::pre_edge(&g.energy, &g.mu, &params);
+    let direct = feffit::xasproc::pre_edge(&g.energy, &g.mu, &params).unwrap();
     assert_eq!(g.norm.as_ref().unwrap(), &direct.norm);
     assert_eq!(g.flat.as_ref().unwrap(), &direct.flat);
     assert_eq!(g.dmude.as_ref().unwrap(), &direct.dmude);
@@ -67,7 +67,7 @@ fn normalize_fills_edge_and_norm() {
 #[test]
 fn autobk_then_xftf_gives_cu_first_shell_peak() {
     let mut g = cu_group();
-    normalize(&mut g, &PreEdgeParams::default());
+    normalize(&mut g, &PreEdgeParams::default()).unwrap();
     autobk_group(&mut g, &AutobkParams::default(), 1.0);
 
     let k = g.k.as_ref().expect("k grid");

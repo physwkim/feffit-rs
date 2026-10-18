@@ -510,7 +510,7 @@ pub fn load_trace(
     // Normalized μ(E) is not a column transform — it runs the pre-edge / edge-step
     // normalization (larch auto parameters) to reproduce the original's XANES.dat.
     if item == GraphItem::XmuNorm {
-        let pe = pre_edge(&x, v, &PreEdgeParams::default());
+        let pe = pre_edge(&x, v, &PreEdgeParams::default()).map_err(|e| format!("{name}: {e}"))?;
         return Ok(LoadedTrace {
             path: path.to_path_buf(),
             label: name,

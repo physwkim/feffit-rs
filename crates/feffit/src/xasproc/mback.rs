@@ -26,7 +26,7 @@ use crate::lm::{LmConfig, lmdif};
 
 use crate::xasproc::e0::find_e0;
 use crate::xasproc::mathutils::{index_nearest, index_of, remove_dups};
-use crate::xasproc::preedge::{PreEdgeParams, pre_edge, preedge_core};
+use crate::xasproc::preedge::{PreEdgeError, PreEdgeParams, pre_edge, preedge_core};
 
 /// smallest tolerated energy step, in eV (`larch` `TINY_ENERGY`).
 const TINY_ENERGY: f64 = 0.00050;
@@ -262,7 +262,8 @@ pub fn mback(
             norm2: Some(norm2),
             ..Default::default()
         },
-    );
+    )
+    .unwrap_or_else(|e| panic!("mback: pre-edge normalization failed: {e}"));
     let edge_step = pre_f2.edge_step / s;
     let norm: Vec<f64> = (0..n)
         .map(|j| (s * mu[j] - pre_f2.pre_edge[j]) / pre_f2.edge_step)
@@ -344,6 +345,15 @@ pub enum MbackNormError {
         norm2: f64,
         next_edge: Option<f64>,
     },
+    /// The polynomial pre-edge normalization MBACK starts from failed; its
+    /// `norm1` / `norm2` are the same ranges.
+    PreEdge(PreEdgeError),
+}
+
+impl From<PreEdgeError> for MbackNormError {
+    fn from(e: PreEdgeError) -> Self {
+        MbackNormError::PreEdge(e)
+    }
 }
 
 impl std::fmt::Display for MbackNormError {
@@ -369,11 +379,19 @@ impl std::fmt::Display for MbackNormError {
                 }
                 Ok(())
             }
+            MbackNormError::PreEdge(e) => write!(f, "{e}"),
         }
     }
 }
 
-impl std::error::Error for MbackNormError {}
+impl std::error::Error for MbackNormError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            MbackNormError::PreEdge(e) => Some(e),
+            MbackNormError::EmptyNormRange { .. } => None,
+        }
+    }
+}
 
 /// Output of [`mback_norm`], on the deduplicated energy grid.
 #[derive(Debug, Clone)]
@@ -437,7 +455,7 @@ pub fn mback_norm(
             make_flat: true,
             ..Default::default()
         },
-    );
+    )?;
 
     let e0 = p.e0.unwrap_or(pe.e0);
     let pre1 = p.pre1.unwrap_or(pe.pre1);
@@ -520,7 +538,7 @@ pub fn mback_norm(
             norm2: Some(norm2),
             ..Default::default()
         },
-    );
+    )?;
     let step_new = pre_f2.edge_step;
     let norm: Vec<f64> = mu_pre.iter().map(|&m| m / step_new).collect();
 
@@ -581,6 +599,7 @@ mod tests {
                 assert_eq!(next_edge, Some(650.0));
                 assert!(norm2 < 0.0, "capped norm2 {norm2}");
             }
+            MbackNormError::PreEdge(e) => panic!("pre-edge error instead of the cap: {e}"),
         }
         assert!(err.to_string().contains("650.0 eV"), "{err}");
     }
