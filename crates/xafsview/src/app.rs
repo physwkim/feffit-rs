@@ -706,6 +706,9 @@ impl XafsViewApp {
             mcp::McpRequest::About { reply } => {
                 let _ = reply.send(Ok(about_text()));
             }
+            mcp::McpRequest::Theory { args, reply } => {
+                let _ = reply.send(self.apply_mcp_theory(&args));
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }
@@ -1367,6 +1370,21 @@ impl XafsViewApp {
         Ok(format!("{}\n{import}", self.open_data.state_text()))
     }
 
+    /// MCP `theory`: the Autobk Data box's Theory row — the ✕ (clear), then
+    /// Load… with an explicit path; returns the loaded standard.
+    fn apply_mcp_theory(&mut self, a: &mcp::TheoryArgs) -> Result<String, String> {
+        if a.clear == Some(true) {
+            self.reduction.theory = None;
+        }
+        if let Some(p) = &a.path {
+            self.load_theory(mcp::native_path(p))?;
+        }
+        Ok(match &self.reduction.theory {
+            Some(t) => format!("theory: {} ({} points)", t.path.display(), t.k.len()),
+            None => "theory: none".to_owned(),
+        })
+    }
+
     /// Put an action's outcome on the status line: `Ok` as info, `Err` as an
     /// error. For the actions a button and an MCP tool share, so both report
     /// the same way.
@@ -1948,18 +1966,25 @@ impl XafsViewApp {
         if let Some(dir) = &self.session.folders.data_dir {
             dlg = dlg.set_directory(dir);
         }
-        let Some(path) = dlg.pick_file() else {
-            return;
-        };
-        match feffit::xasdata::read_chi_dat(&path) {
+        if let Some(path) = dlg.pick_file() {
+            // The outcome is on the status line.
+            let _ = self.load_theory(path);
+        }
+    }
+
+    /// Load `path` as the Theory standard, reporting the outcome on the status
+    /// line and returning it (the Theory Load… dialog and MCP `theory`).
+    fn load_theory(&mut self, path: std::path::PathBuf) -> Result<String, String> {
+        let outcome = match feffit::xasdata::read_chi_dat(&path) {
             Ok((k, chi)) => {
                 let n = k.len();
                 self.reduction.theory = Some(TheoryStd { path, k, chi });
-                self.status
-                    .info(format!("Loaded theory χ(k) standard: {n} points"));
+                Ok(format!("Loaded theory χ(k) standard: {n} points"))
             }
-            Err(e) => self.status.error(format!("Theory open failed: {e}")),
-        }
+            Err(e) => Err(format!("Theory open failed: {e}")),
+        };
+        self.report_outcome(&outcome);
+        outcome
     }
 
     /// Build `mu(E)` from the current import selection and add it as a group.

@@ -189,6 +189,10 @@ pub enum McpRequest {
     About {
         reply: TextReply,
     },
+    Theory {
+        args: TheoryArgs,
+        reply: TextReply,
+    },
     Screenshot {
         window: Option<String>,
         reply: PngReply,
@@ -851,6 +855,15 @@ pub struct TimeResolvedArgs {
     pub save: Option<String>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct TheoryArgs {
+    /// FEFF chi.dat to load as the Theory χ(k) standard (the Autobk Data box's
+    /// Theory "Load…").
+    pub path: Option<String>,
+    /// Drop the loaded standard (the ✕ next to its name).
+    pub clear: Option<bool>,
+}
+
 /// The per-connection MCP handler: forwards each tool call to the egui thread
 /// and awaits the oneshot. Cheap to clone (a channel sender + an egui context).
 #[derive(Clone)]
@@ -1390,6 +1403,17 @@ impl XafsMcp {
     #[tool(description = "The About window's text: program name, version and description.")]
     async fn about(&self) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::About { reply }).await
+    }
+
+    #[tool(
+        description = "The Autobk tab's Theory standard: load a FEFF chi.dat as the χ(k) standard that constrains the AUTOBK background, or clear it; returns the loaded standard."
+    )]
+    async fn theory(
+        &self,
+        Parameters(a): Parameters<TheoryArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Theory { args: a, reply })
+            .await
     }
 }
 
