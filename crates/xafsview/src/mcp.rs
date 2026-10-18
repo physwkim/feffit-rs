@@ -190,6 +190,10 @@ pub enum McpRequest {
         args: PlotSitesArgs,
         reply: TextReply,
     },
+    FeffitBatch {
+        args: FeffitBatchArgs,
+        reply: TextReply,
+    },
     About {
         reply: TextReply,
     },
@@ -889,6 +893,22 @@ pub struct PlotSitesArgs {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct FeffitBatchArgs {
+    /// A button of the window: "run_all", "clear" (Clear results), "save_chi"
+    /// (Save χ data+fit (all groups)) or "save_items" (Save items to work
+    /// folder). Applied after the settings below.
+    pub action: Option<String>,
+    /// "Show all fits": overlay every batch fit on the Feffit graph.
+    pub show_all_fits: Option<bool>,
+    /// Save-items selection — replaces the checked set: e0, delr, n, sigma2,
+    /// third, fourth, ei, reff+delr.
+    pub items: Option<Vec<String>>,
+    /// Save-items path index range (1–99).
+    pub path_from: Option<usize>,
+    pub path_to: Option<usize>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct TheoryArgs {
     /// FEFF chi.dat to load as the Theory χ(k) standard (the Autobk Data box's
     /// Theory "Load…").
@@ -1494,6 +1514,17 @@ impl XafsMcp {
         Parameters(a): Parameters<PlotSitesArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::PlotSites { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "The Feffit — Batch window: Show all fits, the Save-items selection and path range, then Run all (fits every checked group with the Feffit tab's config; returns when done), Clear results, Save χ data+fit or Save items; returns the results table."
+    )]
+    async fn feffit_batch(
+        &self,
+        Parameters(a): Parameters<FeffitBatchArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::FeffitBatch { args: a, reply })
             .await
     }
 

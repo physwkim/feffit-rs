@@ -707,6 +707,9 @@ impl XafsViewApp {
                 let files = self.feff_tab.last_path_files();
                 let _ = reply.send(self.plot_sites.apply_mcp(&self.feff_inp, &files, &args));
             }
+            mcp::McpRequest::FeffitBatch { args, reply } => {
+                self.apply_mcp_feffit_batch(args, reply)
+            }
             mcp::McpRequest::About { reply } => {
                 let _ = reply.send(Ok(about_text()));
             }
@@ -1388,6 +1391,46 @@ impl XafsViewApp {
             None => "(no file staged — no reading format)".to_owned(),
         };
         Ok(format!("{}\n{import}", self.open_data.state_text()))
+    }
+
+    /// MCP `feffit_batch`: the window's settings and button
+    /// ([`FeffitBatch::apply_mcp`]), then the app-owned half of the button —
+    /// Run all on the job slot (the reply is parked for its summary) or the
+    /// disk writes, whose outcome prefixes the results table.
+    fn apply_mcp_feffit_batch(&mut self, a: mcp::FeffitBatchArgs, reply: mcp::TextReply) {
+        self.feffit_batch_open = true;
+        let (action, text) = match self.feffit_batch.apply_mcp(
+            &self.session.groups,
+            &self.session.selected,
+            &self.feffit,
+            &a,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let outcome = match action {
+            None => Ok(text),
+            Some(BatchAction::RunAll) => {
+                if self.jobs.busy() {
+                    Err(JOB_BUSY.to_owned())
+                } else if self.start_feffit_batch() {
+                    self.mcp_job_reply = Some(reply);
+                    return;
+                } else {
+                    Err(self.status.line().to_owned())
+                }
+            }
+            Some(BatchAction::SaveItems(files)) => self
+                .write_saved_items(files)
+                .map(|m| format!("{m}\n{text}")),
+            Some(BatchAction::SaveFeffitOutputs(files)) => self
+                .write_feffit_output_files(files)
+                .map(|m| format!("{m}\n{text}")),
+        };
+        let _ = reply.send(outcome);
     }
 
     /// MCP `theory`: the Autobk Data box's Theory row — the ✕ (clear), then
@@ -2474,7 +2517,10 @@ impl XafsViewApp {
     /// Write the batch panel's FEFFIT `.dat`/`.fit` transforms (one set per
     /// fitted group) to the Feffit folder — the same destination the single-fit
     /// `write_feffit_outputs` uses — reporting the outcome.
-    fn write_feffit_output_files(&mut self, files: Vec<(String, String)>) {
+    fn write_feffit_output_files(
+        &mut self,
+        files: Vec<(String, String)>,
+    ) -> Result<String, String> {
         let dir = self.feffit_output_dir();
         let mut written = 0usize;
         let mut failed = 0usize;
@@ -2498,11 +2544,9 @@ impl XafsViewApp {
             "Saved {written} χ data+fit file(s) to {}{extra}.",
             dir.display()
         );
-        if failed > 0 {
-            self.status.error(msg);
-        } else {
-            self.status.info(msg);
-        }
+        let outcome = if failed > 0 { Err(msg) } else { Ok(msg) };
+        self.report_outcome(&outcome);
+        outcome
     }
 
     /// Run normalize → AUTOBK → FT on every loaded group with one shared set of
@@ -3634,7 +3678,7 @@ impl XafsViewApp {
 
     /// Write the batch "Save Items" files to the Results folder (the original's
     /// results folder; falls back to the data folder), reporting the outcome.
-    fn write_saved_items(&mut self, files: Vec<(String, String)>) {
+    fn write_saved_items(&mut self, files: Vec<(String, String)>) -> Result<String, String> {
         let Some(dir) = self
             .session
             .folders
@@ -3642,9 +3686,9 @@ impl XafsViewApp {
             .clone()
             .or_else(|| self.session.folders.data_dir.clone())
         else {
-            self.status
-                .error("Set a Results folder (Folders tab) before saving items.");
-            return;
+            let outcome = Err("Set a Results folder (Folders tab) before saving items.".to_owned());
+            self.report_outcome(&outcome);
+            return outcome;
         };
         let mut written = 0usize;
         let mut failed = 0usize;
@@ -3665,11 +3709,9 @@ impl XafsViewApp {
             String::new()
         };
         let msg = format!("Saved {written} item file(s) to {}{extra}.", dir.display());
-        if failed > 0 {
-            self.status.error(msg);
-        } else {
-            self.status.info(msg);
-        }
+        let outcome = if failed > 0 { Err(msg) } else { Ok(msg) };
+        self.report_outcome(&outcome);
+        outcome
     }
 
     /// Run the FEFFIT fit on the current group's `chi(k)` and redraw.
@@ -3872,13 +3914,13 @@ impl XafsViewApp {
     /// (`set_runs` marks the graph overlay dirty; the app replots it).
     ///
     /// [`feffit_batch::compute_runs`]: crate::feffit_batch::compute_runs
-    fn start_feffit_batch(&mut self) {
+    fn start_feffit_batch(&mut self) -> bool {
         // The batch is the session's checked-for-Run set; "Run all" is disabled
         // while it is empty, so the current-group fallback of run_targets never
         // widens it here.
         let idxs = self.session.run_targets();
         if idxs.is_empty() {
-            return;
+            return false;
         }
         let groups = self.session.groups.clone();
         let template = self.feffit.config_clone();
@@ -3890,6 +3932,15 @@ impl XafsViewApp {
             Box::new(move |app: &mut Self| {
                 let (total, errors) = app.feffit_batch.set_runs(runs);
                 let msg = format!("Feffit batch: fit {}/{total} group(s).", total - errors);
+                // Answer a parked MCP feffit_batch run_all with the summary and
+                // the results table.
+                if let Some(reply) = app.mcp_job_reply.take() {
+                    let table = app
+                        .feffit_batch
+                        .state_text(&app.session.groups, &app.session.selected);
+                    let text = format!("{msg}\n{table}");
+                    let _ = reply.send(if errors > 0 { Err(text) } else { Ok(text) });
+                }
                 if errors > 0 {
                     app.status.error(msg);
                 } else {
@@ -3900,6 +3951,7 @@ impl XafsViewApp {
         if !started {
             self.status.error(JOB_BUSY);
         }
+        started
     }
 
     /// Redraw the shared plot with the last fit's data vs model in the selected
@@ -5451,10 +5503,17 @@ impl eframe::App for XafsViewApp {
 
         // The detached "Feffit — Batch" window: the batch panel moved out of the
         // Feffit tab's right side. Its disk-write actions are app-owned.
+        // The outcomes are on the status line.
         match self.feffit_batch_window(&ctx) {
-            Some(BatchAction::RunAll) => self.start_feffit_batch(),
-            Some(BatchAction::SaveItems(files)) => self.write_saved_items(files),
-            Some(BatchAction::SaveFeffitOutputs(files)) => self.write_feffit_output_files(files),
+            Some(BatchAction::RunAll) => {
+                self.start_feffit_batch();
+            }
+            Some(BatchAction::SaveItems(files)) => {
+                let _ = self.write_saved_items(files);
+            }
+            Some(BatchAction::SaveFeffitOutputs(files)) => {
+                let _ = self.write_feffit_output_files(files);
+            }
             None => {}
         }
         // A batch run / clear / overlay-toggle rebuilds the Feffit graph overlay,

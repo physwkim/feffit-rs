@@ -285,6 +285,137 @@ impl FeffitBatch {
         bubble
     }
 
+    /// MCP `feffit_batch`: the settings (Show all fits, the Save-items
+    /// selection and path range), then the named button. Returns the app-owned
+    /// action the button bubbles (run / disk writes) and the results table as
+    /// text. `checked` is the session's checked-for-Run set the batch fits.
+    pub fn apply_mcp(
+        &mut self,
+        groups: &[XasGroup],
+        checked: &HashSet<usize>,
+        template: &FeffitUi,
+        a: &crate::mcp::FeffitBatchArgs,
+    ) -> Result<(Option<BatchAction>, String), String> {
+        if let Some(on) = a.show_all_fits
+            && on != self.show_on_graph
+        {
+            self.show_on_graph = on;
+            self.graph_dirty = true;
+        }
+        if let Some(items) = &a.items {
+            let mut sel = [false; 8];
+            for item in items {
+                let i = SAVE_ITEMS
+                    .iter()
+                    .position(|(name, _)| name.eq_ignore_ascii_case(item))
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown save item {item:?}; one of {}",
+                            SAVE_ITEMS
+                                .iter()
+                                .map(|(n, _)| *n)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })?;
+                sel[i] = true;
+            }
+            self.save_sel = sel;
+        }
+        for (v, slot, name) in [
+            (a.path_from, &mut self.save_from, "path_from"),
+            (a.path_to, &mut self.save_to, "path_to"),
+        ] {
+            if let Some(p) = v {
+                if !(1..=99).contains(&p) {
+                    return Err(format!("{name} {p} outside 1..=99"));
+                }
+                *slot = p;
+            }
+        }
+        let action = match a.action.as_deref().map(str::to_ascii_lowercase).as_deref() {
+            None => None,
+            Some("run_all") => {
+                if checked.is_empty() {
+                    return Err("no groups checked for Run (select_groups first)".to_owned());
+                }
+                Some(BatchAction::RunAll)
+            }
+            Some("clear") => {
+                self.runs.clear();
+                self.graph_dirty = true;
+                None
+            }
+            Some("save_chi") => {
+                let files = self.feffit_output_files(groups, template);
+                if files.is_empty() {
+                    return Err("no fitted run to save — Run all first".to_owned());
+                }
+                Some(BatchAction::SaveFeffitOutputs(files))
+            }
+            Some("save_items") => {
+                // The button's enable gate: an item and a run with a result
+                // (build_saved_items writes a header-only file otherwise).
+                if !self.save_sel.iter().any(|s| *s) {
+                    return Err("no save item selected".to_owned());
+                }
+                if !self.runs.iter().any(|r| r.ui.result().is_some()) {
+                    return Err("no run with a fit result — Run all first".to_owned());
+                }
+                Some(BatchAction::SaveItems(self.build_saved_items()))
+            }
+            Some(other) => {
+                return Err(format!(
+                    "unknown action {other:?}; one of run_all, clear, save_chi, save_items"
+                ));
+            }
+        };
+        Ok((action, self.state_text(groups, checked)))
+    }
+
+    /// The window's state as text: the batch membership, the toggles and the
+    /// Save-items settings, then the results table.
+    pub fn state_text(&self, groups: &[XasGroup], checked: &HashSet<usize>) -> String {
+        let items: Vec<&str> = SAVE_ITEMS
+            .iter()
+            .zip(self.save_sel)
+            .filter(|(_, on)| *on)
+            .map(|((name, _), _)| *name)
+            .collect();
+        let mut s = format!(
+            "{} of {} group(s) checked for Run; show all fits = {}; save items = [{}] paths {}..={}\nresults:",
+            checked.len(),
+            groups.len(),
+            self.show_on_graph,
+            items.join(", "),
+            self.save_from,
+            self.save_to
+        );
+        if self.runs.is_empty() {
+            s.push_str(" (none — check groups and Run all)");
+            return s;
+        }
+        for run in &self.runs {
+            let status = match &run.status {
+                Ok(_) => "ok".to_owned(),
+                Err(e) => format!("error: {e}"),
+            };
+            match run.ui.result() {
+                Some(r) => {
+                    let _ = write!(
+                        s,
+                        "\n  {}: {status}; chi2_reduced = {:.4}, rfactor = {:.5}, nvarys = {}",
+                        run.label, r.chi2_reduced, r.rfactor, r.nvarys
+                    );
+                }
+                None => {
+                    let _ = write!(s, "\n  {}: {status}", run.label);
+                }
+            }
+        }
+        s
+    }
+
     /// Whether the batch fits should be overlaid on the shared Feffit graph.
     pub fn show_on_graph(&self) -> bool {
         self.show_on_graph
@@ -519,6 +650,64 @@ mod tests {
         assert!(
             !b.feffit_output_files(&groups, &FeffitUi::default())
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn mcp_sets_items_and_refuses_saves_before_a_run() {
+        let groups = vec![XasGroup::from_chi("A", vec![0.0, 0.05], vec![0.0, 0.0])];
+        let checked: HashSet<usize> = [0].into_iter().collect();
+        let mut b = FeffitBatch::default();
+        let a = crate::mcp::FeffitBatchArgs {
+            action: None,
+            show_all_fits: Some(false),
+            items: Some(vec!["E0".into(), "reff+delr".into()]),
+            path_from: Some(2),
+            path_to: Some(3),
+        };
+        let (action, text) = b
+            .apply_mcp(&groups, &checked, &FeffitUi::default(), &a)
+            .unwrap();
+        assert!(action.is_none());
+        assert!(text.contains("show all fits = false"), "{text}");
+        assert!(
+            text.contains("save items = [e0, reff+delr] paths 2..=3"),
+            "{text}"
+        );
+        assert!(
+            b.take_graph_dirty(),
+            "the overlay toggle marks the graph dirty"
+        );
+        for action in ["save_chi", "save_items"] {
+            let a = crate::mcp::FeffitBatchArgs {
+                action: Some(action.into()),
+                show_all_fits: None,
+                items: None,
+                path_from: None,
+                path_to: None,
+            };
+            let err = b
+                .apply_mcp(&groups, &checked, &FeffitUi::default(), &a)
+                .err()
+                .expect("refused before a run");
+            assert!(err.contains("Run all first"), "{action}: {err}");
+        }
+        let a = crate::mcp::FeffitBatchArgs {
+            action: Some("run_all".into()),
+            show_all_fits: None,
+            items: None,
+            path_from: None,
+            path_to: None,
+        };
+        let (action, _) = b
+            .apply_mcp(&groups, &checked, &FeffitUi::default(), &a)
+            .unwrap();
+        assert!(matches!(action, Some(BatchAction::RunAll)));
+        assert!(
+            b.apply_mcp(&groups, &HashSet::new(), &FeffitUi::default(), &a)
+                .err()
+                .expect("refused with nothing checked")
+                .contains("no groups checked")
         );
     }
 
