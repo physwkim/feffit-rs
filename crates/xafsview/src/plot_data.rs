@@ -58,6 +58,21 @@ impl PeakMode {
 pub(crate) const FIT_DATA: Color32 = crate::plot::BLUE;
 pub(crate) const FIT_MODEL: Color32 = crate::plot::RED;
 
+/// The colours of the `j`-th overlaid group's data and fit on the Feffit
+/// graph: successive pairs from [`crate::plot::PALETTE`] minus the focused
+/// fit's own [`FIT_DATA`] / [`FIT_MODEL`], so an overlaid pair never matches
+/// the focused fit and a group's two curves never match each other (the pairs
+/// repeat after the palette is used up).
+pub(crate) fn overlay_fit_colors(j: usize) -> (Color32, Color32) {
+    let free: Vec<Color32> = crate::plot::PALETTE
+        .iter()
+        .copied()
+        .filter(|c| *c != FIT_DATA && *c != FIT_MODEL)
+        .collect();
+    let n = free.len();
+    (free[(2 * j) % n], free[(2 * j + 1) % n])
+}
+
 /// A Feffit fit handed over from the Feffit tab's "Send to Plot Data": its data
 /// and model curves in the chosen space. Drawn on top of the loaded files on the
 /// Plot Data window's own graph — only while that graph's x axis is the fit's
@@ -1681,6 +1696,22 @@ fn x_at_y_in_range(x: &[f64], y: &[f64], target: f64, lo: f64, hi: f64) -> Optio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn overlay_fit_colors_avoid_the_focused_fit_and_each_other() {
+        use super::{FIT_DATA, FIT_MODEL, overlay_fit_colors};
+        for j in 0..8 {
+            let (data, fit) = overlay_fit_colors(j);
+            assert_ne!(data, fit, "group {j}");
+            for c in [data, fit] {
+                assert_ne!(c, FIT_DATA, "group {j}");
+                assert_ne!(c, FIT_MODEL, "group {j}");
+            }
+        }
+        // The reported case: two overlaid groups share no colour.
+        let (a, b) = (overlay_fit_colors(0), overlay_fit_colors(1));
+        assert!(![b.0, b.1].contains(&a.0) && ![b.0, b.1].contains(&a.1));
+    }
+
     use super::*;
 
     /// "Add loaded groups" derives exactly the stages a group carries: χ items

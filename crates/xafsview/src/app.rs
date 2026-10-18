@@ -3361,7 +3361,6 @@ impl XafsViewApp {
         focused: Option<&str>,
         runs: impl Iterator<Item = (&'a str, &'a FeffitPlot)>,
     ) {
-        let palette = &crate::plot::PALETTE;
         let mut j = 0usize;
         for (label, p) in runs {
             if Some(label) == focused {
@@ -3371,12 +3370,10 @@ impl XafsViewApp {
             if x.is_empty() {
                 continue;
             }
-            // Skip the first two palette slots (the focused fit's data/model
-            // colours) so an overlaid curve never matches the focused fit.
-            let color = palette[2 + j % (palette.len() - 2)];
-            plot.add_curve_with_legend(&x, &data_y, color, format!("{label} data"));
+            let (data_color, fit_color) = crate::plot_data::overlay_fit_colors(j);
+            plot.add_curve_with_legend(&x, &data_y, data_color, format!("{label} data"));
             if p.has_model {
-                plot.add_curve_with_legend(&x, &model_y, color, format!("{label} fit"));
+                plot.add_curve_with_legend(&x, &model_y, fit_color, format!("{label} fit"));
             }
             j += 1;
         }
