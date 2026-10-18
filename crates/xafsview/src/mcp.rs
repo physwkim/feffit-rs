@@ -1580,7 +1580,7 @@ impl XafsMcp {
 
 #[tool_handler(
     name = "xafsview",
-    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot captures the main window or, with `window`, an open pop-up. open_window / close_window / set_theme / plot_data / feffit_graph / xanes / mback / lcf / pca / wavelet / edit_mu / build_feff_inp / run_feff drive the pop-up windows and the tabs without the mouse; graph makes the mouse gestures on a plot (zoom, box zoom, pan, click, band drag, legend click)."
+    instructions = "Remote control of a running XAFSView (XAFS data reduction + FEFF fitting GUI). Typical flow: load_data → set_params → run_autobk → run_fit → get_results; screenshot captures the main window or, with `window`, an open pop-up. open_window / close_window / set_theme / folders / data / open_data / log / plot_data / feffit_graph / set_path / feffit_file / feffit_batch / theory / run_multi_autobk / xanes / mback / lcf / pca / wavelet / edit_mu / build_feff_inp / run_feff / plot_sites / time_resolved / periodic_table / ion_chamber / powder / ke_convert / about drive the pop-up windows and the tabs without the mouse; graph makes the mouse gestures on a plot (zoom, box zoom, pan, click, band drag, legend click)."
 )]
 impl ServerHandler for XafsMcp {}
 
