@@ -321,6 +321,11 @@ fn apply_form_density(ctx: &egui::Context) {
         // scan; egui's default caps the popup at 200 px, about seven rows, so a
         // 66-scan series was mostly behind a scrollbar.
         s.combo_height = 480.0;
+        // Qt draws a solid scroll bar whenever a view overflows; egui's
+        // floating bar is invisible until hovered, so a height-capped list
+        // (the plot legend, a results table, Plot Data's group list) read as
+        // complete when it was cut.
+        s.scroll = egui::style::ScrollStyle::solid();
     });
 }
 
