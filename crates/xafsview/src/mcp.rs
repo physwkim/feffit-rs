@@ -154,6 +154,22 @@ pub enum McpRequest {
         args: LogArgs,
         reply: TextReply,
     },
+    PeriodicTable {
+        element: Option<String>,
+        reply: TextReply,
+    },
+    IonChamber {
+        args: Box<IonChamberArgs>,
+        reply: TextReply,
+    },
+    Powder {
+        args: PowderArgs,
+        reply: TextReply,
+    },
+    KeConvert {
+        args: KeConvertArgs,
+        reply: TextReply,
+    },
     Screenshot {
         window: Option<String>,
         reply: PngReply,
@@ -677,6 +693,63 @@ pub struct LogArgs {
     pub clear: Option<bool>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PeriodicTableArgs {
+    /// Element to click: a symbol ("Fe") or an atomic number ("26"). Omitted
+    /// reads the current selection's atom data.
+    pub element: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct GasArg {
+    /// Fill gas: helium, nitrogen, argon, krypton or xenon.
+    pub name: String,
+    /// Mixture fraction (0–1).
+    pub frac: f64,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct IonChamberArgs {
+    /// The fill-gas mix — replaces the checked gases (an unlisted gas is
+    /// unchecked).
+    pub gases: Option<Vec<GasArg>>,
+    /// Photon energy (eV, 100–800000).
+    pub energy: Option<f64>,
+    /// Chamber length (cm, 0.01–200).
+    pub length_cm: Option<f64>,
+    /// Amplifier output voltage (V).
+    pub volts: Option<f64>,
+    /// Amplifier sensitivity (A/V, 1e-12–1).
+    pub sensitivity: Option<f64>,
+    /// "include Compton electrons".
+    pub with_compton: Option<bool>,
+    /// "count both carriers".
+    pub both_carriers: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PowderArgs {
+    /// Chemical formula (e.g. "Fe2O3").
+    pub formula: Option<String>,
+    /// Photon energy (eV, 100–800000).
+    pub energy: Option<f64>,
+    /// Pellet area (cm², 0.001–100).
+    pub area_cm2: Option<f64>,
+    /// Target total absorbance μx (0.01–20).
+    pub absorbance: Option<f64>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct KeConvertArgs {
+    /// Edge energy E₀ (eV); omitted keeps the field (seeded from the active
+    /// group's E₀ when the window opens).
+    pub e0: Option<f64>,
+    /// Photon energy (eV) for the E ⇒ k row.
+    pub energy: Option<f64>,
+    /// Wavenumber (Å⁻¹, 0–1000) for the k ⇒ E row.
+    pub k: Option<f64>,
+}
+
 /// The per-connection MCP handler: forwards each tool call to the egui thread
 /// and awaits the oneshot. Cheap to clone (a channel sender + an egui context).
 #[derive(Clone)]
@@ -1113,6 +1186,56 @@ impl XafsMcp {
     )]
     async fn log(&self, Parameters(a): Parameters<LogArgs>) -> Result<CallToolResult, ErrorData> {
         self.roundtrip(|reply| McpRequest::Log { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "The Periodic table window: click an element (symbol or Z) and read its atom data — molar mass, density, absorption edges, strong emission lines."
+    )]
+    async fn periodic_table(
+        &self,
+        Parameters(a): Parameters<PeriodicTableArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::PeriodicTable {
+            element: a.element,
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "The Ion chamber window: set the gas mix and parameters, press Compute fluxes, and read the incident / transmitted / photo / incoherent / coherent fluxes."
+    )]
+    async fn ion_chamber(
+        &self,
+        Parameters(a): Parameters<IonChamberArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::IonChamber {
+            args: Box::new(a),
+            reply,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "The Powder weight window: set formula / energy / area / target absorbance, press Compute weight, and read μ/ρ, the sample mass and the areal density."
+    )]
+    async fn powder(
+        &self,
+        Parameters(a): Parameters<PowderArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Powder { args: a, reply })
+            .await
+    }
+
+    #[tool(
+        description = "The k ↔ E conversion window: set E₀ / E / k and read both conversions (E − E₀ = KTOE·k²)."
+    )]
+    async fn ke_convert(
+        &self,
+        Parameters(a): Parameters<KeConvertArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::KeConvert { args: a, reply })
             .await
     }
 }

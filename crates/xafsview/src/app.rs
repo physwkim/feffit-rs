@@ -678,6 +678,19 @@ impl XafsViewApp {
                 }
                 let _ = reply.send(Ok(self.status.text(args.last)));
             }
+            mcp::McpRequest::PeriodicTable { element, reply } => {
+                let _ = reply.send(self.periodic.apply_mcp(element.as_deref()));
+            }
+            mcp::McpRequest::IonChamber { args, reply } => {
+                let _ = reply.send(self.ion_chamber.apply_mcp(&args));
+            }
+            mcp::McpRequest::Powder { args, reply } => {
+                let _ = reply.send(self.powder.apply_mcp(&args));
+            }
+            mcp::McpRequest::KeConvert { args, reply } => {
+                let group_e0 = self.session.current_group().and_then(|g| g.e0);
+                let _ = reply.send(self.ke_convert.apply_mcp(&args, group_e0));
+            }
             mcp::McpRequest::OpenWindow { name, reply } => {
                 let _ = reply.send(self.mcp_window(&name, true, ctx));
             }
