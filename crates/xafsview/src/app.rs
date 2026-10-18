@@ -672,6 +672,9 @@ impl XafsViewApp {
                 ctx.request_repaint();
                 let _ = reply.send(r);
             }
+            mcp::McpRequest::Folders { args, reply } => {
+                let _ = reply.send(self.apply_mcp_folders(*args));
+            }
             mcp::McpRequest::Log { args, reply } => {
                 if args.clear == Some(true) {
                     self.status.clear();
@@ -1123,6 +1126,70 @@ impl XafsViewApp {
             }
         };
         crate::plot::gesture(plot, g)
+    }
+
+    /// MCP `folders`: the Folders tab — the Sub base pick (an existing folder,
+    /// as the typed-path rule requires) through [`apply_sub_base`], then the
+    /// per-folder overrides ("" clears, as emptying a field does); returns the
+    /// six rows.
+    ///
+    /// [`apply_sub_base`]: Self::apply_sub_base
+    fn apply_mcp_folders(&mut self, a: mcp::FoldersArgs) -> Result<String, String> {
+        if let Some(root) = &a.sub_base {
+            let p = mcp::native_path(root);
+            if !p.is_dir() {
+                return Err(format!(
+                    "sub_base {} is not an existing folder",
+                    p.display()
+                ));
+            }
+            self.apply_sub_base(p)?;
+        }
+        let f = &mut self.session.folders;
+        for (arg, slot) in [
+            (a.data, &mut f.data_dir),
+            (a.autobk, &mut f.autobk_dir),
+            (a.feffit, &mut f.feffit_dir),
+            (a.atoms, &mut f.atoms_dir),
+            (a.results, &mut f.results_dir),
+        ] {
+            if let Some(s) = arg {
+                *slot = (!s.trim().is_empty()).then(|| mcp::native_path(s.trim()));
+            }
+        }
+        Ok(self.folders_text())
+    }
+
+    /// The Folders tab's six rows as text, with the tab's "folder does not
+    /// exist yet" note.
+    fn folders_text(&self) -> String {
+        let f = &self.session.folders;
+        [
+            ("sub base", &f.sub_base),
+            ("data", &f.data_dir),
+            ("autobk", &f.autobk_dir),
+            ("feffit", &f.feffit_dir),
+            ("atoms", &f.atoms_dir),
+            ("results", &f.results_dir),
+        ]
+        .iter()
+        .map(|(name, dir)| match dir {
+            Some(d) if d.is_dir() => format!("{name}: {}", d.display()),
+            Some(d) => format!("{name}: {} (folder does not exist yet)", d.display()),
+            None => format!("{name}: (not set)"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+    }
+
+    /// Put an action's outcome on the status line: `Ok` as info, `Err` as an
+    /// error. For the actions a button and an MCP tool share, so both report
+    /// the same way.
+    fn report_outcome(&mut self, outcome: &Result<String, String>) {
+        match outcome {
+            Ok(m) => self.status.info(m.clone()),
+            Err(e) => self.status.error(e.clone()),
+        }
     }
 
     /// MCP `edit_mu`: the named Edit μ(E) button as its [`CleanAction`], through
@@ -4755,21 +4822,23 @@ impl XafsViewApp {
     /// Point the working folders at a project root and report the outcome to the
     /// status line. The folder creation + field mapping lives in the headless
     /// [`set_project_folders`] so it can be unit-tested.
-    fn apply_sub_base(&mut self, root: std::path::PathBuf) {
+    fn apply_sub_base(&mut self, root: std::path::PathBuf) -> Result<String, String> {
         let errors = set_project_folders(&mut self.session.folders, &root);
         let made = 5 - errors.len();
-        if errors.is_empty() {
-            self.status.info(format!(
+        let outcome = if errors.is_empty() {
+            Ok(format!(
                 "Sub base set to {} — {made} working folders ready.",
                 root.display()
-            ));
+            ))
         } else {
-            self.status.error(format!(
+            Err(format!(
                 "Sub base {} — {made} folder(s) ready, errors: {}",
                 root.display(),
                 errors.join("; ")
-            ));
-        }
+            ))
+        };
+        self.report_outcome(&outcome);
+        outcome
     }
 
     /// The Folders tab: pick a project Sub base folder to create and fill the five
@@ -4856,7 +4925,8 @@ impl XafsViewApp {
                 });
         });
         if let Some(root) = sub_base_pick {
-            self.apply_sub_base(root);
+            // The outcome is on the status line.
+            let _ = self.apply_sub_base(root);
         }
     }
 }

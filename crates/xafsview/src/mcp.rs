@@ -150,6 +150,10 @@ pub enum McpRequest {
         args: Box<GraphArgs>,
         reply: TextReply,
     },
+    Folders {
+        args: Box<FoldersArgs>,
+        reply: TextReply,
+    },
     Log {
         args: LogArgs,
         reply: TextReply,
@@ -693,6 +697,25 @@ pub struct RunFeffArgs {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct FoldersArgs {
+    /// Project root (the Folders tab's "Sub base folder"): an existing
+    /// directory. Creates / points the five working folders at
+    /// `<sub base>/{Data, Autobk, Feffit, Atoms, Results}`, as Browse… does.
+    /// Applied before the per-folder overrides below.
+    pub sub_base: Option<String>,
+    /// Data folder override; "" clears it, as emptying the field does.
+    pub data: Option<String>,
+    /// Autobk folder override.
+    pub autobk: Option<String>,
+    /// Feffit folder override.
+    pub feffit: Option<String>,
+    /// Atoms folder override.
+    pub atoms: Option<String>,
+    /// Results folder override.
+    pub results: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct LogArgs {
     /// Return only the newest N messages (default: the whole log).
     pub last: Option<usize>,
@@ -1196,6 +1219,20 @@ impl XafsMcp {
                 None,
             )),
         }
+    }
+
+    #[tool(
+        description = "The Folders tab: set the project Sub base folder (creates and points the Data / Autobk / Feffit / Atoms / Results folders) and/or override any single folder; returns the six paths."
+    )]
+    async fn folders(
+        &self,
+        Parameters(a): Parameters<FoldersArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.roundtrip(|reply| McpRequest::Folders {
+            args: Box::new(a),
+            reply,
+        })
+        .await
     }
 
     #[tool(
