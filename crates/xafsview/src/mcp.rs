@@ -1645,6 +1645,18 @@ pub fn start(
     ))
 }
 
+/// Sessions that outlive a pause. rmcp reaps a session after five idle
+/// minutes by default — a safety net for proxied servers whose connections
+/// drop silently — which here cut off any client that waited longer between
+/// two calls, or on one long job, with "Session service terminated" / 404
+/// until it re-initialised. A desktop app talks to a handful of local
+/// clients: its sessions live until the client closes them or the app exits.
+fn session_manager() -> LocalSessionManager {
+    let mut manager = LocalSessionManager::default();
+    manager.session_config.keep_alive = None;
+    manager
+}
+
 /// Accept loop: each connection gets rmcp's streamable-HTTP handler via
 /// hyper/http1 (SSE streaming needs nothing more). Ends on cancellation, which
 /// also terminates the MCP sessions (the config carries the same token).
@@ -1664,7 +1676,7 @@ async fn serve(
                 egui_ctx: egui_ctx.clone(),
             })
         },
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(session_manager()),
         StreamableHttpServerConfig::default().with_cancellation_token(cancel.clone()),
     );
     loop {
