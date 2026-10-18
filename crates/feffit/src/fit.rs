@@ -422,7 +422,7 @@ pub fn feffit(
 ) -> Result<FeffitResult, FitError> {
     // prepare datasets and pre-parse the path-parameter expressions
     let mut compiled: Vec<Vec<CompiledPathSpec>> = Vec::with_capacity(datasets.len());
-    for fds in datasets.iter_mut() {
+    for (di, fds) in datasets.iter_mut().enumerate() {
         if fds.dataset.paths.len() != fds.specs.len() {
             return Err(FitError::Shape(format!(
                 "dataset has {} paths but {} specs",
@@ -431,6 +431,22 @@ pub fn feffit(
             )));
         }
         fds.dataset.prepare_fit(fds.epsilon_k);
+        // Data ending below `kmin` leave nothing to fit in any space: the
+        // k residual is empty (lmdif then rejects the problem) and the R/q
+        // transforms of an all-zero window give NaN statistics.
+        if fds.dataset.fit_k_range().is_empty() {
+            let t = &fds.dataset.transform;
+            let data_kmax = fds
+                .dataset
+                .data_k
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
+            return Err(FitError::Shape(format!(
+                "dataset {di}: no data in the fit k-range {:.2}–{:.2} Å⁻¹ (the data end at k = {data_kmax:.2})",
+                t.kmin, t.kmax
+            )));
+        }
         let cspecs = fds
             .specs
             .iter()
@@ -516,6 +532,13 @@ pub fn feffit(
 
     // ---- statistics (larch feffit(): rescaled to n_idp) ----
     let ndata = result.fvec.len();
+    // MINPACK refuses `m < n` (`info = 0`) and leaves `x` at the start point;
+    // scipy's leastsq raises for it, so do not dress that up as a result.
+    if ndata < nvarys {
+        return Err(FitError::Shape(format!(
+            "the fit has {ndata} residual points for {nvarys} variables; widen the k-range or fix some variables"
+        )));
+    }
     let nfree = ndata.saturating_sub(nvarys);
     let chisqr = result.fnorm * result.fnorm; // sum(residual^2)
     let n_idp: f64 = datasets.iter().map(|d| d.dataset.n_idp()).sum();

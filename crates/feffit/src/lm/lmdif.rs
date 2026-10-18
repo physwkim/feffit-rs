@@ -449,8 +449,13 @@ pub struct LmResult {
 
 impl LmResult {
     /// The (unscaled) covariance `(JᵀJ)⁻¹`, computed from the final R and the
-    /// pivot exactly as `scipy.optimize.leastsq` does. `None` if R is singular.
+    /// pivot exactly as `scipy.optimize.leastsq` does. `None` if R is singular
+    /// or if `lmdif` rejected its input (`info == 0`): no factorization ran,
+    /// so `fjac` holds nothing to invert.
     pub fn covar(&self) -> Option<Vec<Vec<f64>>> {
+        if self.info == 0 {
+            return None;
+        }
         let n = self.x.len();
         // dense upper-triangular R (n×n): R[i][j] = fjac[j][i] for i <= j
         let mut rmat = vec![vec![0.0; n]; n];

@@ -138,6 +138,18 @@ impl DataSet {
     pub fn model_k(&self) -> &[f64] {
         &self.model_k
     }
+    /// Indices of the model k-grid inside the fit's `[kmin, kmax]`, stopped at
+    /// the data's last point: larch's `[iqmin:iqmax]` of `_chi`, which ends
+    /// below `kmax` when the data do (an AUTOBK kmax under the fit's). Valid
+    /// after [`DataSet::prepare_fit`]; empty when no data point lies in the
+    /// range.
+    pub fn fit_k_range(&self) -> std::ops::Range<usize> {
+        let trans = &self.transform;
+        let nfft_half = trans.nfft as f64 / 2.0;
+        let iqmax = itrunc(nfft_half.min(0.01 + trans.kmax / trans.kstep)).min(self.model_k.len());
+        let iqmin = itrunc(0.0f64.max(0.01 + trans.kmin / trans.kstep)).min(iqmax);
+        iqmin..iqmax
+    }
     /// The data chi interpolated onto the model k-grid (`_chi`).
     pub fn chi_interp(&self) -> &[f64] {
         &self.chi_interp
@@ -338,16 +350,11 @@ impl DataSet {
         let mut out = Vec::new();
         match trans.fitspace {
             FitSpace::K => {
-                // `diff` ends at the data's last k (`model_k`), which can lie
-                // below `kmax` (an AUTOBK kmax under the fit's); larch's
-                // `[iqmin:iqmax]` slice stops there, so clip rather than index
-                // past it.
-                let iqmax = itrunc(nfft_half.min(0.01 + trans.kmax / trans.kstep)).min(diff.len());
-                let iqmin = itrunc(0.0f64.max(0.01 + trans.kmin / trans.kstep)).min(iqmax);
+                let range = self.fit_k_range();
                 let k = trans.k_grid();
                 for (i, &kw) in trans.kweight.iter().enumerate() {
                     let eps = self.epsilon_k[i];
-                    for j in iqmin..iqmax {
+                    for j in range.clone() {
                         out.push((diff[j] / eps) * k[j].powi(kw));
                     }
                 }
