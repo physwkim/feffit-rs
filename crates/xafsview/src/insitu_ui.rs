@@ -729,14 +729,26 @@ impl InsituWindow {
             None => "None".to_owned(),
         };
         let before = self.reference;
-        egui::ComboBox::from_label("Reference (subtract)")
-            .selected_text(ref_label)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.reference, None, "None");
-                for (i, l) in map.labels.iter().enumerate() {
-                    ui.selectable_value(&mut self.reference, Some(i), format!("{}: {l}", i + 1));
-                }
-            });
+        // The label goes first and the combo truncates its text to the width
+        // that is left: a combo that fills the row and then a label after it
+        // overflows the panel, and a resizable panel grows to its content —
+        // every frame, until a long scan name has pushed the map to a sliver.
+        ui.horizontal(|ui| {
+            ui.label("Reference (subtract)");
+            egui::ComboBox::from_id_salt("insitu_reference")
+                .selected_text(ref_label)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.reference, None, "None");
+                    for (i, l) in map.labels.iter().enumerate() {
+                        ui.selectable_value(
+                            &mut self.reference,
+                            Some(i),
+                            format!("{}: {l}", i + 1),
+                        );
+                    }
+                });
+        });
         if self.reference != before {
             self.texture = None;
             self.plot_dirty = true;
